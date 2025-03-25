@@ -72,6 +72,7 @@ export interface ScenarioConfig {
   hypothesis: string;
   debugRequest: DebugRequest;
   timeout?: number;
+  startTime: number;
 }
 
 // Mother Agent Interface

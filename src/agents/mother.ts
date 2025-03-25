@@ -1,8 +1,7 @@
 import { runMotherAgent } from '../util/anthropic.js';
 import { gitOperations, commanderOperations } from '../util/mcp.js';
 import { DebugSession, ScenarioResult } from '../types.js';
-import { runScenario } from './scenario.js';
-import { v4 as uuidv4 } from 'uuid';
+import { ScenarioAgentFactory, runAutonomousAgent } from './factory.js';
 
 /**
  * Available scenario types
@@ -85,66 +84,62 @@ export async function startMotherAgent(session: DebugSession): Promise<void> {
     
     const scenarioResults: ScenarioResult[] = [];
     
-    // Run each scenario
-    for (const scenarioType of scenariosToRun) {
-      try {
-        // Create a unique branch name for this scenario
-        const branchName = `deebo-${session.id}-${scenarioType}-${Date.now()}`;
-        session.logs.push(`[MOTHER] Starting ${scenarioType} scenario agent on branch ${branchName}`);
-        
-        // Create branch for this scenario
-        if (session.request.codebase?.repoPath) {
-          try {
-            const { output } = await commanderOperations.executeCommand(
-              `cd ${session.request.codebase.repoPath} && git checkout -b ${branchName}`
-            );
-            session.logs.push(`[SCENARIO:${scenarioType}] Created branch ${branchName} for investigation`);
-          } catch (error) {
-            console.error(`Error creating branch for ${scenarioType} scenario:`, error);
-            session.logs.push(`[SCENARIO:${scenarioType}] Error creating branch: ${error}`);
-          }
-        }
-        
-        // Create and run the scenario
-        const scenarioResult = await runScenario({
-          id: uuidv4(),
-          sessionId: session.id,
+    // Create and run scenario agents in parallel
+    session.logs.push(`[MOTHER] Spawning ${scenariosToRun.length} autonomous agents`);
+    
+    try {
+      // Create agents using factory
+      const agents = scenariosToRun.map(scenarioType => {
+        const agent = ScenarioAgentFactory.createAgent(
+          session.id,
           scenarioType,
-          branchName,
-          hypothesis: generateHypothesis(scenarioType, session.request.error),
-          debugRequest: session.request,
-          timeout: 60000 // 1 minute timeout per scenario
-        });
-        
-        // Add results to session
-        scenarioResults.push(scenarioResult);
-        session.scenarioResults.push(scenarioResult);
-        
-        session.logs.push(`[SCENARIO:${scenarioType}] Investigation completed with ${scenarioResult.success ? 'SUCCESS' : 'FAILURE'} (confidence: ${scenarioResult.confidence})`);
-        
-        // Clean up branch if needed
-        if (session.request.codebase?.repoPath) {
-          try {
-            // Switch back to main/master branch
-            const { output: checkoutOutput } = await commanderOperations.executeCommand(
-              `cd ${session.request.codebase.repoPath} && git checkout main || git checkout master`
-            );
-            
-            // Delete the scenario branch
-            const { output: deleteBranchOutput } = await commanderOperations.executeCommand(
-              `cd ${session.request.codebase.repoPath} && git branch -D ${branchName}`
-            );
-            
-            session.logs.push(`[SCENARIO:${scenarioType}] Cleanup: Branch ${branchName} deleted`);
-          } catch (error) {
-            console.error(`Error cleaning up branch for ${scenarioType} scenario:`, error);
-            session.logs.push(`[SCENARIO:${scenarioType}] Cleanup error: ${error}`);
-          }
-        }
-      } catch (error) {
-        console.error(`Error running ${scenarioType} scenario:`, error);
-        session.logs.push(`[SCENARIO:${scenarioType}] Error during execution: ${error}`);
-      }
+          session.request
+        );
+        session.logs.push(`[MOTHER] Created ${scenarioType} agent on branch ${agent.branchName}`);
+        return agent;
+      });
+      
+      // Run agents in parallel
+      const results = await Promise.all(
+        agents.map(agent => 
+          runAutonomousAgent(agent)
+            .then((result: { success: boolean; confidence: number; fix: string; explanation: string }) => {
+              session.logs.push(`[SCENARIO:${agent.scenarioType}] Investigation completed with ${result.success ? 'SUCCESS' : 'FAILURE'} (confidence: ${result.confidence})`);
+              return {
+                id: agent.id,
+                scenarioType: agent.scenarioType,
+                hypothesis: agent.hypothesis,
+                fixAttempted: result.fix,
+                testResults: result.explanation,
+                success: result.success,
+                confidence: result.confidence,
+                explanation: result.explanation
+              };
+            })
+            .catch((error: Error) => {
+              console.error(`Error in ${agent.scenarioType} agent:`, error);
+              session.logs.push(`[SCENARIO:${agent.scenarioType}] Error during execution: ${error}`);
+              return {
+                id: agent.id,
+                scenarioType: agent.scenarioType,
+                hypothesis: agent.hypothesis,
+                fixAttempted: 'Error during execution',
+                testResults: `${error}`,
+                success: false,
+                confidence: 0,
+                explanation: `Error: ${error}`
+              };
+            })
+        )
+      );
+      
+      // Add results to session
+      scenarioResults.push(...results);
+      session.scenarioResults.push(...results);
+      
+    } catch (error) {
+      console.error('Error running scenario agents:', error);
+      session.logs.push(`[MOTHER] Error running scenario agents: ${error}`);
     }
     
     // Final analysis with all scenario results

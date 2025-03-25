@@ -294,6 +294,15 @@ function convertToLegacyResult(result: any, session: DebugSession): any {
 // Start server
 async function main() {
   try {
+    // Check environment variables
+    console.error("Environment check:");
+    console.error("- Current working directory:", process.cwd());
+    console.error("- ANTHROPIC_API_KEY present:", !!process.env.ANTHROPIC_API_KEY);
+    console.error("- NODE_ENV:", process.env.NODE_ENV);
+    
+    // Environment is already loaded by -r dotenv/config in npm start
+    console.error("- ANTHROPIC_API_KEY present:", !!process.env.ANTHROPIC_API_KEY);
+    
     // Initialize MCP clients
     await initMcpClients();
     

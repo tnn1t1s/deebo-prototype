@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "start": "node build/index.js",
-    "dev": "tsc --watch & node --watch build/index.js",
+    "start": "node --max-old-space-size=4096 -r dotenv/config build/index.js",
+    "dev": "tsc --watch & node --max-old-space-size=4096 -r dotenv/config --watch build/index.js",
     "setup": "bash setup.sh",
     "setup:win": "powershell -ExecutionPolicy Bypass -File .\\setup.ps1",
+    "check-env": "node check-env.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -16,7 +17,7 @@
   "license": "ISC",
   "description": "Agentic Debugging System that integrates with Git and Desktop Commander MCP servers",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.18.0",
+    "@anthropic-ai/sdk": "^0.39.0",
     "@modelcontextprotocol/sdk": "^1.7.0",
     "@wonderwhy-er/desktop-commander": "^0.1.19",
     "dockerode": "^4.0.0",

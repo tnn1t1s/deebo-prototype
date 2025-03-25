@@ -1,13 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk';
-import dotenv from 'dotenv';
 
-// Load environment variables
-dotenv.config();
+// Direct initialization using the API key from .env file (loaded via -r dotenv/config in package.json)
+// Using environment variable directly without any validation that would throw errors
+const anthropic = new Anthropic();
 
-// Initialize Anthropic client
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY || '',
-});
+// Simple log without trying to parse or validate the key
+console.error("Anthropic client ready");
 
 /**
  * Debug analysis prompt
@@ -34,21 +32,35 @@ Be specific, practical, and actionable in your response.
  * Mother agent prompt
  */
 const MOTHER_AGENT_PROMPT = `
-You are the orchestrator of a debugging system that manages multiple scenario agents.
+You are the orchestrator of a debugging system that manages autonomous scenario agents.
 Your responsibilities are to:
 1. Review the error and context provided
-2. Determine which debugging scenarios to explore
-3. Prioritize scenarios based on error type and context
-4. Analyze results from scenario agents
-5. Select the most promising fix
-6. Generate a comprehensive debugging report
+2. Determine which debugging scenarios to explore (up to 3)
+3. Spawn autonomous agents to investigate each scenario
+4. Monitor agent progress and collect results
+5. Analyze results and select the most promising fix
+6. Verify the selected fix independently
+7. Generate a comprehensive debugging report
 
-You have these scenario agents available:
-- Dependency issues: Analyzes and fixes dependency-related errors
-- Syntax errors: Identifies and resolves syntax and type errors
-- Environment issues: Resolves configuration and environment-related problems
-- API integration: Resolves issues with external API calls and integrations
-- Performance: Addresses performance bottlenecks and optimization issues
+Key Considerations:
+- Agents run in parallel, each in their own branch
+- Each agent is fully autonomous in its investigation
+- Focus on async/cache scenarios when relevant
+- Consider confidence scores and fix complexity
+- Verify fixes before recommending them
+
+Special Focus Areas:
+- Async Issues:
+  * Race conditions and timing problems
+  * Promise chains and error handling
+  * Event loop interactions
+  * Concurrent operations
+
+- Cache Issues:
+  * Data staleness and consistency
+  * Cache invalidation logic
+  * Update patterns and timing
+  * Cache layer interactions
 
 Be systematic, thorough, and evidence-based in your orchestration.
 `;
@@ -57,20 +69,46 @@ Be systematic, thorough, and evidence-based in your orchestration.
  * Scenario agent prompt
  */
 const SCENARIO_AGENT_PROMPT = `
-You are a specialized debugging agent focusing on a specific type of problem.
-Your responsibilities are to:
-1. Test a specific hypothesis about the cause of the error
-2. Run experiments to validate your hypothesis
-3. Generate a proposed fix
-4. Test the fix to verify it resolves the issue
-5. Document your process and findings
+You are an autonomous debugging agent with full control over your investigation process.
+You operate independently to explore and fix a specific type of problem.
 
-You have access to:
-1. Git tools to inspect code and history
-2. Command execution to run tests and experiments
-3. File system access to make changes
+Your capabilities:
+1. Git operations (status, diff, log) to analyze code changes
+2. File system access to read and modify code
+3. Command execution to run tests and experiments
+4. Branch management for isolated testing
 
-Provide practical and specific fixes with clear evidence of their effectiveness.
+Investigation Process:
+1. Analyze the error and context thoroughly
+2. Form hypotheses about potential causes
+3. Design and run targeted experiments
+4. Make code changes to test fixes
+5. Validate fixes in isolation
+6. Document your findings and confidence level
+
+Special Instructions for Async/Cache Issues:
+- For async scenarios:
+  * Look for race conditions and timing issues
+  * Check Promise usage and error handling
+  * Examine event loop interactions
+  * Test with different timing conditions
+  * Consider adding synchronization mechanisms
+
+- For cache scenarios:
+  * Check cache invalidation logic
+  * Look for stale data issues
+  * Examine cache update patterns
+  * Test cache consistency
+  * Consider adding cache validation
+
+Response Format:
+When you complete your investigation, include:
+INVESTIGATION_COMPLETE or SOLUTION_FOUND or NO_SOLUTION_FOUND
+confidence: [0-1 score]
+fix: [description of changes made]
+explanation: [detailed reasoning]
+
+You operate autonomously - use your tools as needed and make decisions independently.
 `;
 
 /**
@@ -79,7 +117,7 @@ Provide practical and specific fixes with clear evidence of their effectiveness.
 export async function analyzeError(errorMessage: string, context: string, language: string = '') {
   try {
     const completion = await anthropic.messages.create({
-      model: 'claude-3-5-sonnet-20240229',
+      model: 'claude-3-5-sonnet-20241022',
       max_tokens: 1000,
       temperature: 0.2,
       system: DEBUG_ANALYSIS_PROMPT,
@@ -101,7 +139,14 @@ Please analyze this error and provide:
       ]
     });
     
-    return completion.content[0].text;
+    // Access text content safely
+    if (completion.content && completion.content.length > 0) {
+      const content = completion.content[0];
+      if ('text' in content) {
+        return content.text;
+      }
+    }
+    return 'Could not extract text from response';
   } catch (error) {
     console.error('Error analyzing with Claude:', error);
     return 'Error occurred during analysis';
@@ -125,7 +170,7 @@ export async function runMotherAgent(
       : '\n\nNo scenario agent results available yet.';
     
     const completion = await anthropic.messages.create({
-      model: 'claude-3-5-sonnet-20240229',
+      model: 'claude-3-5-sonnet-20241022',
       max_tokens: 2000,
       temperature: 0.2,
       system: MOTHER_AGENT_PROMPT,
@@ -141,14 +186,34 @@ ${context}
 ${scenarioResultsText}
 
 Please analyze this error and:
-1. If no scenario results exist, determine which 2-3 debugging scenarios should be explored first
-2. If scenario results exist, analyze them and determine the best fix
-3. Provide a final recommendation with confidence level and implementation steps`
+1. If no scenario results exist:
+   - Determine which 2-3 debugging scenarios to explore
+   - Prioritize async/cache scenarios if relevant
+   - Provide rationale for scenario selection
+
+2. If scenario results exist:
+   - Analyze results from autonomous agents
+   - Compare confidence levels and fix complexity
+   - Select the most promising solution
+   - Suggest verification steps
+
+3. Provide a final recommendation with:
+   - Confidence level (0-1)
+   - Implementation steps
+   - Potential risks and mitigations
+   - Verification strategy`
         }
       ]
     });
     
-    return completion.content[0].text;
+    // Access text content safely
+    if (completion.content && completion.content.length > 0) {
+      const content = completion.content[0];
+      if ('text' in content) {
+        return content.text;
+      }
+    }
+    return 'Could not extract text from response';
   } catch (error) {
     console.error('Error running Mother Agent with Claude:', error);
     return 'Error occurred during Mother Agent analysis';
@@ -167,7 +232,7 @@ export async function runScenarioAgent(
 ) {
   try {
     const completion = await anthropic.messages.create({
-      model: 'claude-3-5-sonnet-20240229',
+      model: 'claude-3-5-sonnet-20241022',
       max_tokens: 1500,
       temperature: 0.2,
       system: SCENARIO_AGENT_PROMPT,
@@ -185,17 +250,33 @@ Language: ${language}
 Code Context:
 ${context}
 
-Please test this hypothesis and:
-1. Design a specific experiment to test it
-2. Determine if this hypothesis is correct
-3. If correct, develop a detailed fix with specific code changes
-4. Rate your confidence in this fix (0-1 scale)
-5. Explain your reasoning and provide evidence`
+You are an autonomous agent investigating this error.
+Use your tools (git, files, commands) as needed.
+
+Your investigation should:
+1. Analyze the error context thoroughly
+2. Design and run targeted experiments
+3. Make and test code changes
+4. Validate fixes in isolation
+
+Respond with:
+1. Your findings and analysis
+2. Specific code changes made
+3. Confidence score (0-1)
+4. Evidence of fix effectiveness
+5. SOLUTION_FOUND or NO_SOLUTION_FOUND`
         }
       ]
     });
     
-    return completion.content[0].text;
+    // Access text content safely
+    if (completion.content && completion.content.length > 0) {
+      const content = completion.content[0];
+      if ('text' in content) {
+        return content.text;
+      }
+    }
+    return 'Could not extract text from response';
   } catch (error) {
     console.error('Error running Scenario Agent with Claude:', error);
     return 'Error occurred during Scenario Agent analysis';
@@ -205,5 +286,6 @@ Please test this hypothesis and:
 export default {
   analyzeError,
   runMotherAgent,
-  runScenarioAgent
+  runScenarioAgent,
+  anthropic
 };

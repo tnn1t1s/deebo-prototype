@@ -11,8 +11,9 @@ declare module 'dotenv' {
   export function config(options?: { path?: string, encoding?: string, debug?: boolean }): { parsed?: { [key: string]: string } };
 }
 
-// Load environment variables
-dotenv.config();
+// Load environment variables with explicit path - simple version with no type errors
+dotenv.config({ path: process.cwd() + '/.env' });
+console.error("MCP: Loaded .env file from:", process.cwd() + '/.env');
 
 const execAsync = promisify(exec);
 
@@ -37,6 +38,7 @@ let commanderClient: Client | null = null;
  */
 export async function initMcpClients() {
   if (!gitClient) {
+    console.error("MCP: Initializing Git MCP client...");
     gitClient = new Client({ name: "deebo-git-client", version: "0.1.0" });
     
     // Determine Git MCP server command
@@ -45,11 +47,13 @@ export async function initMcpClients() {
     
     // Check if MCP_GIT_PATH is set in .env
     if (process.env.MCP_GIT_PATH) {
+      console.error(`MCP: Using configured MCP_GIT_PATH: ${process.env.MCP_GIT_PATH}`);
       if (process.env.MCP_GIT_PATH.endsWith('/') || process.env.MCP_GIT_PATH.endsWith('\\')) {
         // It's a directory
         gitCommand = "python";
         gitArgs = ["-m", "mcp_server_git"];
         process.env.PYTHONPATH = process.env.MCP_GIT_PATH;
+        console.error(`MCP: Setting PYTHONPATH to: ${process.env.PYTHONPATH}`);
       } else {
         // It's a file
         gitCommand = "python";
@@ -58,6 +62,7 @@ export async function initMcpClients() {
     } else {
       // Use the virtual environment if available
       const venvPath = process.env.VENV_PATH || path.join(projectRoot, "venv");
+      console.error(`MCP: Looking for virtual environment at: ${venvPath}`);
       
       try {
         await fs.access(venvPath);
@@ -66,15 +71,18 @@ export async function initMcpClients() {
           ? path.join(venvPath, "Scripts", "python")
           : path.join(venvPath, "bin", "python");
         
+        console.error(`MCP: Found virtual environment, using Python at: ${pythonBin}`);
         gitCommand = pythonBin;
         gitArgs = ["-m", "mcp_server_git"];
       } catch (e) {
         // Fallback to uvx
-        console.error("Virtual environment not found, falling back to uvx");
+        console.error("MCP: Virtual environment not found, falling back to uvx");
         gitCommand = "uvx";
         gitArgs = ["mcp-server-git"];
       }
     }
+    
+    console.error(`MCP: Starting Git MCP client with command: ${gitCommand} ${gitArgs.join(" ")}`);
     
     // Create transport and connect
     const gitTransport = new StdioClientTransport({
@@ -84,14 +92,16 @@ export async function initMcpClients() {
     
     try {
       await gitClient.connect(gitTransport);
-      console.error("Git MCP client initialized with command:", gitCommand, gitArgs.join(" "));
+      console.error("MCP: Git MCP client initialized successfully");
     } catch (error) {
-      console.error("Failed to initialize Git MCP client:", error);
-      throw error;
+      console.error("MCP: Failed to initialize Git MCP client:", error);
+      console.error("MCP: This is not fatal - continuing with limited functionality");
+      gitClient = null; // Reset to null so we can try again later
     }
   }
   
   if (!commanderClient) {
+    console.error("MCP: Initializing Desktop Commander MCP client...");
     commanderClient = new Client({ name: "deebo-commander-client", version: "0.1.0" });
     
     // Determine Desktop Commander command
@@ -100,6 +110,7 @@ export async function initMcpClients() {
     
     // Check if MCP_COMMANDER_PATH is set in .env
     if (process.env.MCP_COMMANDER_PATH) {
+      console.error(`MCP: Using configured MCP_COMMANDER_PATH: ${process.env.MCP_COMMANDER_PATH}`);
       if (process.env.MCP_COMMANDER_PATH.endsWith('.js')) {
         // It's a JavaScript file
         commanderCommand = "node";
@@ -112,19 +123,23 @@ export async function initMcpClients() {
     } else {
       // Use locally installed package if available
       const localCommanderPath = path.join(projectRoot, "node_modules", ".bin", "desktop-commander");
+      console.error(`MCP: Looking for local Desktop Commander at: ${localCommanderPath}`);
       
       try {
         await fs.access(localCommanderPath);
         // Local package exists, use it
+        console.error(`MCP: Found local Desktop Commander`);
         commanderCommand = localCommanderPath;
         commanderArgs = [];
       } catch (e) {
         // Fallback to npx
-        console.error("Local Desktop Commander not found, falling back to npx");
+        console.error("MCP: Local Desktop Commander not found, falling back to npx");
         commanderCommand = "npx";
         commanderArgs = ["-y", "@wonderwhy-er/desktop-commander"];
       }
     }
+    
+    console.error(`MCP: Starting Desktop Commander with command: ${commanderCommand} ${commanderArgs.join(" ")}`);
     
     // Create transport and connect
     const commanderTransport = new StdioClientTransport({
@@ -134,10 +149,11 @@ export async function initMcpClients() {
     
     try {
       await commanderClient.connect(commanderTransport);
-      console.error("Desktop Commander MCP client initialized with command:", commanderCommand, commanderArgs.join(" "));
+      console.error("MCP: Desktop Commander MCP client initialized successfully");
     } catch (error) {
-      console.error("Failed to initialize Desktop Commander MCP client:", error);
-      throw error;
+      console.error("MCP: Failed to initialize Desktop Commander MCP client:", error);
+      console.error("MCP: This is not fatal - continuing with limited functionality");
+      commanderClient = null; // Reset to null so we can try again later
     }
   }
 }
@@ -159,13 +175,25 @@ function getTextContent(result: any): string {
  */
 export const gitOperations = {
   async status(repoPath: string) {
-    if (!gitClient) await initMcpClients();
-    const result = await gitClient!.callTool({
-      name: "git_status",
-      arguments: { repo_path: repoPath }
-    }) as ToolResponse;
-    
-    return getTextContent(result);
+    try {
+      if (!gitClient) await initMcpClients();
+      
+      // If gitClient is still null after initialization, return an error message
+      if (!gitClient) {
+        console.error("MCP: Git client not available for status operation");
+        return "Error: Git MCP client not available. Check server initialization.";
+      }
+      
+      const result = await gitClient.callTool({
+        name: "git_status",
+        arguments: { repo_path: repoPath }
+      }) as ToolResponse;
+      
+      return getTextContent(result);
+    } catch (error) {
+      console.error(`MCP: Error getting git status: ${error}`);
+      return `Error fetching git status: ${error}`;
+    }
   },
   
   async diffUnstaged(repoPath: string) {
