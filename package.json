@@ -6,19 +6,28 @@
   "scripts": {
     "build": "tsc",
     "start": "node build/index.js",
+    "dev": "tsc --watch & node --watch build/index.js",
+    "setup": "bash setup.sh",
+    "setup:win": "powershell -ExecutionPolicy Bypass -File .\\setup.ps1",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "Agentic Debugging System that integrates with Git and Desktop Commander MCP servers",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.18.0",
     "@modelcontextprotocol/sdk": "^1.7.0",
+    "@wonderwhy-er/desktop-commander": "^0.1.19",
+    "dockerode": "^4.0.0",
+    "dotenv": "^16.4.1",
     "uuid": "^11.1.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@types/dockerode": "^3.3.23",
     "@types/node": "^22.13.13",
+    "@types/uuid": "^9.0.8",
     "typescript": "^5.8.2"
   }
 }

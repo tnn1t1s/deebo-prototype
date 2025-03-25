@@ -1,20 +1,16 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { spawn, ChildProcess } from "child_process";
 import { v4 as uuidv4 } from "uuid";
+import { initMcpClients } from './util/mcp.js';
+import { startMotherAgent } from './agents/mother.js';
+import { DebugSession, OriginalDebugSession, ScenarioResult } from './types.js';
 
-// Session storage
-interface DebugSession {
-  id: string;
-  process: ChildProcess;
-  logs: string[];
-  status: "running" | "complete" | "error";
-  result: any | null;
-  lastChecked: number;
-}
+// Session storage - using Map for backward compatibility
+const sessions = new Map<string, OriginalDebugSession>();
 
-const sessions = new Map<string, DebugSession>();
+// Enhanced sessions storage for advanced debugging
+const enhancedSessions = new Map<string, DebugSession>();
 
 // Create MCP server
 const server = new McpServer({
@@ -28,107 +24,95 @@ const server = new McpServer({
 // Tool 1: Start Debug Session
 server.tool(
   "start_debug_session",
-  "Start a simulated debugging session",
+  "Start a debugging session with an error and optional repository path",
   {
     error_message: z.string().describe("Error message from the code to debug"),
     code_context: z.string().optional().describe("Code surrounding the error"),
     language: z.string().optional().describe("Programming language"),
     file_path: z.string().optional().describe("Path to the file with error"),
+    repo_path: z.string().optional().describe("Path to Git repository (recommended)")
   },
-  async ({ error_message, code_context, language, file_path }) => {
+  async ({ error_message, code_context, language, file_path, repo_path }) => {
     const sessionId = uuidv4();
     
-    // Construct a more detailed debugging script based on available info
-    const langInfo = language ? `in ${language}` : '';
-    const fileInfo = file_path ? `in ${file_path}` : '';
-    const contextInfo = code_context ? `with surrounding context` : 'without context';
-    
-    const process = spawn("bash", ["-c", `
-      echo "Debug log 1: Starting analysis of error ${langInfo} ${fileInfo}"
-      sleep 2
-      echo "Debug log 2: Examining error: ${error_message}"
-      sleep 2
-      echo "Debug log 3: Loading code context ${contextInfo}"
-      sleep 2
-      ${code_context ? `echo "Debug log 4: Examining code fragment: ${code_context.substring(0, 50)}..."` : 'echo "Debug log 4: No code context provided, proceeding with error analysis only"'}
-      sleep 2
-      echo "Debug log 5: Running static analysis tools"
-      sleep 2
-      echo "Debug log 6: Checking for common patterns matching this error"
-      sleep 2
-      echo "Debug log 7: Analyzing dependency versions"
-      sleep 2
-      echo "Debug log 8: Testing potential fixes"
-      sleep 2
-      echo "Debug log 9: Verifying solution"
-      sleep 2
-      echo "Debug log 10: Finalizing debug report"
-      sleep 2
-      echo "COMPLETE: Fixed issue '${error_message}' by updating dependencies and correcting syntax ${langInfo}"
-    `]);
-    
-    const session: DebugSession = {
-      id: sessionId,
-      process,
-      logs: [],
-      status: "running",
-      result: null,
-      lastChecked: Date.now(),
-    };
-    
-    process.stdout.on("data", (data) => {
-      const text = data.toString().trim();
-      if (text.startsWith("COMPLETE:")) {
-        session.status = "complete";
-        const fixText = text.substring("COMPLETE: ".length);
-        session.result = {
-          fix: fixText,
-          confidence: 0.95,
-          changes_required: [
-            {
-              type: "dependency_update",
-              description: "Update package versions",
-              priority: "high"
-            },
-            {
-              type: "code_fix",
-              description: "Fix syntax in affected files",
-              priority: "medium"
-            }
-          ],
-          affected_files: file_path ? [file_path] : [],
-          estimated_time_to_fix: "5 minutes"
-        };
-      } else {
-        session.logs.push(text);
-      }
-    });
-    
-    process.on("error", (err) => {
-      session.status = "error";
-      session.logs.push(`Error: ${err.message}`);
-    });
-    
-    process.on("exit", (code) => {
-      if (code !== 0 && session.status !== "complete") {
-        session.status = "error";
-        session.logs.push(`Process exited with code ${code}`);
-      }
-    });
-    
-    sessions.set(sessionId, session);
-    
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            session_id: sessionId,
-            message: "Debug session started successfully",
-          }),
+    try {
+      // Initialize MCP clients if not already done
+      await initMcpClients();
+      
+      // Create the enhanced debug session with actual system events
+      const enhancedSession: DebugSession = {
+        id: sessionId,
+        status: "initializing",
+        logs: [
+          "Deebo debugging session initialized",
+          `Received error: ${error_message}`,
+          `Language: ${language || "Not specified"}`,
+          repo_path ? `Repository path: ${repo_path}` : "No repository path provided",
+          file_path ? `File path: ${file_path}` : "No file path provided",
+        ],
+        startTime: Date.now(),
+        lastChecked: Date.now(),
+        request: {
+          error: error_message,
+          context: code_context || "",
+          codebase: {
+            repoPath: repo_path || (file_path ? file_path.substring(0, file_path.lastIndexOf('/')) : ""),
+            filePath: file_path,
+          }
         },
-      ],
-    };
+        scenarioResults: []
+      };
+      
+      // Add explanation of the debugging process
+      enhancedSession.logs.push(
+        "Deebo will analyze your error through the following process:",
+        "1. Mother agent will analyze the error and codebase to identify potential causes",
+        "2. Scenario agents will be created to test different hypotheses in isolation",
+        "3. Each scenario agent will create its own Git branch for investigation",
+        "4. Results from all scenario agents will be collected and evaluated",
+        "5. The mother agent will select the best fix and verify it works",
+        "6. A final recommendation will be provided with implementation details"
+      );
+      
+      enhancedSessions.set(sessionId, enhancedSession);
+      
+      // Update session status to running
+      enhancedSession.status = "running";
+      enhancedSession.logs.push("Starting mother agent for error analysis...");
+      
+      // Start the advanced mother agent debugging in the background
+      startMotherAgent(enhancedSession).catch(error => {
+        console.error("Error in mother agent:", error);
+        enhancedSession.logs.push(`Error in mother agent: ${error}`);
+        enhancedSession.status = "error";
+        enhancedSession.error = `${error}`;
+      });
+      
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              session_id: sessionId,
+              message: "Debug session started successfully. The Deebo debugging system will analyze your error using specialized scenario agents working in isolated Git branches.",
+            }),
+          },
+        ],
+      };
+    } catch (error) {
+      console.error("Error starting debug session:", error);
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              error: `Failed to start debug session: ${error}`,
+            }),
+          },
+        ],
+      };
+    }
   }
 );
 
@@ -141,8 +125,9 @@ server.tool(
   },
   async ({ session_id }) => {
     const session = sessions.get(session_id);
+    const enhancedSession = enhancedSessions.get(session_id);
     
-    if (!session) {
+    if (!session && !enhancedSession) {
       return {
         isError: true,
         content: [
@@ -156,17 +141,96 @@ server.tool(
       };
     }
     
-    session.lastChecked = Date.now();
+    // Update last checked timestamp
+    if (session) {
+      session.lastChecked = Date.now();
+    }
+    
+    if (enhancedSession) {
+      enhancedSession.lastChecked = Date.now();
+      
+      // Prioritize enhanced session if available
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              session_id: enhancedSession.id,
+              status: mapEnhancedSessionStatus(enhancedSession.status),
+              logs: enhancedSession.logs,
+              result: enhancedSession.finalResult 
+                ? convertToLegacyResult(enhancedSession.finalResult, enhancedSession) 
+                : null,
+            }),
+          },
+        ],
+      };
+    }
+    
+    // Fall back to traditional session
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            session_id: session!.id,
+            status: session!.status,
+            logs: session!.logs,
+            result: session!.result,
+          }),
+        },
+      ],
+    };
+  }
+);
+
+// Tool 3: List Debugging Scenarios
+server.tool(
+  "list_scenarios",
+  "Get a list of available debugging scenario types",
+  {},
+  async () => {
+    const scenarios = [
+      {
+        type: "dependency",
+        description: "Investigates dependency-related issues like missing or incompatible packages"
+      },
+      {
+        type: "syntax",
+        description: "Examines syntax errors, type errors, and other code correctness issues"
+      },
+      {
+        type: "environment",
+        description: "Checks environment configuration, settings, and deployment issues"
+      },
+      {
+        type: "cache",
+        description: "Analyzes caching problems, stale data, and cache invalidation issues"
+      },
+      {
+        type: "async",
+        description: "Investigates race conditions, timing issues, and async operation bugs"
+      },
+      {
+        type: "api",
+        description: "Examines API integration, request/response handling, and data formatting"
+      },
+      {
+        type: "performance",
+        description: "Analyzes performance bottlenecks, memory leaks, and optimization opportunities"
+      },
+      {
+        type: "runtime",
+        description: "Investigates runtime exceptions and unexpected behavior during execution"
+      }
+    ];
     
     return {
       content: [
         {
           type: "text",
           text: JSON.stringify({
-            session_id: session.id,
-            status: session.status,
-            logs: session.logs,
-            result: session.result,
+            scenarios: scenarios
           }),
         },
       ],
@@ -177,21 +241,69 @@ server.tool(
 // Clean up old sessions periodically
 setInterval(() => {
   const now = Date.now();
-  for (const [id, session] of sessions.entries()) {
+  
+  // Clean up enhanced sessions
+  for (const [id, session] of enhancedSessions.entries()) {
     if (now - session.lastChecked > 30 * 60 * 1000) {
-      if (session.process.connected) {
-        session.process.kill();
-      }
-      sessions.delete(id);
+      enhancedSessions.delete(id);
+      console.error(`Session ${id} deleted due to inactivity`);
     }
   }
 }, 5 * 60 * 1000);
 
+/**
+ * Map enhanced session status to legacy status
+ */
+function mapEnhancedSessionStatus(status: string): "running" | "complete" | "error" {
+  switch (status) {
+    case "initializing":
+    case "running":
+      return "running";
+    case "complete":
+      return "complete";
+    case "error":
+      return "error";
+    default:
+      return "running";
+  }
+}
+
+/**
+ * Convert enhanced session result to legacy format
+ */
+function convertToLegacyResult(result: any, session: DebugSession): any {
+  return {
+    fix: result.fixDescription,
+    confidence: result.confidence,
+    changes_required: result.changesRequired.map((change: any) => ({
+      type: `${change.type}_update`,
+      description: change.description,
+      priority: change.priority
+    })),
+    affected_files: session.request.codebase?.filePath ? [session.request.codebase.filePath] : [],
+    estimated_time_to_fix: result.estimatedTimeToFix,
+    scenario_results: session.scenarioResults.map((scenario: ScenarioResult) => ({
+      type: scenario.scenarioType,
+      hypothesis: scenario.hypothesis,
+      success: scenario.success,
+      confidence: scenario.confidence
+    }))
+  };
+}
+
 // Start server
 async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error("Deebo prototype MCP Server running on stdio");
+  try {
+    // Initialize MCP clients
+    await initMcpClients();
+    
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    console.error("Deebo prototype MCP Server running on stdio");
+  } catch (error) {
+    console.error("Error initializing server:", error);
+    process.exit(1);
+  }
 }
 
 main().catch((error) => {
