@@ -42,6 +42,8 @@ export interface ScenarioResult {
   success: boolean;
   confidence: number;
   explanation: string;
+  branchName?: string;
+  gitDiff?: string;
 }
 
 // Debug Result Interface

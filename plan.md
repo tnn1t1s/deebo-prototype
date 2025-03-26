@@ -20,8 +20,8 @@ Current tools often require manual intervention and don't leverage advanced AI t
 Deebo is an ADS (Agentic Debugging System) that:
 	•	Caches Code Snapshots:
 It ingests and stores full codebases and computes diffs, so subsequent debugging sessions only process incremental changes.
-	•	Executes Code in Docker:
-By launching Docker containers, it ensures a controlled, isolated environment where code is executed and monitored.
+	•	Uses Git-Based Isolation:
+Each debugging attempt occurs in its own Git branch, providing isolation and version control while maintaining a complete history of attempted fixes.
 	•	Analyzes Execution Results with LLMs:
 Deebo leverages advanced language models to analyze outputs and automatically generate debugging reports, complete with fix suggestions and detailed explanations.
 	•	Is Modular and Composable:
@@ -34,18 +34,31 @@ Its core API is designed independently of any specific interface. Today, it may 
 Core Modules of the API:
 	1.	Code Ingestion Module:
 	•	Functionality: Reads the full codebase. We are assuming the client will send a JSON package of error, logs, context, and codebase.
-Error: this is cline’s report of the error in the system, and what exactly it wants you to solve. 
-Logs: system event logs, whether they’re from the user’s console, Docker, AWS, etc. 
-Codebase: cline sends the codebase to deebo the first time it’s called in a chat session. If a previous version exists, Deebo computes a diff and updates its internal codebase.
-Context: any other useful information that cline wants Deebo to know that would be helpful for solving the error. Basically space for Cline’s LLM to be creative and thoughtful 
-	2.	Docker Manager Module:
-	•	Functionality: Manages Docker container lifecycle. It spawns containers using a pre-built Docker image (e.g., deebo-env), injects the code snapshot, sets up the codebase fully to be ready for executing commands and modifying code, for example a full-stack web application or a backend API service, and cleans up afterward.
-	3.	Execution Module:
-	•	Functionality: Executes commands (like running tests) inside the Docker container and captures outputs (logs, errors, stack traces). The execution module is critical to implement thoughtfully, as it is what agents will use to confirm its experiments in the agentic debugging system.
+Error: this is cline's report of the error in the system, and what exactly it wants you to solve. 
+Logs: system event logs, whether they're from the user's console, system events, etc. 
+Codebase: cline sends the codebase to deebo the first time it's called in a chat session. If a previous version exists, Deebo computes a diff and updates its internal codebase.
+Context: any other useful information that cline wants Deebo to know that would be helpful for solving the error. Basically space for Cline's LLM to be creative and thoughtful 
+	2.	Git MCP Server Integration:
+	•	Functionality: Provides direct access to Git operations via the Git MCP server. This MCP server exposes Git functionality (status, diff, log, branch, checkout, commit, etc.) via standardized API calls, enabling scenario agents to create and manage branches, track changes, and analyze code history directly from their Claude instances.
+	•	Benefits: Native Git integration allows for clean isolation of debugging attempts, and preserves a complete history of all attempted fixes while providing familiar Git workflow concepts.
+	3.	Desktop Commander MCP Integration:
+	•	Functionality: Provides file system and command execution capabilities via the Desktop Commander MCP server. This MCP server allows agents to read/write files, execute terminal commands, and interact with the local environment directly through standardized API calls.
+	•	Benefits: Empowers scenario agents to make file changes, execute build/test commands, and capture outputs without requiring custom code implementations.
 	4.	Debug Analysis Module (Scenario Agents):
-	•	Functionality: Owns and conducts end-to-end experiments that Deebo tells it to do. Reports back the package (error, logs, code, context) from the results of its experiment. Also suggests next steps. Has access to git mcp server, desktopcommander mcp server for codebase access and running code
+	•	Functionality: Each scenario agent is a fully autonomous agent with its own Claude instance and direct access to tools. They:
+		- Create and manage their own Git branches
+		- Have full access to Git MCP and DesktopCommander MCP
+		- Make independent decisions about what to try next
+		- Execute real terminal commands to build, test, and verify fixes
+		- Report comprehensive results back to mother agent
+		- Self-terminate after sending results
 	5.	Orchestrator (Deebo, Mother Agent):
-	•	Functionality: Orchestrates the end-to-end workflow: from ingesting the codebase, managing Docker execution, running the analysis, to cleaning up containers.
+	•	Functionality: Orchestrates the end-to-end workflow:
+		- Analyzes errors to determine which scenario types to investigate
+		- Spawns independent scenario agents with their own Claude instances
+		- Provides initial context and hypothesis to each agent
+		- Evaluates results from scenario agents
+		- Selects and verifies the best solution
 
 Supporting Services:
 	•	Caching:
@@ -59,18 +72,55 @@ Tech Stack Summary:
 	•	Backend Framework: FastAPI (Python)
 	•	Programming Language: Python 3.x
 	•	Data Modeling: Pydantic
-	•	Containerization: Docker (managed via Python Docker SDK)
+	•	Version Control: Git (for isolation and change tracking)
+	•	MCP Servers: Git MCP & Desktop Commander MCP
 	•	Caching: Redis (for metadata/diffs)
 	•	Persistent Storage: Supabase Storage (for large artifacts)
 	•	LLM Integration: API calls to Claude 3.7 
 	•	Testing: pytest for unit/integration tests
-	•	Deployment: Docker Compose for local development; production deployment on a cloud platform
+	•	Deployment: Standard cloud deployment (e.g., Vercel, cloud provider)
 
 ⸻
 
+MCP Servers in Detail:
 
+1. Git MCP Server
+   • Purpose: Provides a standardized interface to Git version control operations through the Model Context Protocol
+   • Key Capabilities:
+     - Repository Analysis: status, diff, log, blame, show
+     - Branch Management: branch, checkout, reset, merge
+     - Change Tracking: add, commit, push, pull
+     - History Exploration: log with various formats, show specific revisions
+   • Integration with Deebo:
+     - Mother Agent uses it to gather initial context about the codebase
+     - Scenario Agents use it to create isolated branches for experimentation
+     - All agents can perform Git operations without shell execution
+     - Changes can be tracked with standard Git workflows
+   • Benefits for Debugging:
+     - Clean isolation of debugging attempts
+     - Complete history of all fix attempts
+     - Easy comparison between different solution approaches
+     - Natural integration with developer workflows
 
+2. Desktop Commander MCP Server
+   • Purpose: Provides file system and command execution capabilities through the Model Context Protocol
+   • Key Capabilities:
+     - File Operations: read, write, edit, search, list directories
+     - Command Execution: run any CLI command with output capture
+     - Process Management: start, monitor, and terminate processes
+     - Environment Interaction: access system information and settings
+   • Integration with Deebo:
+     - Scenario Agents use it to read and modify code files
+     - Agents execute build and test commands to validate fixes
+     - Output capture from command execution provides evidence for solution effectiveness
+     - File system operations allow checking and modifying configuration files
+   • Benefits for Debugging:
+     - Direct file manipulation without complex APIs
+     - Real validation of fixes through actual command execution
+     - Complete access to development toolchain
+     - Evidence collection through captured outputs
 
+⸻
 
 5. Lightweight Wrappers
 
@@ -80,15 +130,13 @@ Wrap the core API in a minimal MCP interface so that platforms like Cline can ca
 	•	Web/Desktop Interface (FUTURE):
 Create a simple web or desktop app that calls the core API and presents debugging reports to users.
 
-Deebo aims to revolutionize debugging by automating code ingestion, isolated execution, and intelligent analysis using modern containerization and LLM technologies. Its composable core API is designed for scalability, efficiency, and future integration into various platforms. This roadmap and module breakdown provide a clear, step-by-step guide to building Deebo—from setting up the environment and developing core modules to deploying lightweight wrappers and releasing an MVP.
-
 Overview of the Agentic Debugging System
 
 In an advanced debugging assistant like Deebo, a multi-agent system can improve the reliability and accuracy of the fix generation process. The idea is to split the debugging task into smaller, focused subtasks that multiple specialized agents handle concurrently or in sequence. The two main types of agents in this system are:
 	•	Scenario Agents:
-These are "worker" agents, each responsible for exploring a distinct debugging strategy or hypothesis. Each Scenario Agent operates in its own isolated environment (typically via a Docker container) where it tests a specific fix or configuration change. They execute debugging experiments, capture outputs, and generate reports on the potential effectiveness of the proposed solution.
+These are fully autonomous agents, each responsible for exploring a distinct debugging strategy or hypothesis. Each Scenario Agent operates in its own Git branch where it tests a specific fix or configuration change. They have their own Claude instances with direct tool access, allowing them to make independent decisions, execute commands, and validate fixes through real experimentation.
 	•	Mother Agent:
-This is the "orchestrator" agent that oversees the entire debugging process. It collects reports from the Scenario Agents, evaluates their outputs based on predefined criteria (such as success of tests, confidence scores, and overall error reduction), and selects the best solution. The Mother Agent can also decide if further experimentation is necessary (for example, if none of the Scenario Agents yield a satisfactory fix).
+This is the "orchestrator" agent that oversees the entire debugging process. It analyzes errors, spawns scenario agents with appropriate hypotheses, collects their reports, and selects the best solution. The Mother Agent can also decide if further experimentation is necessary (for example, if none of the Scenario Agents yield a satisfactory fix).
 
 ⸻
 
@@ -97,88 +145,116 @@ Detailed Roles and Workflow
 1. Scenario Agents
 
 Role:
-	•	Each Scenario Agent takes a different approach or hypothesis on how to resolve the detected issue. For example, one agent might attempt to fix a missing dependency error, another might try to correct a misconfiguration in the code, and yet another might adjust environment variables.
+	•	Each Scenario Agent is a fully autonomous agent with its own Claude instance and direct tool access. They take different approaches to resolving the detected issue, such as fixing dependency errors, correcting misconfigurations, or adjusting environment variables.
 
 Key Functions:
 	•	Environment Setup:
-	•	Each agent gets its own isolated Docker container. This ensures that the experiment doesn't affect the main environment and that each agent can safely run its tests.
-	•	The codebase (or its diff) is injected into the container.
+	•	Each agent creates and manages its own Git branch, ensuring isolation from other debugging attempts
+	•	The agent has full access to read, write, and execute operations in its branch
 	•	Experiment Execution:
-	•	The agent executes specific commands or tests (e.g., running unit tests, starting the application, simulating user interactions) to determine if the proposed fix resolves the error.
-	•	It captures execution outputs, logs, stack traces, and any error messages.
+	•	The agent makes independent decisions about what commands to run
+	•	Executes real builds, tests, and validation steps
+	•	Captures all outputs, logs, and metrics
 	•	Analysis & Reporting:
-	•	The Scenario Agent uses an LLM (e.g., Claude 3.7) or predefined rules to analyze the output of the execution.
-	•	It generates a detailed DebugReport that includes:
-	•	The specific hypothesis or fix attempted.
-	•	Observations from the execution (e.g., did the error go away? Were new errors introduced?).
-	•	A confidence score reflecting how likely the fix is to work.
-	•	Any additional insights or suggestions.
+	•	Uses its Claude instance to analyze execution results
+	•	Makes decisions about next steps based on results
+	•	Generates a detailed DebugReport that includes:
+		•	The specific hypothesis and steps taken
+		•	Evidence from actual execution results
+		•	Confidence score based on empirical testing
+		•	Comprehensive explanation of the solution
 	•	Autonomy and Independence:
-	•	Each Scenario Agent operates independently, allowing multiple debugging strategies to be tested in parallel. This maximizes the chance of finding a viable solution quickly.
+	•	Has full access to Git MCP and DesktopCommander MCP
+	•	Makes its own decisions about what to try next
+	•	Can perform multi-step investigations
+	•	Self-terminates after reporting results
 
 2. Mother Agent
 
 Role:
-	•	The Mother Agent is responsible for supervising the overall debugging process. It aggregates the reports generated by all active Scenario Agents, reviews their findings, and then determines which fix is most promising.
+	•	The Mother Agent is responsible for orchestrating the debugging process. It spawns and coordinates scenario agents, analyzes their findings, and determines the best solution.
 
 Key Functions:
-	•	Aggregation:
-	•	Collects all DebugReports from the Scenario Agents.
-	•	Organizes the reports, noting each agent's proposed fix, test outcomes, and confidence levels.
+	•	Analysis & Planning:
+	•	Analyzes the error to determine which scenario types to investigate
+	•	Creates appropriate hypotheses for each scenario
+	•	Agent Management:
+	•	Spawns independent scenario agents with their own Claude instances
+	•	Provides initial context and hypothesis to each agent
+	•	Monitors agent progress and collects results
 	•	Evaluation:
-	•	Uses pre-defined decision criteria (such as the highest confidence score, successful elimination of errors, or lowest performance impact) to rank the proposed fixes.
-	•	May cross-reference with previous debugging sessions to validate the effectiveness of similar fixes.
+	•	Reviews empirical evidence from each agent
+	•	Compares confidence scores and solution complexity
+	•	Verifies selected solutions independently
 	•	Decision-Making:
-	•	Selects the best candidate fix based on the evaluation.
-	•	If no Scenario Agent produces a satisfactory result, the Mother Agent can trigger additional experiments or refine the strategies for a second iteration.
+	•	Selects the best solution based on real test results
+	•	Can spawn additional agents if needed
 	•	Communication:
-	•	Returns the selected fix (and accompanying explanation) to the system (e.g., through the MCP interface or directly to Cline).
-	•	Optionally, it can also provide a summary report detailing why a particular solution was chosen and what alternative approaches were considered.
+	•	Returns detailed fix recommendations with evidence
+	•	Provides comprehensive debugging reports
 
 ⸻
 
 3. Full Workflow Example
-	Cline detects an error in the code
-Cline starts a debug session with Deebo, providing:
-Error information (message, location, etc.)
-Path to the Git repository
-Deebo would:
-Use git_status to see what files have changed
-Use git_diff_unstaged to get the current changes
-Use git_show to retrieve committed code
-Analyze and debug the issue with full context
 
-	•	This code snapshot is then injected into one or more Docker containers for isolated testing.
-	3.	Spawning Scenario Agents:
-	•	Multiple Scenario Agents are spawned, each testing a different fix:
-	•	Scenario Agent A: Tries adding a missing dependency.
-	•	Scenario Agent B: Adjusts environment configuration.
-	•	Scenario Agent C: Applies a patch to correct a syntax error.
-	•	Each agent runs the code in its container, executes tests, and captures the output.
-	4.	Debug Report Generation:
-	•	Each Scenario Agent processes the output through its analysis module (using an LLM) and produces a DebugReport.
-	•	The reports include details on the attempted fix, test outcomes, and a confidence score.
-	5.	Mother Agent Evaluation:
-	•	The Mother Agent collects all DebugReports.
-	•	It evaluates the results based on criteria like successful error resolution and confidence scores.
-	•	The Mother Agent selects the best fix, or if none are satisfactory, decides to generate new scenarios.
-	6.	Final Decision & Communication:
-	•	The chosen fix and its explanation are sent back to Cline (or the end user).
-	•	If the fix is applied, the codebase is updated, and the debugging process is considered successful.
-	•	If no fix works, the system notifies the user that deeper investigation is underway, and additional scenarios will be generated.
+1. Initial Analysis:
+	•	Cline detects an error in the code
+	•	Cline starts a debug session with Deebo, providing:
+		- Error information (message, location, etc.)
+		- Path to the Git repository
+	•	Mother Agent:
+		- Uses git_status to see what files have changed
+		- Uses git_diff_unstaged to get the current changes
+		- Uses git_show to retrieve committed code
+		- Analyzes the error and context
+
+2. Agent Deployment:
+	•	Mother Agent spawns 2-3 scenario agents with different hypotheses
+	•	Each scenario agent:
+		- Creates its own Git branch
+		- Has full tool access (Git MCP, DesktopCommander MCP)
+		- Makes independent decisions
+		- Performs real experiments and tests
+		- Reports results back to mother agent
+
+3. Investigation Process:
+	•	Each scenario agent:
+		- Explores the codebase
+		- Makes code changes
+		- Runs builds and tests
+		- Captures evidence
+		- Iterates based on results
+		- Documents findings
+
+4. Result Analysis:
+	•	Mother Agent:
+		- Collects all debug reports
+		- Evaluates empirical evidence
+		- Compares confidence scores
+		- Selects best solution
+		- Verifies fix effectiveness
+
+5. Solution Delivery:
+	•	Selected fix is documented with:
+		- Actual test results
+		- Git diff of changes
+		- Confidence metrics
+		- Implementation steps
+	•	Results sent back to Cline
+	•	Successful branches optionally preserved
 
 ⸻
 
 Advantages of the Agentic System
+	•	True Autonomy:
+Each scenario agent is a full-fledged AI agent capable of independent decision-making and multi-step problem solving.
 	•	Parallel Exploration:
-By running multiple debugging strategies concurrently, the system increases the likelihood of quickly finding an effective fix.
-	•	Robust Decision-Making:
-The Mother Agent ensures that decisions aren't based on a single approach, but rather on a comparative analysis of multiple strategies.
-	•	Isolation and Safety:
-Each Scenario Agent works in its own Docker container, which prevents conflicts and ensures that experiments don't interfere with one another or with the production code.
+Multiple agents work concurrently in isolated branches, increasing the chance of finding effective solutions quickly.
+	•	Empirical Validation:
+Solutions are validated through actual code execution and testing, not just AI reasoning.
+	•	Version Control Integration:
+Git-based isolation provides clean experimentation environments while maintaining a history of all attempts.
 	•	Scalability:
-The modular design allows you to add more Scenario Agents or refine the decision criteria in the Mother Agent as needed, making the system flexible and scalable.
-	•	Future Extensions:
-This multi-agent framework can be extended with additional agents, more advanced analytics, or integrated with other systems (such as an MCP server) to further automate and enhance debugging.
-
-
+The system can easily accommodate new scenario types and debugging strategies.
+	•	Developer Friendly:
+Results are delivered in familiar formats (Git branches, diffs) that integrate naturally into development workflows.
