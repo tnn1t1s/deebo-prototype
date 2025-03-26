@@ -22,15 +22,24 @@ export async function runMotherAgent(
   error: string, 
   context: string,
   language: string,
-  filePath: string,
-  repoPath: string
+  filePath: string | undefined,
+  repoPath: string | undefined
 ) {
   const logger = await getLogger(sessionId, 'mother');
+
+  // Validate paths early
+  if (!repoPath) {
+    logger.warn('No repository path provided, some features will be limited');
+  }
+  if (!filePath) {
+    logger.warn('No file path provided, some features will be limited');
+  }
+
   logger.info('Mother agent started', {
     error: error.substring(0, 100), // Truncate long errors
     language,
-    filePath,
-    repoPath
+    filePath: filePath || 'not provided',
+    repoPath: repoPath || 'not provided'
   });
 
   const anthropic = new Anthropic();
@@ -165,8 +174,8 @@ interface ScenarioConfig {
   error: string;
   context: string;
   language: string;
-  filePath: string;
-  repoPath: string;
+  filePath?: string;
+  repoPath?: string;
 }
 
 async function spawnScenarioAgent(config: ScenarioConfig) {
@@ -197,8 +206,14 @@ async function spawnScenarioAgent(config: ScenarioConfig) {
         '--context', config.context,
         '--hypothesis', config.scenario.hypothesis,
         '--language', config.language,
-        '--file', config.filePath,
-        '--repo', config.repoPath
+        '--file', config.filePath || '',
+        '--repo', config.repoPath || '',
+        '--request', JSON.stringify({
+          error: config.error,
+          context: config.context,
+          filePath: config.filePath,
+          repoPath: config.repoPath
+        })
       ], {
         stdio: 'pipe',
         detached: true,

@@ -112,7 +112,11 @@ export async function initializeTools(server: Server) {
         language: z.string().optional(),
         file_path: z.string().optional(),
         repo_path: z.string().optional()
-      });
+      }).transform(data => ({
+        ...data,
+        file_path: data.file_path === '' ? undefined : data.file_path,
+        repo_path: data.repo_path === '' ? undefined : data.repo_path
+      }));
       
       const result = schema.safeParse(toolArgs);
       if (!result.success) {
@@ -123,6 +127,7 @@ export async function initializeTools(server: Server) {
       }
       
       const { error_message, code_context, language, file_path, repo_path } = result.data;
+
       const sessionId = uuidv4();
       const { createLogger } = await import("../util/logger.js");
       const sessionLogger = createLogger(sessionId, 'mcp-session');

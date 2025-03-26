@@ -1,0 +1,32 @@
+{
+  "tools": {
+    "git-mcp": {
+      "path": "tools/git-mcp.js",
+      "timeout": 10000,
+      "retries": 3,
+      "baseDelay": 1000,
+      "allowedActions": [
+        "git_status",
+        "git_diff",
+        "git_log",
+        "git_branch",
+        "git_commit"
+      ]
+    },
+    "desktop-commander": {
+      "path": "tools/desktop-commander.js",
+      "timeout": 10000,
+      "retries": 3,
+      "baseDelay": 1000,
+      "allowedActions": [
+        "read_file",
+        "write_file",
+        "edit_block",
+        "list_directory",
+        "create_directory",
+        "execute_command",
+        "search_code"
+      ]
+    }
+  }
+}

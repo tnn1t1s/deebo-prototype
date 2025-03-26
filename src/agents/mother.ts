@@ -2,6 +2,10 @@ import { runMotherAgent } from '../util/anthropic.js';
 import { gitOperations, commanderOperations } from '../util/mcp.js';
 import { DebugSession, ScenarioResult } from '../types.js';
 import { ScenarioAgentFactory, runAutonomousAgent } from './factory.js';
+import pLimit from 'p-limit';
+
+// Maximum number of concurrent scenario agents
+const MAX_CONCURRENT_AGENTS = 3;
 
 /**
  * Available scenario types
@@ -99,37 +103,44 @@ export async function startMotherAgent(session: DebugSession): Promise<void> {
         return agent;
       });
       
-      // Run agents in parallel
+      // Create worker pool with concurrency limit
+      const limit = pLimit(MAX_CONCURRENT_AGENTS);
+      session.logs.push(`[MOTHER] Created worker pool with ${MAX_CONCURRENT_AGENTS} concurrent slots`);
+
+      // Run agents with concurrency control
       const results = await Promise.all(
         agents.map(agent => 
-          runAutonomousAgent(agent)
-            .then((result: { success: boolean; confidence: number; fix: string; explanation: string }) => {
-              session.logs.push(`[SCENARIO:${agent.scenarioType}] Investigation completed with ${result.success ? 'SUCCESS' : 'FAILURE'} (confidence: ${result.confidence})`);
-              return {
-                id: agent.id,
-                scenarioType: agent.scenarioType,
-                hypothesis: agent.hypothesis,
-                fixAttempted: result.fix,
-                testResults: result.explanation,
-                success: result.success,
-                confidence: result.confidence,
-                explanation: result.explanation
-              };
-            })
-            .catch((error: Error) => {
-              console.error(`Error in ${agent.scenarioType} agent:`, error);
-              session.logs.push(`[SCENARIO:${agent.scenarioType}] Error during execution: ${error}`);
-              return {
-                id: agent.id,
-                scenarioType: agent.scenarioType,
-                hypothesis: agent.hypothesis,
-                fixAttempted: 'Error during execution',
-                testResults: `${error}`,
-                success: false,
-                confidence: 0,
-                explanation: `Error: ${error}`
-              };
-            })
+          limit(() => {
+            session.logs.push(`[MOTHER] Starting agent ${agent.scenarioType} in worker pool`);
+            return runAutonomousAgent(agent)
+              .then((result: { success: boolean; confidence: number; fix: string; explanation: string }) => {
+                session.logs.push(`[SCENARIO:${agent.scenarioType}] Investigation completed with ${result.success ? 'SUCCESS' : 'FAILURE'} (confidence: ${result.confidence})`);
+                return {
+                  id: agent.id,
+                  scenarioType: agent.scenarioType,
+                  hypothesis: agent.hypothesis,
+                  fixAttempted: result.fix,
+                  testResults: result.explanation,
+                  success: result.success,
+                  confidence: result.confidence,
+                  explanation: result.explanation
+                };
+              })
+              .catch((error: Error) => {
+                console.error(`Error in ${agent.scenarioType} agent:`, error);
+                session.logs.push(`[SCENARIO:${agent.scenarioType}] Error during execution: ${error}`);
+                return {
+                  id: agent.id,
+                  scenarioType: agent.scenarioType,
+                  hypothesis: agent.hypothesis,
+                  fixAttempted: 'Error during execution',
+                  testResults: `${error}`,
+                  success: false,
+                  confidence: 0,
+                  explanation: `Error: ${error}`
+                };
+              })
+          })
         )
       );
       

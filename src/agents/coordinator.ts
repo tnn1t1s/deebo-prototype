@@ -52,9 +52,21 @@ export class AgentCoordinator {
   }): Promise<void> {
     const { sessionId, error, context, language, filePath, repoPath } = params;
     const log = await getLogger();
-    log.info('Starting new debug session', { sessionId });
+    log.info('Starting new debug session', { 
+      sessionId,
+      hasFilePath: !!filePath,
+      hasRepoPath: !!repoPath
+    });
 
     try {
+      // Log warnings for missing paths
+      if (!repoPath) {
+        log.warn('No repository path provided, some features will be limited');
+      }
+      if (!filePath) {
+        log.warn('No file path provided, some features will be limited');
+      }
+
       // Create mother agent state
       const motherAgent: AgentState = {
         id: `mother-${sessionId}`,

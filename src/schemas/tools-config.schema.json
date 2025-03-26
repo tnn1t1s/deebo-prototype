@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "tools": {
+      "type": "object",
+      "patternProperties": {
+        "^[a-zA-Z0-9-_]+$": {
+          "type": "object",
+          "properties": {
+            "path": { "type": "string" },
+            "timeout": { 
+              "type": "number",
+              "minimum": 1000,
+              "default": 10000
+            },
+            "retries": { 
+              "type": "number",
+              "minimum": 0,
+              "default": 3
+            },
+            "baseDelay": { 
+              "type": "number",
+              "minimum": 100,
+              "default": 1000
+            },
+            "allowedActions": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          },
+          "required": ["path"]
+        }
+      }
+    }
+  },
+  "required": ["tools"]
+}

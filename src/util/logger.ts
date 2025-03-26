@@ -30,11 +30,9 @@ export class Logger {
 
       // Handle stream errors
       this.stream.on('error', (error) => {
-        console.error(`Stream error for ${logPath}:`, error);
         this.fallbackToTemp();
       });
     } catch (error) {
-      console.error(`Failed to create log file ${logPath}:`, error);
       this.fallbackToTemp();
     }
   }
@@ -46,11 +44,10 @@ export class Logger {
         const tmpPath = join(process.env.DEEBO_ROOT, 'tmp', `${this.component}.log`);
         this.stream = createWriteStream(tmpPath, { flags: 'a' });
         this.logPath = tmpPath;
-        console.log(`Logger fallback to tmp: ${tmpPath}`);
         return;
       }
     } catch (error) {
-      console.error('Failed to create logger in DEEBO_ROOT tmp:', error);
+      // Silently fail and try next fallback
     }
 
     // Final fallback to system temp directory
@@ -59,9 +56,7 @@ export class Logger {
       ensureDirectory(dirname(systemTmpPath));
       this.stream = createWriteStream(systemTmpPath, { flags: 'a' });
       this.logPath = systemTmpPath;
-      console.log(`Logger fallback to system tmp: ${systemTmpPath}`);
     } catch (error) {
-      console.error('Failed to create logger in system tmp:', error);
       throw new Error(`Could not create logger in any location: ${error}`);
     }
   }
@@ -91,28 +86,9 @@ export class Logger {
         });
       }
 
-      // Also log to console for visibility
-      const prefix = `[${entry.timestamp}] [${entry.level.toUpperCase()}] [${entry.component}]`;
-      const message = entry.metadata 
-        ? `${entry.message} ${JSON.stringify(entry.metadata)}`
-        : entry.message;
-
-      switch (entry.level) {
-        case 'error':
-          console.error(`${prefix} ${message}`);
-          break;
-        case 'warn':
-          console.warn(`${prefix} ${message}`);
-          break;
-        case 'debug':
-          console.debug(`${prefix} ${message}`);
-          break;
-        default:
-          console.log(`${prefix} ${message}`);
-      }
-    } catch (error) {
-      console.error('Failed to write log entry:', error);
+      // Skip console logging for clean stdio transport
       
+    } catch (error) {
       // Try to recover by switching to temp file
       try {
         this.fallbackToTemp();
@@ -130,8 +106,7 @@ export class Logger {
         
         this.stream.write(JSON.stringify(errorEntry) + '\n');
       } catch {
-        // If all else fails, at least log to console
-        console.error('Critical logging failure:', error);
+        // Silent fail - we can't log if logging itself fails
       }
     }
   }
@@ -197,8 +172,6 @@ export function createLogger(sessionId: string, component: string): Logger {
     loggerCache.set(cacheKey, logger);
     return logger;
   } catch (error) {
-    console.error('Failed to create logger:', error);
-    
     // Try fallback to tmp directory
     try {
       const tmpPath = join(baseDir, 'tmp', `${sessionId}-${component}.log`);
@@ -206,8 +179,6 @@ export function createLogger(sessionId: string, component: string): Logger {
       loggerCache.set(cacheKey, logger);
       return logger;
     } catch (tmpError) {
-      console.error('Failed to create logger in tmp:', tmpError);
-      
       // Final fallback to system temp directory
       const systemTmpPath = join(tmpdir(), 'deebo-prototype', `${sessionId}-${component}.log`);
       const logger = new Logger(systemTmpPath, component);

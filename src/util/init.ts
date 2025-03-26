@@ -1,6 +1,7 @@
 import { mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { homedir, tmpdir } from 'os';
+import { initLogger } from './init-logger.js';
 
 /**
  * Create a directory and its parents if they don't exist
@@ -10,9 +11,9 @@ function createDirSafe(baseDir: string, dir: string): void {
   if (!existsSync(fullPath)) {
     try {
       mkdirSync(fullPath, { recursive: true, mode: 0o755 });
-      console.log(`Created directory: ${fullPath}`);
+      initLogger.info('Created directory', { path: fullPath });
     } catch (error) {
-      console.error(`Failed to create directory ${fullPath}:`, error);
+      initLogger.error('Failed to create directory', { path: fullPath, error: String(error) });
       throw error;
     }
   }
@@ -22,7 +23,7 @@ function createDirSafe(baseDir: string, dir: string): void {
  * Initialize all required directories
  */
 export function initializeDirectories(): string {
-  console.log('Initializing required directories');
+  initLogger.info('Initializing required directories');
 
   // Try project directory first
   const projectDir = process.cwd();
@@ -37,10 +38,10 @@ export function initializeDirectories(): string {
 
     // Set the root directory for other parts of the app
     process.env.DEEBO_ROOT = projectDir;
-    console.log('Directory initialization complete in project directory');
+    initLogger.info('Directory initialization complete', { location: 'project directory', path: projectDir });
     return projectDir;
   } catch (error) {
-    console.error('Failed to create directories in project directory:', error);
+    initLogger.error('Failed to create directories in project directory', { error: String(error) });
   }
 
   // Fallback to user's home directory
@@ -51,7 +52,7 @@ export function initializeDirectories(): string {
     }
 
     const fallbackDir = join(home, '.deebo-prototype');
-    console.log(`Falling back to home directory: ${fallbackDir}`);
+    initLogger.info('Falling back to home directory', { path: fallbackDir });
 
     // Create base fallback directory
     if (!existsSync(fallbackDir)) {
@@ -66,16 +67,16 @@ export function initializeDirectories(): string {
 
     // Set the root directory for other parts of the app
     process.env.DEEBO_ROOT = fallbackDir;
-    console.log('Directory initialization complete in home directory');
+    initLogger.info('Directory initialization complete', { location: 'home directory', path: fallbackDir });
     return fallbackDir;
   } catch (error) {
-    console.error('Failed to create directories in home directory:', error);
+    initLogger.error('Failed to create directories in home directory', { error: String(error) });
   }
 
   // Final fallback to system temp directory
   try {
     const tempDir = join(tmpdir(), 'deebo-prototype');
-    console.log(`Falling back to temp directory: ${tempDir}`);
+    initLogger.info('Falling back to temp directory', { path: tempDir });
 
     // Create required directories in temp location
     createDirSafe(tempDir, 'tmp');
@@ -85,10 +86,10 @@ export function initializeDirectories(): string {
 
     // Set the root directory for other parts of the app
     process.env.DEEBO_ROOT = tempDir;
-    console.log('Directory initialization complete in temp directory');
+    initLogger.info('Directory initialization complete', { location: 'temp directory', path: tempDir });
     return tempDir;
   } catch (error) {
-    console.error('Failed to create directories in temp directory:', error);
+    initLogger.error('Failed to create directories in temp directory', { error: String(error) });
     throw new Error('Could not initialize directories in any location');
   }
 }
@@ -113,25 +114,25 @@ export function ensureDirectory(dirPath: string): string {
   try {
     if (!existsSync(fullPath)) {
       mkdirSync(fullPath, { recursive: true, mode: 0o755 });
-      console.log(`Created directory: ${fullPath}`);
+      initLogger.info('Created directory', { path: fullPath });
     }
     return fullPath;
   } catch (error) {
-    console.error(`Failed to create directory ${fullPath}:`, error);
+    initLogger.error('Failed to create directory', { path: fullPath, error: String(error) });
     
     // Try fallback to tmp directory within our base directory
     try {
       const tmpPath = join(baseDir, 'tmp', normalizedPath);
       mkdirSync(tmpPath, { recursive: true, mode: 0o755 });
-      console.log(`Created fallback directory: ${tmpPath}`);
+      initLogger.info('Created fallback directory', { path: tmpPath });
       return tmpPath;
     } catch (tmpError) {
-      console.error(`Failed to create fallback directory:`, tmpError);
+      initLogger.error('Failed to create fallback directory', { error: String(tmpError) });
       
       // Final fallback to system temp directory
       const systemTmpPath = join(tmpdir(), 'deebo-prototype', normalizedPath);
       mkdirSync(systemTmpPath, { recursive: true, mode: 0o755 });
-      console.log(`Created system temp directory: ${systemTmpPath}`);
+      initLogger.info('Created system temp directory', { path: systemTmpPath });
       return systemTmpPath;
     }
   }

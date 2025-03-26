@@ -1,15 +1,141 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { Anthropic } from '@anthropic-ai/sdk';
+import { z } from 'zod';
 import { createLogger } from './util/logger.js';
 import { isInitialized } from './agents/index.js';
+import { ToolConfigManager } from './util/tool-config.js';
+
+// Retry utility for handling transient failures
+async function withRetry<T>(
+  operation: () => Promise<T>,
+  options: {
+    maxRetries?: number;
+    baseDelay?: number;
+    operation?: string;
+    logger?: any;
+  } = {}
+): Promise<T> {
+  const {
+    maxRetries = 3,
+    baseDelay = 500,
+    operation: opName = 'operation',
+    logger
+  } = options;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error: any) {
+      const delay = baseDelay * Math.pow(2, attempt - 1);
+      
+      if (logger) {
+        logger.debug(`Retry attempt ${attempt}/${maxRetries} for ${opName}`, {
+          error: error.message,
+          nextDelay: delay,
+          operation: opName
+        });
+      }
+
+      if (attempt === maxRetries) {
+        if (logger) {
+          logger.error(`All retry attempts failed for ${opName}`, {
+            error: error.message,
+            attempts: maxRetries,
+            operation: opName
+          });
+        }
+        throw error;
+      }
+
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  throw new Error('Unreachable');
+}
+
+// Log event interface for structured logging
+interface LogEvent {
+  timestamp: string;
+  agent: string;
+  event: string;
+  status: 'info' | 'debug' | 'warn' | 'error';
+  operation?: string;
+  duration?: number;
+  metadata?: Record<string, unknown>;
+}
+
+// Timeout utility for wrapping promises
+async function timeoutPromise<T>(
+  promise: Promise<T>,
+  ms: number,
+  operation: string
+): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => 
+      setTimeout(() => reject(new Error(`Operation '${operation}' timed out after ${ms}ms`)), ms)
+    )
+  ]);
+}
+
+// Zod schemas for validating Claude's output
+const ActionSchema = z.object({
+  tool: z.enum(['git-mcp', 'desktop-commander']),
+  name: z.string(),
+  args: z.record(z.unknown())
+});
+
+const ClaudeResponseSchema = z.object({
+  actions: z.array(ActionSchema),
+  complete: z.boolean(),
+  success: z.boolean().optional(),
+  explanation: z.string().optional()
+});
 
 // Helper function to create logger with initialization check
 async function getLogger(sessionId: string, component: string) {
   if (!isInitialized) {
     throw new Error('Cannot create logger - system not initialized');
   }
-  return createLogger(sessionId, component);
+  const logger = createLogger(sessionId, component);
+  
+  // Enhance logger to include timestamps and structured data
+  const enhancedLogger = {
+    info: (event: string, metadata?: Record<string, unknown>) => {
+      const logEvent: LogEvent = {
+        timestamp: new Date().toISOString(),
+        agent: `${sessionId}/${component}`,
+        event,
+        status: 'info',
+        metadata
+      };
+      logger.info(JSON.stringify(logEvent));
+    },
+    debug: (event: string, metadata?: Record<string, unknown>) => {
+      const logEvent: LogEvent = {
+        timestamp: new Date().toISOString(),
+        agent: `${sessionId}/${component}`,
+        event,
+        status: 'debug',
+        metadata
+      };
+      logger.debug(JSON.stringify(logEvent));
+    },
+    error: (event: string, metadata?: Record<string, unknown>) => {
+      const logEvent: LogEvent = {
+        timestamp: new Date().toISOString(),
+        agent: `${sessionId}/${component}`,
+        event,
+        status: 'error',
+        metadata
+      };
+      logger.error(JSON.stringify(logEvent));
+    },
+    close: () => logger.close()
+  };
+  
+  return enhancedLogger;
 }
 
 // Parse command line arguments
@@ -27,6 +153,8 @@ function parseArgs(args: string[]): any {
 }
 
 // OODA Loop: Scenario Agent explores a single hypothesis
+import { OODALoop } from './agents/ooda-loop.js';
+
 async function runScenarioAgent(args: any) {
   const logger = await getLogger(args.session, `scenario-${args.id}`);
   logger.info('Scenario agent started', {
@@ -36,9 +164,7 @@ async function runScenarioAgent(args: any) {
   });
 
   const anthropic = new Anthropic();
-  let complete = false;
-  let iteration = 0;
-  const maxIterations = 5;
+  const ooda = new OODALoop(args.session, args.hypothesis);
   
   // Initialize MCP clients for tools
   logger.info('Connecting to MCP tools');
@@ -58,45 +184,67 @@ async function runScenarioAgent(args: any) {
     });
     logger.info('Git branch created', { branchName });
     
-    while (!complete && iteration < maxIterations) {
-      logger.info(`Starting OODA iteration ${iteration + 1}`);
-      // OBSERVE: Use tools to gather information
-      logger.info('OBSERVE: Gathering information');
+    // Prepare test cases and validation steps
+    await ooda.prepareDefaultTestCases(args.request.error);
+    await ooda.prepareDefaultValidationSteps();
+    
+    while (!ooda.isComplete()) {
+      // OBSERVE phase
+      await ooda.transitionTo('observe');
       const observations: any[] = await gatherObservations(args.repoPath, gitClient, desktopClient, logger);
-      logger.debug('Observations gathered', { observations });
+      observations.forEach(obs => ooda.trackResource(obs.type));
       
-      // ORIENT: Have Claude analyze observations
-      logger.info('ORIENT: Analyzing observations');
+      // ORIENT phase
+      await ooda.transitionTo('orient');
       const analysis = await getNextAction(anthropic, {
         observations,
-        iteration,
-        hypothesis: args.hypothesis
+        iteration: ooda.getState().currentIteration,
+        hypothesis: ooda.getState().currentHypothesis
       }, logger);
-      logger.debug('Analysis complete', { analysis });
       
-      // DECIDE & ACT: Execute each suggested action using available tools
-      logger.info(`ACT: Executing ${analysis.actions.length} actions`);
-      for (const action of analysis.actions) {
-        logger.debug('Executing action', { action });
-        const result = await executeAction(action, args.repoPath, gitClient, desktopClient, logger);
-        logger.debug('Action result', { result });
-        observations.push({
-          action,
-          result,
-          timestamp: new Date().toISOString()
-        });
+      // DECIDE phase
+      await ooda.transitionTo('decide');
+      const testsPassed = await ooda.runTestCases();
+      const validationPassed = await ooda.runValidation();
+      
+      if (!testsPassed || !validationPassed) {
+        ooda.recordFailedApproach(
+          analysis.explanation || 'Unknown approach',
+          'Failed validation or tests'
+        );
+        continue;
       }
       
-      complete = analysis.complete;
-      iteration++;
+      // ACT phase
+      await ooda.transitionTo('act');
+      for (const action of analysis.actions) {
+        try {
+          const result = await executeAction(action, args.repoPath, gitClient, desktopClient, logger);
+          ooda.trackResource(`${action.tool}:${action.name}`);
+          
+          if (!result) {
+            ooda.recordFailedApproach(
+              `${action.tool}:${action.name}`,
+              'Action execution failed'
+            );
+            break;
+          }
+        } catch (error: any) {
+          ooda.recordFailedApproach(
+            `${action.tool}:${action.name}`,
+            error.message
+          );
+          break;
+        }
+      }
       
-      if (complete) {
+      // Check if we've found a solution
+      if (analysis.complete && analysis.success) {
         logger.info('Solution found, preparing report');
-        // Write final report
         await writeReport(args.id, {
-          success: analysis.success,
+          success: true,
           explanation: analysis.explanation,
-          observations,
+          metrics: ooda.getMetrics(),
           changes: await getChanges(args.repoPath, gitClient, logger)
         }, logger);
         logger.info('Report written successfully');
@@ -104,7 +252,15 @@ async function runScenarioAgent(args: any) {
       }
     }
     
+    // If we get here, we've hit max iterations without success
     logger.error('Max iterations reached without finding solution');
+    await writeReport(args.id, {
+      success: false,
+      explanation: 'Max iterations reached without finding solution',
+      metrics: ooda.getMetrics(),
+      changes: await getChanges(args.repoPath, gitClient, logger)
+    }, logger);
+    
     throw new Error("Max iterations reached without conclusion");
     
   } catch (error: any) {
@@ -122,15 +278,20 @@ async function runScenarioAgent(args: any) {
 async function connectMcpTool(tool: string, logger: any) {
   logger.info(`Connecting to ${tool}`);
   try {
-    // Use path.join to ensure correct path resolution
-    const path = await import('path');
-    const toolPath = path.resolve(process.cwd(), 'tools', `${tool}.js`);
+    // Get tool configuration
+    const configManager = await ToolConfigManager.getInstance();
+    const toolConfig = configManager.getToolConfig(tool);
     
-    logger.info(`Loading tool from: ${toolPath}`);
+    // Validate tool path
+    if (!await configManager.validateToolPath(tool)) {
+      throw new Error(`Tool path not found: ${toolConfig.path}`);
+    }
+    
+    logger.info(`Loading tool from: ${toolConfig.path}`, { config: toolConfig });
     
     const transport = new StdioClientTransport({
       command: 'node',
-      args: [toolPath]
+      args: [toolConfig.path]
     });
     
     const client = new Client({
@@ -140,6 +301,31 @@ async function connectMcpTool(tool: string, logger: any) {
     
     await client.connect(transport);
     logger.info(`Connected to ${tool} successfully`);
+    
+    // Wrap client.callTool to enforce allowed actions
+    const originalCallTool = client.callTool;
+    client.callTool = async (request: any) => {
+      if (!configManager.isActionAllowed(tool, request.name)) {
+        throw new Error(`Action not allowed: ${request.name}`);
+      }
+      
+      const { timeout, retries, baseDelay } = configManager.getRetryConfig(tool);
+      
+      return withRetry(
+        () => timeoutPromise(
+          originalCallTool.call(client, request),
+          timeout,
+          `${tool} action: ${request.name}`
+        ),
+        {
+          maxRetries: retries,
+          baseDelay,
+          operation: `${tool} action: ${request.name}`,
+          logger
+        }
+      );
+    };
+    
     return client;
   } catch (error: any) {
     logger.error(`Failed to connect to ${tool}`, { error: error.message, stack: error.stack });
@@ -154,26 +340,64 @@ async function gatherObservations(repoPath: string, gitClient: any, desktopClien
   try {
     // Git status
     logger.debug('Getting git status');
-    const status = await gitClient.callTool({
-      name: 'git_status',
-      arguments: { repo_path: repoPath }
-    });
+    const status = await withRetry(
+      () => timeoutPromise(
+        gitClient.callTool({
+          name: 'git_status',
+          arguments: { repo_path: repoPath }
+        }),
+        10000,
+        'Git status'
+      ),
+      {
+        maxRetries: 3,
+        baseDelay: 1000,
+        operation: 'Git status',
+        logger
+      }
+    );
     observations.push({type: 'git_status', result: status});
     
     // Git diff
     logger.debug('Getting git diff');
-    const diff = await gitClient.callTool({
-      name: 'git_diff',
-      arguments: { repo_path: repoPath }
-    });
+    const diff = await withRetry(
+      () => timeoutPromise(
+        gitClient.callTool({
+          name: 'git_diff',
+          arguments: { repo_path: repoPath }
+        }),
+        10000,
+        'Git diff'
+      ),
+      {
+        maxRetries: 3,
+        baseDelay: 1000,
+        operation: 'Git diff',
+        logger
+      }
+    );
     observations.push({type: 'git_diff', result: diff});
     
     // List relevant files
     logger.debug('Listing directory contents');
-    const files = await desktopClient.callTool({
-      name: 'list_directory',
-      arguments: { path: repoPath }
-    });
+    const files = await withRetry(
+      () => timeoutPromise(
+        desktopClient.callTool({
+          name: 'list_directory',
+          arguments: { 
+            path: repoPath.startsWith('/') ? repoPath : `${process.cwd()}/${repoPath}`
+          }
+        }),
+        10000,
+        'List directory'
+      ),
+      {
+        maxRetries: 3,
+        baseDelay: 1000,
+        operation: 'List directory',
+        logger
+      }
+    );
     observations.push({type: 'files', result: files});
     
     logger.info('Observation gathering complete', { numObservations: observations.length });
@@ -211,13 +435,25 @@ async function executeGitAction(action: any, repoPath: string, gitClient: any, l
       throw new Error(`Unsupported git action: ${action.name}`);
     }
     
-    const result = await gitClient.callTool({
-      name: action.name,
-      arguments: {
-        repo_path: repoPath,
-        ...action.args
+    const result = await withRetry(
+      () => timeoutPromise(
+        gitClient.callTool({
+          name: action.name,
+          arguments: {
+            repo_path: repoPath,
+            ...action.args
+          }
+        }),
+        10000, // 10 second timeout
+        `Git action: ${action.name}`
+      ),
+      {
+        maxRetries: 3,
+        baseDelay: 1000,
+        operation: `Git action: ${action.name}`,
+        logger
       }
-    });
+    );
     logger.debug('Git action completed', { result });
     return result;
   } catch (error: any) {
@@ -244,10 +480,28 @@ async function executeDesktopAction(action: any, repoPath: string, desktopClient
       throw new Error(`Unsupported desktop action: ${action.name}`);
     }
     
-    const result = await desktopClient.callTool({
-      name: action.name,
-      arguments: action.args
-    });
+    // Ensure paths are properly resolved for file operations
+    let args = { ...action.args };
+    if (['read_file', 'write_file', 'edit_block', 'list_directory', 'create_directory'].includes(action.name) && args.path) {
+      args.path = args.path.startsWith('/') ? args.path : `${process.cwd()}/${args.path}`;
+    }
+    
+    const result = await withRetry(
+      () => timeoutPromise(
+        desktopClient.callTool({
+          name: action.name,
+          arguments: args
+        }),
+        10000, // 10 second timeout
+        `Desktop action: ${action.name}`
+      ),
+      {
+        maxRetries: 3,
+        baseDelay: 1000,
+        operation: `Desktop action: ${action.name}`,
+        logger
+      }
+    );
     logger.debug('Desktop action completed', { result });
     return result;
   } catch (error: any) {
@@ -297,7 +551,9 @@ async function getNextAction(anthropic: any, data: any, logger: any) {
     Based on observations, suggest next debugging actions using only these tools.
     Return JSON with actions array and complete/success flags.`;
 
-    const msg = await anthropic.messages.create({
+    const msg = await withRetry(
+      () => timeoutPromise<Anthropic.Message>(
+        anthropic.messages.create({
       model: 'claude-3-5-sonnet-20241022',
       max_tokens: 1024,
       system: systemPrompt,
@@ -305,11 +561,38 @@ async function getNextAction(anthropic: any, data: any, logger: any) {
         role: 'user',
         content: `Based on these observations, what actions should I take next to investigate the hypothesis?\n\nHypothesis: ${data.hypothesis}\n\nObservations:\n${JSON.stringify(data.observations)}\n\nIteration: ${data.iteration}`
       }]
-    });
+      }),
+      30000, // 30 second timeout for Claude
+      'Claude response'
+      ),
+      {
+        maxRetries: 3,
+        baseDelay: 2000, // Longer delay for Claude API
+        operation: 'Claude API call',
+        logger
+      }
+    );
 
-    const nextAction = JSON.parse(msg.content[0].text);
-    logger.debug('Claude suggested next action', { nextAction });
-    return nextAction;
+    // Get text content from message
+    const textContent = msg.content.find(block => block.type === 'text');
+    if (!textContent || textContent.type !== 'text') {
+      throw new Error('Expected text response from Claude');
+    }
+    
+    const parsedJson = JSON.parse(textContent.text);
+    logger.debug('Parsing Claude response', { raw: parsedJson });
+    
+    const validatedResponse = ClaudeResponseSchema.safeParse(parsedJson);
+    if (!validatedResponse.success) {
+      logger.error('Invalid Claude response format', { 
+        error: validatedResponse.error.message,
+        raw: parsedJson 
+      });
+      throw new Error(`Invalid Claude response: ${validatedResponse.error.message}`);
+    }
+    
+    logger.debug('Claude response validated', { response: validatedResponse.data });
+    return validatedResponse.data;
   } catch (error: any) {
     logger.error('Failed to get next action from Claude', { error: error.message });
     throw error;
@@ -320,14 +603,46 @@ async function writeReport(agentId: string, data: any, logger: any) {
   logger.info('Writing final report');
   const client = await connectMcpTool('desktop-commander', logger);
   try {
-    const reportPath = `reports/${agentId}.json`;
-    await client.callTool({
-      name: 'write_file',
-      arguments: {
-        path: reportPath,
-        content: JSON.stringify(data, null, 2)
+    // Ensure reports directory exists
+    await withRetry(
+      () => timeoutPromise(
+        client.callTool({
+          name: 'create_directory',
+          arguments: {
+            path: 'reports'
+          }
+        }),
+        5000,
+        'Create reports directory'
+      ),
+      {
+        maxRetries: 3,
+        baseDelay: 1000,
+        operation: 'Create reports directory',
+        logger
       }
-    });
+    );
+
+    const reportPath = `reports/${agentId}-report-${Date.now()}.json`;
+    await withRetry(
+      () => timeoutPromise(
+        client.callTool({
+          name: 'write_file',
+          arguments: {
+            path: reportPath,
+            content: JSON.stringify(data, null, 2)
+          }
+        }),
+        10000,
+        'Write report'
+      ),
+      {
+        maxRetries: 3,
+        baseDelay: 1000,
+        operation: 'Write report',
+        logger
+      }
+    );
     logger.info('Report written successfully', { reportPath });
   } catch (error: any) {
     logger.error('Failed to write report', { error: error.message });

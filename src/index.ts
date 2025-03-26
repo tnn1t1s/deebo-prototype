@@ -1,6 +1,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { initializeDirectories } from './util/init.js';
+import { initLogger } from './util/init-logger.js';
 import dotenv from "dotenv";
 
 // Configure environment
@@ -12,7 +13,8 @@ try {
   process.env.DEEBO_ROOT = process.cwd();
   initializeDirectories();
 } catch (error) {
-  console.error('Failed to initialize directories:', error);
+  initLogger.error('Failed to initialize directories', { error: String(error) });
+  initLogger.close();
   process.exit(1);
 }
 
@@ -50,7 +52,7 @@ const CONFIG = {
  * Initialize and start the MCP server
  */
 async function startServer() {
-  logger.info('Starting Deebo MCP server', { 
+  initLogger.info('Starting Deebo MCP server', { 
     name: CONFIG.name,
     version: CONFIG.version,
     transport: CONFIG.transport.type,
@@ -84,19 +86,19 @@ async function startServer() {
     
     // Set up resources
     await initializeResources(server);
-    logger.info('Resources initialized');
+    initLogger.info('Resources initialized');
     
     // Set up tools
     await initializeTools(server);
-    logger.info('Tools initialized');
+    initLogger.info('Tools initialized');
     
     // Set up agents
     await initializeAgents(server);
-    logger.info('Agents initialized');
+    initLogger.info('Agents initialized');
     
     // Set up transports
     await initializeTransports(server);
-    logger.info('Transports initialized');
+    initLogger.info('Transports initialized');
     
     // Set up error handler
     server.onerror = (error: any) => {
@@ -114,28 +116,31 @@ async function startServer() {
     
     // Connect to transport
     await server.connect(transport);
-    logger.info(`Server connected to ${CONFIG.transport.type} transport`);
+    initLogger.info(`Server connected to ${CONFIG.transport.type} transport`);
     
     // Log successful startup
-    logger.info('Deebo MCP server running', { 
+    initLogger.info('Deebo MCP server running', { 
       transport: CONFIG.transport.type,
       port: CONFIG.transport.type === 'sse' ? CONFIG.transport.port : undefined
     });
     
+    // Close initialization logger now that MCP server is ready
+    initLogger.close();
+    
     // Set up cleanup handlers
     process.on('SIGINT', () => {
-      logger.info('Server shutting down');
+      initLogger.info('Server shutting down');
       
       // Close active sessions
       for (const [sessionId, session] of activeSessions.entries()) {
-        logger.info('Cleaning up session', { sessionId });
+        initLogger.info('Cleaning up session', { sessionId });
         session.status = 'error';
         session.error = 'Server shutdown';
         session.logs.push('Session terminated due to server shutdown');
       }
       
-      logger.info('Cleanup complete');
-      logger.close();
+      initLogger.info('Cleanup complete');
+      initLogger.close();
       process.exit(0);
     });
 
@@ -147,7 +152,8 @@ async function startServer() {
     
     return server;
   } catch (error: any) {
-    logger.error('Failed to start server', { error: error.message });
+    initLogger.error('Failed to start server', { error: error.message });
+    initLogger.close();
     throw error;
   }
 }
