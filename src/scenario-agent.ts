@@ -2,6 +2,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { Anthropic } from '@anthropic-ai/sdk';
 import { z } from 'zod';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 import { createLogger } from './util/logger.js';
 import { isInitialized } from './agents/index.js';
 import { ToolConfigManager } from './util/tool-config.js';
@@ -169,7 +171,7 @@ async function runScenarioAgent(args: any) {
   // Initialize MCP clients for tools
   logger.info('Connecting to MCP tools');
   const gitClient = await connectMcpTool('git-mcp', logger);
-  const desktopClient = await connectMcpTool('desktop-commander', logger);
+  const filesystemClient = await connectMcpTool('filesystem-mcp', logger);
   
   try {
     logger.info('Creating isolated git branch');
@@ -289,18 +291,42 @@ async function connectMcpTool(tool: string, logger: any) {
     
     logger.info(`Loading tool from: ${toolConfig.path}`, { config: toolConfig });
     
+    const client = new Client({
+      name: `scenario-${tool}`,
+      version: '1.0.0'
+    });
+
     const transport = new StdioClientTransport({
       command: 'node',
       args: [toolConfig.path]
     });
     
-    const client = new Client({
-      name: `scenario-${tool}`,
-      version: '1.0.0'
-    });
+    // Initialize connection with capabilities check
+    const requiredCapabilities = ['tools'];
     
+    // Add specific capabilities based on tool type
+    if (tool === 'git-mcp') {
+      requiredCapabilities.push('git');
+      requiredCapabilities.push('resources');
+    } else if (tool === 'desktop-commander') {
+      requiredCapabilities.push('filesystem');
+    }
+
     await client.connect(transport);
-    logger.info(`Connected to ${tool} successfully`);
+    const serverCapabilities = await client.initialize();
+
+    // Validate required capabilities
+    const missingCapabilities = requiredCapabilities.filter(
+      cap => !serverCapabilities.capabilities[cap]
+    );
+
+    if (missingCapabilities.length > 0) {
+      throw new Error(`${tool} server missing required capabilities: ${missingCapabilities.join(', ')}`);
+    }
+    
+    logger.info(`Connected to ${tool} successfully with capabilities:`, {
+      capabilities: Object.keys(serverCapabilities.capabilities)
+    });
     
     // Wrap client.callTool to enforce allowed actions
     const originalCallTool = client.callTool;
@@ -414,8 +440,8 @@ async function executeAction(action: any, repoPath: string, gitClient: any, desk
     switch (action.tool) {
       case 'git-mcp':
         return await executeGitAction(action, repoPath, gitClient, logger);
-      case 'desktop-commander':
-        return await executeDesktopAction(action, repoPath, desktopClient, logger);
+      case 'filesystem-mcp':
+        return await executeFilesystemAction(action, repoPath, filesystemClient, logger);
       default:
         throw new Error(`Unknown tool: ${action.tool}`);
     }
@@ -462,22 +488,23 @@ async function executeGitAction(action: any, repoPath: string, gitClient: any, l
   }
 }
 
-async function executeDesktopAction(action: any, repoPath: string, desktopClient: any, logger: any) {
+async function executeFilesystemAction(action: any, repoPath: string, filesystemClient: any, logger: any) {
   logger.debug('Executing desktop action', { action });
   try {
-    // Only allow available desktop-commander tools
-    const allowedDesktopActions = [
+    // Only allow available filesystem-mcp tools
+    const allowedFilesystemActions = [
       'read_file',
-      'write_file', 
-      'edit_block',
-      'list_directory',
+      'write_file',
       'create_directory',
-      'execute_command',
-      'search_code'
+      'list_directory',
+      'search_files',
+      'get_file_info',
+      'move_file',
+      'edit_block'
     ];
     
-    if (!allowedDesktopActions.includes(action.name)) {
-      throw new Error(`Unsupported desktop action: ${action.name}`);
+    if (!allowedFilesystemActions.includes(action.name)) {
+      throw new Error(`Unsupported filesystem action: ${action.name}`);
     }
     
     // Ensure paths are properly resolved for file operations
@@ -599,31 +626,120 @@ async function getNextAction(anthropic: any, data: any, logger: any) {
   }
 }
 
+/**
+ * Ensure a directory exists by creating it if necessary
+ */
+async function ensureDirectoryExists(directoryPath: string, client: any, logger: any): Promise<string> {
+  if (!directoryPath) {
+    throw new Error('Directory path cannot be undefined');
+  }
+
+  logger.debug('Ensuring directory exists', { directoryPath });
+  
+  await withRetry(
+    () => timeoutPromise(
+      client.callTool({
+        name: 'create_directory',
+        arguments: {
+          path: directoryPath
+        }
+      }),
+      5000,
+      'Create directory'
+    ),
+    {
+      maxRetries: 3,
+      baseDelay: 1000,
+      operation: 'Create directory',
+      logger
+    }
+  );
+  
+  return directoryPath;
+}
+
 async function writeReport(agentId: string, data: any, logger: any) {
+  if (!agentId) {
+    logger.error('Agent ID is undefined', { data });
+    throw new Error('Cannot write report: agent ID is undefined');
+  }
+
   logger.info('Writing final report');
   const client = await connectMcpTool('desktop-commander', logger);
+  
   try {
-    // Ensure reports directory exists
+    // Import modules
+    const { join } = await import('path');
+    const { PathResolver } = await import('./util/path-resolver.js');
+    
+    // Get the path resolver instance and ensure it's initialized
+    const pathResolver = PathResolver.getInstance();
+    
+    // Check if we need to initialize the path resolver
+    if (!pathResolver.isInitialized()) {
+      logger.debug('Initializing PathResolver');
+      
+      // Explicitly check and set DEEBO_ROOT if undefined
+      if (!process.env.DEEBO_ROOT) {
+        process.env.DEEBO_ROOT = process.cwd();
+        logger.info('DEEBO_ROOT was not set, using current directory', { 
+          DEEBO_ROOT: process.env.DEEBO_ROOT 
+        });
+      }
+      
+      // Initialize with the current DEEBO_ROOT
+      await pathResolver.initialize(process.env.DEEBO_ROOT);
+    }
+    
+    // Get the reports directory, ensuring it exists
+    const reportDir = await pathResolver.getReportsDirectory();
+    
+    logger.debug('Using reports directory from PathResolver', { 
+      reportDir,
+      rootDir: pathResolver.getRootDir()
+    });
+    
+    // Write a test file to verify write permissions
+    const testFileName = `test-write-${Date.now()}.txt`;
+    const testFilePath = pathResolver.joinPath(reportDir, testFileName);
+    
+    logger.debug('Writing test file for permission check', { testFilePath });
+    
+    // Use withRetry to handle transient failures
     await withRetry(
       () => timeoutPromise(
         client.callTool({
-          name: 'create_directory',
+          name: 'write_file',
           arguments: {
-            path: 'reports'
+            path: testFilePath,
+            content: 'Test write permissions'
           }
         }),
         5000,
-        'Create reports directory'
+        'Test write permissions'
       ),
       {
         maxRetries: 3,
         baseDelay: 1000,
-        operation: 'Create reports directory',
+        operation: 'Test write permissions',
         logger
       }
     );
-
-    const reportPath = `reports/${agentId}-report-${Date.now()}.json`;
+    
+    logger.debug('Successfully wrote test file', { testFilePath });
+    
+    // Now write the actual report
+    const timestamp = Date.now();
+    const reportFile = `${agentId}-report-${timestamp}.json`;
+    const reportPath = pathResolver.joinPath(reportDir, reportFile);
+    
+    logger.debug('Writing report file', { 
+      reportPath,
+      agentId,
+      timestamp
+    });
+    
+    // Use withRetry to handle transient failures
     await withRetry(
       () => timeoutPromise(
         client.callTool({
@@ -644,9 +760,44 @@ async function writeReport(agentId: string, data: any, logger: any) {
       }
     );
     logger.info('Report written successfully', { reportPath });
+    
+    return reportPath; // Return the path for reference
   } catch (error: any) {
-    logger.error('Failed to write report', { error: error.message });
-    throw error;
+    logger.error('Failed to write report', { 
+      error: error.message,
+      stack: error.stack
+    });
+    
+    // Try a simpler fallback approach with direct path handling
+    try {
+      logger.info('Attempting fallback report writing method');
+      const fallbackDir = process.env.DEEBO_ROOT ? 
+        path.join(process.env.DEEBO_ROOT, 'reports') : 
+        path.join(process.cwd(), 'reports');
+      
+      // Ensure directory exists with direct fs calls
+      await fs.mkdir(fallbackDir, { recursive: true });
+      
+      const timestamp = Date.now();
+      const reportFile = `${agentId}-report-fallback-${timestamp}.json`;
+      const reportPath = path.join(fallbackDir, reportFile);
+      
+      logger.debug('Writing report with fallback method', { reportPath });
+      
+      // Write directly with fs.writeFile
+      await fs.writeFile(
+        reportPath, 
+        JSON.stringify({ ...data, _writtenWithFallback: true }, null, 2)
+      );
+      
+      logger.info('Report written with fallback method', { reportPath });
+      return reportPath;
+    } catch (fallbackError: any) {
+      logger.error('Fallback report writing also failed', { 
+        error: fallbackError.message 
+      });
+      throw new Error(`Failed to write report: ${error.message}, fallback also failed: ${fallbackError.message}`);
+    }
   } finally {
     await client.close();
   }

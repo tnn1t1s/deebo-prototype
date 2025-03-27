@@ -5,7 +5,7 @@
 ### Core Components
 - **Mother Agent**: Central orchestrator process
 - **Scenario Agents**: Independent LLM agents as separate processes
-- **MCP Tools**: Git MCP and Desktop Commander MCP tools
+- **MCP Tools**: Git MCP and File System MCP tools
 - **Logging System**: Comprehensive logging for all operations
 - **Reporting System**: Aggregation of individual agent reports
 
@@ -287,9 +287,9 @@ export function runMcpTool(toolName, args, logger) {
     if (toolName === 'git') {
       command = 'npx';
       toolArgs = ['-y', '@modelcontextprotocol/server-git', ...args];
-    } else if (toolName === 'desktop-commander') {
+    } else if (toolName === 'filesystem') {
       command = 'npx';
-      toolArgs = ['-y', '@wonderwhy-er/desktop-commander', ...args];
+      toolArgs = ['-y', '@modelcontextprotocol/server-filesystem', ...args];
     } else {
       return reject(new Error(`Unknown MCP tool: ${toolName}`));
     }

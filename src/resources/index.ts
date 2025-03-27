@@ -1,165 +1,208 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { 
-  ErrorCode, 
-  ListResourcesRequestSchema, 
-  ReadResourceRequestSchema, 
-  McpError 
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { DeeboMcpServer, DebugSession } from "../types/mcp.d.js";
+import {
+  ErrorCode,
+  McpError,
+  ReadResourceResult,
+  Resource,
+  LogLevel
 } from "@modelcontextprotocol/sdk/types.js";
 
-// Track active sessions for resource access
-// Will be updated by the main server code
-export const activeSessions = new Map<string, any>();
+/**
+ * Manages active debugging sessions and their resources with proper notification handling
+ */
+class SessionManager {
+  private sessions: Map<string, DebugSession>;
+  private server: McpServer;
+  private logger: any;
 
-// Ensure initialization is complete before creating logger
-let isInitialized = false;
-let logger: any; // Type will be set when logger is created
-
-export function setInitialized() {
-  isInitialized = true;
-}
-
-async function getLogger() {
-  if (!isInitialized) {
-    throw new Error('Cannot create logger - system not initialized');
+  constructor(server: McpServer) {
+    this.sessions = new Map();
+    this.server = server;
+    this.initializeLogger();
   }
-  
-  if (!logger) {
+
+  private async initializeLogger() {
     const { createLogger } = await import("../util/logger.js");
-    logger = createLogger('server', 'resources');
+    this.logger = createLogger('server', 'session-manager');
   }
-  return logger;
+
+  set(sessionId: string, session: DebugSession): void {
+    this.sessions.set(sessionId, session);
+    this.notifyResourceChange();
+  }
+
+  delete(sessionId: string): boolean {
+    const result = this.sessions.delete(sessionId);
+    if (result) {
+      this.notifyResourceChange();
+    }
+    return result;
+  }
+
+  get(sessionId: string): DebugSession | undefined {
+    return this.sessions.get(sessionId);
+  }
+
+  getSessionIds(): string[] {
+    return Array.from(this.sessions.keys());
+  }
+
+  private notifyResourceChange(): void {
+    try {
+      // Use the standard MCP notification method
+      this.server.sendNotification({
+        method: "notifications/resources/list_changed",
+        params: {}
+      });
+    } catch (error) {
+      this.logger?.error('Failed to notify resource change', { error });
+    }
+  }
 }
 
-// Handler for listing available resources
-async function handleListResources() {
-  const log = await getLogger();
-  log.debug('Processing resources/list request');
-  
-  const resources = [];
-  
-  // Add static resources
-  resources.push({
-    uri: 'deebo://system/status',
-    name: 'System Status',
-    description: 'Current status of the Deebo debugging system',
-    mimeType: 'application/json'
-  });
-  
-  // Add dynamic resources for active sessions
-  for (const [sessionId, session] of activeSessions.entries()) {
-    resources.push({
-      uri: `deebo://sessions/${sessionId}/status`,
-      name: `Session ${sessionId} Status`,
-      description: 'Current status of this debugging session',
-      mimeType: 'application/json'
-    });
-    
-    resources.push({
-      uri: `deebo://sessions/${sessionId}/logs`,
-      name: `Session ${sessionId} Logs`,
-      description: 'Logs from this debugging session',
-      mimeType: 'application/json'
-    });
-  }
-  
-  log.info(`Listed ${resources.length} resources`);
-  return { resources };
-}
+export let sessionManager: SessionManager;
 
-// Handler for reading resources
-async function handleReadResource(request: { params: { uri: string } }) {
-  const { uri } = request.params;
-  const log = await getLogger();
-  log.info('Processing resources/read request', { uri });
+/**
+ * Initialize all resource capabilities for the MCP server
+ */
+export async function initializeResources(server: DeeboMcpServer): Promise<void> {
+  const { createLogger } = await import("../util/logger.js");
+  const logger = createLogger('server', 'resources');
   
-  try {
-    // System status resource
-    if (uri === 'deebo://system/status') {
+  logger.info('Initializing resource handlers');
+
+  // Initialize session manager
+  sessionManager = new SessionManager(server);
+
+  // System status resource
+  server.resource({
+    name: "System Status",
+    description: "Current status of the Deebo debugging system",
+    uri: "deebo://system/status",
+    mimeType: "application/json",
+    read: async (uri: URL): Promise<ReadResourceResult> => {
       return {
         contents: [{
-          uri,
-          mimeType: 'application/json',
+          uri: uri.href,
+          mimeType: "application/json",
           text: JSON.stringify({
-            status: 'online',
-            version: '0.1.0',
-            activeSessions: Array.from(activeSessions.keys()),
+            status: "online",
+            version: "0.1.0",
+            activeSessions: sessionManager.getSessionIds(),
             timestamp: new Date().toISOString()
           }, null, 2)
         }]
       };
     }
-    
-    // Session resources
-    const sessionMatch = uri.match(/^deebo:\/\/sessions\/([^/]+)\/([^/]+)$/);
-    if (sessionMatch) {
-      const [_, sessionId, resourceType] = sessionMatch;
-      
-      // Check if session exists
-      const session = activeSessions.get(sessionId);
-      if (!session) {
+  });
+
+  // Session resources template
+  const sessionTemplate = new ResourceTemplate("deebo://sessions/{sessionId}/{resourceType}");
+
+  // Dynamic session resources
+  server.resource({
+    name: "Session Resources",
+    description: "Access debug session status and logs",
+    template: sessionTemplate,
+    mimeType: "application/json",
+    read: async (uri: URL, params: { sessionId: string; resourceType: string }): Promise<ReadResourceResult> => {
+      const { sessionId, resourceType } = params;
+
+      if (!sessionId) {
+        throw new McpError(ErrorCode.InvalidRequest, "Session ID is required");
+      }
+
+      if (!['status', 'logs'].includes(resourceType)) {
         throw new McpError(
           ErrorCode.InvalidRequest,
-          `Session not found: ${sessionId}`
+          `Invalid resource type: ${resourceType}. Must be 'status' or 'logs'`
         );
       }
-      
-      if (resourceType === 'status') {
-        return {
-          contents: [{
-            uri,
-            mimeType: 'application/json',
-            text: JSON.stringify({
-              id: session.id,
-              status: session.status,
-              startTime: new Date(session.startTime).toISOString(),
-              lastChecked: new Date(session.lastChecked).toISOString(),
-              scenarioCount: session.scenarioResults.length,
-              error: session.error || null
-            }, null, 2)
-          }]
-        };
+
+      const session = sessionManager.get(sessionId);
+      if (!session) {
+        throw new McpError(ErrorCode.InvalidRequest, `Session not found: ${sessionId}`);
       }
-      
-      if (resourceType === 'logs') {
-        return {
-          contents: [{
-            uri,
-            mimeType: 'application/json',
-            text: JSON.stringify({
-              id: session.id,
-              logs: session.logs,
-              timestamp: new Date().toISOString()
-            }, null, 2)
-          }]
-        };
+
+      switch (resourceType) {
+        case 'status':
+          return {
+            contents: [{
+              uri: uri.href,
+              mimeType: "application/json",
+              text: JSON.stringify({
+                id: session.id,
+                status: session.status,
+                startTime: new Date(session.startTime).toISOString(),
+                lastChecked: new Date(session.lastChecked).toISOString(),
+                scenarioCount: session.scenarioResults.length,
+                error: session.error || null
+              }, null, 2)
+            }]
+          };
+
+        case 'logs':
+          return {
+            contents: [{
+              uri: uri.href,
+              mimeType: "application/json",
+              text: JSON.stringify({
+                id: session.id,
+                logs: session.logs,
+                timestamp: new Date().toISOString()
+              }, null, 2)
+            }]
+          };
+
+        default:
+          throw new McpError(
+            ErrorCode.InvalidRequest,
+            `Unsupported resource type: ${resourceType}`
+          );
       }
     }
-    
-    // Resource not found
-    throw new McpError(
-      ErrorCode.InvalidRequest,
-      `Resource not found: ${uri}`
-    );
-  } catch (error) {
-    log.error('Error processing resource request', { 
-      uri, 
-      error: error instanceof Error ? error.message : String(error)
-    });
-    throw error;
-  }
-}
+  });
 
-/**
- * Initialize resource capabilities for the MCP server
- * @param server The MCP server instance
- */
-export async function initializeResources(server: Server) {
-  const log = await getLogger();
-  log.info('Initializing resource handlers');
-
-  // Set up request handlers
-  server.setRequestHandler(ListResourcesRequestSchema, handleListResources);
-  server.setRequestHandler(ReadResourceRequestSchema, handleReadResource);
+  // Debug scenario resources template
+  const scenarioTemplate = new ResourceTemplate("deebo://sessions/{sessionId}/scenarios/{scenarioId}");
   
-  log.info('Resource handlers initialized');
+  // Scenario resources
+  server.resource({
+    name: "Scenario Resources",
+    description: "Access debug scenario details and results",
+    template: scenarioTemplate,
+    mimeType: "application/json",
+    read: async (uri: URL, params: { sessionId: string; scenarioId: string }): Promise<ReadResourceResult> => {
+      const { sessionId, scenarioId } = params;
+
+      const session = sessionManager.get(sessionId);
+      if (!session) {
+        throw new McpError(ErrorCode.InvalidRequest, `Session not found: ${sessionId}`);
+      }
+
+      const scenario = session.scenarioResults.find(s => s.id === scenarioId);
+      if (!scenario) {
+        throw new McpError(ErrorCode.InvalidRequest, `Scenario not found: ${scenarioId}`);
+      }
+
+      return {
+        contents: [{
+          uri: uri.href,
+          mimeType: "application/json",
+          text: JSON.stringify({
+            id: scenario.id,
+            hypothesis: scenario.hypothesis,
+            steps: scenario.steps,
+            result: scenario.result,
+            confidence: scenario.confidence,
+            timestamp: new Date().toISOString()
+          }, null, 2)
+        }]
+      };
+    }
+  });
+
+  logger.info('Resource handlers initialized');
 }

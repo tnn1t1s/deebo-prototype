@@ -1,18 +1,4 @@
-Let’s break down an expanded view of your ADS implementation—building on the MVP while preparing for production-level reliability.
 
-⸻
-
-Core Flow Recap
-	1.	Mother Agent reads prompt files and spawns individual Scenario Agents (each as a separate Node process).
-	2.	Scenario Agent:
-	•	Loads a text prompt.
-	•	Calls Claude 3.5 Sonnet to generate a structured JSON “plan” with tool calls.
-	•	Parses that plan (ideally validated against a JSON schema).
-	•	For each step, it spawns an MCP tool process (either git or file commander) via your MCP SDK.
-	•	Logs all successes/errors and writes a final report.
-	3.	Reporting & Logging: Both agents log their actions. The Mother Agent aggregates reports for overall session visibility.
-
-⸻
 
 Expanding the Implementation
 
@@ -25,7 +11,7 @@ Example:
 import { z } from 'zod';
 
 const StepSchema = z.object({
-  tool: z.enum(['git-mcp', 'desktop-commander']),
+  tool: z.enum(['git-mcp', 'filesystem']),
   action: z.string(),
   args: z.any(), // Improve this with specific schemas for each tool
 });
@@ -62,17 +48,6 @@ Right now, logging is a simple array written to a JSON file. In production, you 
 	•	Log to an external system (e.g., Elasticsearch) for real-time monitoring.
 	•	Include metadata like timestamps, agent IDs, and context for every log entry.
 
-5. Scalability & Concurrency Control in the Mother Agent
-	•	Concurrency Limit:
-If you have hundreds of prompts, consider limiting the number of concurrent scenario agents (using a semaphore or a worker pool).
-	•	Central Aggregation:
-You might centralize logging in the Mother Agent by having scenario agents write their logs to a shared file or message queue, then aggregate those logs in real time.
-
-6. Extensible MCP Tool Interface
-	•	Currently, you hardcode paths for git-mcp and desktop-commander. Consider a configuration file or environment variable that maps tool names to executable paths. This way, adding a new MCP tool is as simple as updating a JSON file.
-
-⸻
-
 Revised Code Overview
 
 Here’s a slightly expanded version of your scenario agent with schema validation and enhanced error handling:
@@ -95,7 +70,7 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // Define JSON schema for steps
 const StepSchema = z.object({
-  tool: z.enum(['git-mcp', 'desktop-commander']),
+  tool: z.enum(['git-mcp', 'filesystem']),
   action: z.string(),
   args: z.any(),
 });
@@ -152,7 +127,7 @@ async function main() {
 
   for (const step of plan.steps) {
     const { tool, action, args } = step;
-    const toolPath = tool === 'git-mcp' ? './tools/git-mcp.js' : './tools/desktop-commander.js';
+    const toolPath = tool === 'git-mcp' ? './tools/git-mcp.js' : './tools/filesystem.js';
 
     try {
       const result = await callMCP(toolPath, tool, action, args);

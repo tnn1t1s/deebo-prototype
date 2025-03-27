@@ -1,5 +1,5 @@
 import { runMotherAgent } from '../util/anthropic.js';
-import { gitOperations, commanderOperations } from '../util/mcp.js';
+import { gitOperations, filesystemOperations } from '../util/mcp.js';
 import { DebugSession, ScenarioResult } from '../types.js';
 import { ScenarioAgentFactory, runAutonomousAgent } from './factory.js';
 import pLimit from 'p-limit';
@@ -58,7 +58,7 @@ export async function startMotherAgent(session: DebugSession): Promise<void> {
       // If we have a specific file, get its content
       if (session.request.codebase.filePath) {
         try {
-          const fileContent = await commanderOperations.readFile(session.request.codebase.filePath);
+          const fileContent = await filesystemOperations.readFile(session.request.codebase.filePath);
           context += `\n\nFile Content (${session.request.codebase.filePath}):\n${fileContent}`;
           session.logs.push(`[MOTHER] Analyzed file ${session.request.codebase.filePath}`);
         } catch (error) {
@@ -176,7 +176,7 @@ export async function startMotherAgent(session: DebugSession): Promise<void> {
       // Create a verification branch
       const verificationBranch = `deebo-${session.id}-verification`;
       try {
-        const { output: branchOutput } = await commanderOperations.executeCommand(
+        const { output: branchOutput } = await filesystemOperations.executeCommand(
           `cd ${session.request.codebase.repoPath} && git checkout -b ${verificationBranch}`
         );
         session.logs.push(`[MOTHER] Created verification branch: ${verificationBranch}`);
@@ -189,10 +189,10 @@ export async function startMotherAgent(session: DebugSession): Promise<void> {
         session.logs.push("[MOTHER] Verified the fix resolves the original error");
         
         // Clean up verification branch
-        const { output: cleanupOutput } = await commanderOperations.executeCommand(
+        const { output: cleanupOutput } = await filesystemOperations.executeCommand(
           `cd ${session.request.codebase.repoPath} && git checkout main || git checkout master`
         );
-        const { output: deleteBranchOutput } = await commanderOperations.executeCommand(
+        const { output: deleteBranchOutput } = await filesystemOperations.executeCommand(
           `cd ${session.request.codebase.repoPath} && git branch -D ${verificationBranch}`
         );
         session.logs.push("[MOTHER] Removed verification branch after successful validation");
@@ -227,7 +227,9 @@ function determineScenarios(analysis: string): string[] {
     async: [
       'race condition', 'timing', 'async', 'await', 'promise',
       'concurrent', 'parallel', 'setTimeout', 'setInterval',
-      'callback', 'event loop', 'synchronization'
+      'callback', 'event loop', 'synchronization', 'lock',
+      'mutex', 'deadlock', 'thread safe', 'atomic', 'volatile',
+      'semaphore', 'reentrant', 'critical section'
     ],
     cache: [
       'cache', 'stale', 'sync', 'invalidate', 'refresh',

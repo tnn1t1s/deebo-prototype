@@ -30,6 +30,11 @@ export interface AgentState {
   error?: string;
   progress?: number;
   result?: any;
+  metadata?: {
+    debugType?: 'general' | 'race-condition' | 'race-condition-validator';
+    parentAgent?: string;
+    hypothesis?: string;
+  };
 }
 
 /**
@@ -40,7 +45,7 @@ export class AgentCoordinator {
   private agents: Map<string, AgentState> = new Map();
 
   /**
-   * Start a new debugging session
+   * Start a new debugging session with enhanced race condition handling
    */
   async startSession(params: {
     sessionId: string;
@@ -49,6 +54,7 @@ export class AgentCoordinator {
     language?: string;
     filePath?: string;
     repoPath?: string;
+    debugType?: 'race-condition' | 'general';
   }): Promise<void> {
     const { sessionId, error, context, language, filePath, repoPath } = params;
     const log = await getLogger();
@@ -146,15 +152,17 @@ export class AgentCoordinator {
     sessionId: string;
     scenarioId: string;
     hypothesis: string;
+    debugType?: 'race-condition' | 'general';
   }): Promise<void> {
-    const { sessionId, scenarioId, hypothesis } = params;
+    const { sessionId, scenarioId, hypothesis, debugType } = params;
     const log = await getLogger();
     
     const agentId = `scenario-${scenarioId}`;
     log.info('Registering scenario agent', { 
       sessionId, 
       scenarioId,
-      hypothesis 
+      hypothesis,
+      debugType 
     });
 
     const agent: AgentState = {
@@ -162,11 +170,35 @@ export class AgentCoordinator {
       type: 'scenario',
       status: 'initializing',
       startTime: Date.now(),
-      lastUpdate: Date.now()
+      lastUpdate: Date.now(),
+      metadata: {
+        debugType: debugType || 'general',
+        hypothesis
+      }
     };
 
     this.agents.set(agentId, agent);
     log.debug('Created scenario agent state', { agent });
+
+    // For race conditions, automatically spawn a second agent to validate the fix
+    if (debugType === 'race-condition') {
+      const validatorId = `${agentId}-validator`;
+      const validatorAgent: AgentState = {
+        id: validatorId,
+        type: 'scenario',
+        status: 'initializing',
+        startTime: Date.now(),
+        lastUpdate: Date.now(),
+        metadata: {
+          debugType: 'race-condition-validator',
+          parentAgent: agentId,
+          hypothesis: `Validate fix for: ${hypothesis}`
+        }
+      };
+      
+      this.agents.set(validatorId, validatorAgent);
+      log.debug('Created validator agent state', { agent: validatorAgent });
+    }
   }
 
   /**

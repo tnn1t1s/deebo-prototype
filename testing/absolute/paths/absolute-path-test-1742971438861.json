@@ -1,0 +1,8 @@
+{
+  "test": "absolute-path-test",
+  "timestamp": "2025-03-26T06:43:58.861Z",
+  "path": {
+    "requested": "/testing/absolute/paths",
+    "resolved": "/Users/sriram/Documents/Cline/MCP/deebo-prototype/testing/absolute/paths"
+  }
+}

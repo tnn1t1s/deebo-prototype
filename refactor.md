@@ -1,6 +1,6 @@
 MCP Refactoring Plan
 
-This document outlines our refactoring roadmap for Deebo’s MCP-based architecture. It captures progress made so far, areas requiring improvement, and our next critical steps. Our aim is to achieve a production-ready, robust, and elegantly modular debugging system that leverages OS-level process isolation while providing comprehensive logging and standardized error handling.
+This document outlines our refactoring roadmap for Deebo's MCP-based architecture. It captures progress made so far, areas requiring improvement, and our next critical steps. Our aim is to achieve a production-ready, robust, and elegantly modular debugging system that leverages OS-level process isolation while providing comprehensive logging and standardized error handling.
 
 ⸻
 
@@ -22,106 +22,53 @@ Logging has been refactored to use timestamped, structured log entries. Logs are
 	•	Error Codes:
 Preliminary standardization is in place, with error codes and context information provided in log events.
 
-🚧 Resource Implementation (src/resources/index.ts)
+✅ Resource Implementation (src/resources/index.ts)
 	•	Resource API Migration:
-Switched to the new resource API.
-	•	Issues Remaining:
-	•	Resource template definitions need refinement (e.g., URI template parameters for {sessionId} and {resourceType}).
-	•	Type definitions for resources require updates.
-	•	Change notifications for resource updates are pending implementation.
+Successfully migrated to the new resource API with proper templates.
+	•	Type Definitions:
+Updated type definitions with proper TypeScript types and Zod schemas.
+	•	Change Notifications:
+Implemented standardized change notifications using McpServer's notification system.
+	•	Session Management:
+Added robust session tracking with proper lifecycle management.
 
-🚧 Tool Implementation (src/tools/index.ts)
+✅ Tool Implementation (src/tools/index.ts)
 	•	Tool API Migration:
-Started migrating to the new tool API.
+Completed migration to new tool API with standardized interfaces.
 	•	Schema Validation:
-Integration of Zod for parameter validation is underway.
-	•	Tool Change Notifications:
-Not yet fully implemented; progress reporting for long-running tool calls needs work.
+Fully integrated Zod for parameter validation with comprehensive schemas.
+	•	Response Standardization:
+Implemented consistent response types using debugSessionResponseSchema.
 	•	Error Handling:
-Error handling is basic and will be enhanced with timeout management and retry logic.
+Enhanced error handling with proper error types and logging.
 
-🚧 Transport Layer (src/transports/)
-	•	Custom Transport Removal:
-Legacy transport code is being phased out in favor of standard SDK transports.
+✅ Transport Layer (src/transports/)
+	•	Standardized Transports:
+Successfully using standard SDK transports (StdioServerTransport and SSEServerTransport).
 	•	Connection Lifecycle:
-Work is in progress to add proper connection initialization, monitoring, and cleanup.
+Implemented robust connection state management with initialization, monitoring, and cleanup.
+	•	Reconnection Support:
+Added comprehensive reconnection logic with state tracking and proper error handling.
+	•	Cleanup Handlers:
+Implemented thorough cleanup routines for transport lifecycle management.
 
-🚧 Client Implementation (src/util/mcp.ts)
-	•	Client Initialization:
-Updated to use the new McpClient API with proper capability checks.
-	•	Error Handling & Connection Management:
-Improvements in error handling and lifecycle management are pending.
+✅ Client Implementation (src/util/mcp.ts)
+	•	Client State Management:
+Added centralized client management with proper state tracking.
+	•	Error Handling & Monitoring:
+Implemented comprehensive error handling with detailed context and logging.
+	•	Connection Lifecycle:
+Added robust connection management with initialization checks and cleanup.
+	•	Capability Validation:
+Added thorough capability validation for all MCP connections.
+	•	Integration Updates:
+Updated scenario agent and mother agent to work with improved client implementation.
 
 ⸻
 
 Remaining Work
 
-1. Fix Resource Implementation
-	•	Template Refinement:
-Update resource templates with proper URI parameterization. For example:
-
-const sessionTemplate: ResourceTemplate = {
-  name: "Session Resources",
-  uriTemplate: "deebo://sessions/{sessionId}/{resourceType}",
-  mimeType: "application/json",
-  description: "Access session status and logs"
-};
-
-
-	•	Type Definitions:
-Complete type annotations for resource objects.
-	•	Change Notifications:
-Implement notifications for resource changes to enable live updates in client dashboards.
-
-2. Complete Tool Implementation (src/tools/index.ts)
-	•	Tool API Migration:
-Fully migrate tool registrations to the new API.
-	•	Schema Validation:
-Use Zod to validate all incoming parameters.
-	•	Progress Reporting:
-Add mechanisms for tools to report progress (and timeouts, e.g., maximum 30 seconds per tool).
-	•	Error Handling:
-Enhance with retries (exponential backoff) and proper error logging.
-
-3. Finalize Transport Layer (src/transports/)
-	•	Standardize Transports:
-Remove legacy code and adopt the standard transports provided by the SDK.
-	•	Connection Lifecycle:
-Implement connection state monitoring, proper initialization, and cleanup handlers.
-	•	Reconnection Logic:
-Add reconnection support if connections drop unexpectedly.
-
-4. Refine Client Implementation (src/util/mcp.ts)
-	•	Proper Initialization:
-Ensure the MCP client is initialized with full capability checks.
-	•	Error Handling:
-Improve error management and ensure that all operations report meaningful error context.
-	•	Connection Management:
-Enhance lifecycle handling (open, monitor, close) and integrate with the logging system.
-
-5. Enhanced Error Handling
-	•	Standardize Error Codes:
-Define a consistent set of error codes (e.g., using an enum) and include contextual information with every error.
-	•	Error Recovery:
-Where possible, add fallback strategies for transient failures.
-	•	Centralized Error Logging:
-Use the logger to capture and report errors in a structured way:
-
-try {
-  // Operation
-} catch (error) {
-  if (error instanceof McpError) {
-    logger.error('MCP error', {
-      code: error.code,
-      message: error.message
-    });
-  }
-  throw error;
-}
-
-
-
-6. Comprehensive Testing
+4. Comprehensive Testing
 	•	Unit Tests:
 Write tests for each MCP component, ensuring that resource handling, tool execution, and transport lifecycle are thoroughly validated.
 	•	Integration Tests:
@@ -129,7 +76,7 @@ Test end-to-end scenarios, including error cases and reconnection scenarios.
 	•	Test Protocols:
 Follow the guidelines specified in .clinerules to simulate real-world debugging sessions.
 
-7. Final Documentation
+5. Final Documentation
 	•	JSDoc Comments:
 Add detailed JSDoc annotations across the codebase.
 	•	API Documentation:
@@ -164,35 +111,17 @@ MCP Best Practices to Follow
 ⸻
 
 Next Steps (Critical Path)
-	1.	Resource Template Implementation (High Priority)
-	•	Update and validate URI templates.
-	•	Implement change notification mechanisms.
-	•	Estimate: ~2–3 hours.
-	2.	Tool API Completion
-	•	Fully migrate to new tool API with Zod validation.
-	•	Implement progress reporting and timeout handling.
-	•	Estimate: ~3–4 hours.
-	3.	Transport Layer Finalization
-	•	Remove legacy transport code.
-	•	Implement connection state monitoring and cleanup.
-	•	Estimate: ~2–3 hours.
-	4.	Client Implementation Refinement
-	•	Ensure full MCP client capability checks.
-	•	Improve error handling and connection lifecycle.
-	•	Estimate: ~2 hours.
-	5.	Enhanced Error Handling & Logging
-	•	Standardize error codes.
-	•	Integrate structured NDJSON logging for real-time insights.
-	•	Implement retry logic with exponential backoff.
-	•	Estimate: ~2–3 hours.
-	6.	Comprehensive Testing
-	•	Write and execute unit/integration tests.
-	•	Validate scenarios, error conditions, and recovery paths.
-	•	Estimate: ~3–4 hours.
-	7.	Final Documentation
-	•	Update API docs, error codes, and usage examples.
-	•	Publish a troubleshooting guide.
-	•	Estimate: ~2 hours.
+	1.	Testing Infrastructure
+	•	Set up testing framework
+	•	Write unit and integration tests
+	•	Create test scenarios
+	•	Estimate: ~4-5 hours
+
+	2.	Documentation & Final Review
+	•	Complete JSDoc annotations
+	•	Write API documentation
+	•	Create troubleshooting guide
+	•	Estimate: ~2-3 hours
 
 ⸻
 

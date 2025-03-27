@@ -24,7 +24,7 @@ Deebo consists of:
 1. **Mother Agent**: The orchestrator that analyzes errors, generates scenarios, and coordinates the debugging process
 2. **Scenario Agents**: Autonomous agents that explore specific hypotheses in isolated Git branches
 3. **MCP Server Interface**: Exposes the debugging functionality through standardized tools
-4. **MCP Tools Integration**: Utilizes Git MCP and Desktop Commander MCP for repository and file system operations
+4. **MCP Tools Integration**: Utilizes Git MCP and File System MCP for repository and file system operations
 
 ## Installation
 
@@ -37,8 +37,6 @@ Deebo can be used through Claude Desktop or Cline as an MCP server. It exposes t
 - `start_debug_session`: Begin a new debugging session with an error
 - `check_debug_status`: Check the status of an ongoing debugging session
 - `list_scenarios`: List active debugging scenarios
-
-For detailed implementation information, see [IMPLEMENTATION_REPORT.md](IMPLEMENTATION_REPORT.md).
 
 ## Example
 

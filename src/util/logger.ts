@@ -19,22 +19,28 @@ export class Logger {
   constructor(logPath: string, component: string) {
     this.component = component;
     this.logPath = logPath;
+    
+    // Initialize with a temporary stream that will be replaced
+    this.stream = createWriteStream('/dev/null');
+    
+    // Use IIFE to handle async initialization
+    (async () => {
+      try {
+        // Ensure the directory exists before creating the write stream
+        const dir = dirname(logPath);
+        await ensureDirectory(dir);
+        
+        // Create write stream after directory exists
+        this.stream = createWriteStream(logPath, { flags: 'a' });
 
-    try {
-      // Ensure the directory exists before creating the write stream
-      const dir = dirname(logPath);
-      ensureDirectory(dir);
-      
-      // Create write stream
-      this.stream = createWriteStream(logPath, { flags: 'a' });
-
-      // Handle stream errors
-      this.stream.on('error', (error) => {
+        // Handle stream errors
+        this.stream.on('error', (error) => {
+          this.fallbackToTemp();
+        });
+      } catch (error) {
         this.fallbackToTemp();
-      });
-    } catch (error) {
-      this.fallbackToTemp();
-    }
+      }
+    })();
   }
 
   private fallbackToTemp() {

@@ -283,9 +283,65 @@ Respond with:
   }
 }
 
+/**
+ * Run scenario analysis with Claude to determine approach
+ */
+export async function runScenarioAnalysis(
+  errorMessage: string,
+  context: string
+): Promise<{ hypothesis: string; scenarioType: string }> {
+  try {
+    const completion = await anthropic.messages.create({
+      model: 'claude-3-5-sonnet-20241022',
+      max_tokens: 1000,
+      temperature: 0.2,
+      system: `You are an expert debugging assistant analyzing errors to determine investigation approaches.
+Given an error and context, determine:
+1. What type of issue this most likely is
+2. A specific hypothesis to investigate
+3. A descriptive label for tracking this scenario`,
+      messages: [
+        {
+          role: 'user',
+          content: `Error Message: ${errorMessage}
+
+Code Context:
+${context}
+
+Please analyze this error and provide:
+1. A clear hypothesis about what's causing the issue
+2. A short descriptive label for tracking this debugging scenario
+
+Format your response exactly as:
+{
+  "hypothesis": "Clear description of what you think is happening",
+  "scenarioType": "short-descriptive-label"
+}`
+        }
+      ]
+    });
+    
+    // Access text content safely
+    if (completion.content && completion.content.length > 0) {
+      const content = completion.content[0];
+      if ('text' in content) {
+        return JSON.parse(content.text);
+      }
+    }
+    throw new Error('Could not extract text from response');
+  } catch (error) {
+    console.error('Error in scenario analysis:', error);
+    return {
+      hypothesis: `The error "${errorMessage}" requires investigation.`,
+      scenarioType: 'general-investigation'
+    };
+  }
+}
+
 export default {
   analyzeError,
   runMotherAgent,
   runScenarioAgent,
+  runScenarioAnalysis,
   anthropic
 };

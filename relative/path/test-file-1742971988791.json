@@ -1,0 +1,6 @@
+{
+  "test": "path-fix-verification",
+  "timestamp": "2025-03-26T06:53:08.791Z",
+  "originalPath": "./relative/path",
+  "resolvedPath": "/Users/sriram/Documents/Cline/MCP/deebo-prototype/relative/path"
+}

@@ -16,6 +16,34 @@ async function getLogger(sessionId: string, component: string) {
   return createLogger(sessionId, component);
 }
 
+// Helper function to ensure session directories exist
+async function ensureSessionDirectories(sessionId: string): Promise<boolean> {
+  const logger = await getLogger(sessionId, 'directory-setup');
+  
+  try {
+    // Import required modules
+    const { join } = await import('path');
+    const { ensureDirectory } = await import('./util/init.js');
+    
+    // Ensure logs directory exists for this session
+    const sessionLogsDir = await ensureDirectory(`sessions/${sessionId}/logs`);
+    logger.info('Ensured session logs directory exists', { 
+      sessionId, 
+      logsDir: sessionLogsDir 
+    });
+    
+    return true;
+  } catch (error) {
+    logger.error('Failed to create session directories', { 
+      error: String(error), 
+      sessionId 
+    });
+    return false;
+  }
+}
+
+import { initMcpClients } from './util/mcp.js';
+
 // OODA Loop: Mother Agent orchestrates macro debugging cycle
 export async function runMotherAgent(
   sessionId: string,
@@ -25,7 +53,20 @@ export async function runMotherAgent(
   filePath: string | undefined,
   repoPath: string | undefined
 ) {
+  // Ensure session directories exist before creating logger
+  await ensureSessionDirectories(sessionId);
+  
   const logger = await getLogger(sessionId, 'mother');
+
+  // Initialize MCP clients early
+  try {
+    logger.info('Initializing MCP clients');
+    await initMcpClients();
+    logger.info('MCP clients initialized successfully');
+  } catch (error) {
+    logger.error('Failed to initialize MCP clients', { error });
+    throw new Error(`Failed to initialize required MCP clients: ${error}`);
+  }
 
   // Validate paths early
   if (!repoPath) {
@@ -170,6 +211,11 @@ interface ScenarioConfig {
   scenario: {
     type: string;
     hypothesis: string;
+    suggestedTools?: Array<{
+      tool: 'git-mcp' | 'filesystem-mcp';
+      name: string;
+      args: Record<string, unknown>;
+    }>;
   };
   error: string;
   context: string;
@@ -179,6 +225,9 @@ interface ScenarioConfig {
 }
 
 async function spawnScenarioAgent(config: ScenarioConfig) {
+  // Ensure session directories exist before creating logger
+  await ensureSessionDirectories(config.sessionId);
+  
   const logger = await getLogger(config.sessionId, `mother-spawn-${config.scenarioId}`);
   
   logger.info('Spawning scenario agent', {
@@ -196,9 +245,69 @@ async function spawnScenarioAgent(config: ScenarioConfig) {
     // Store the current working directory before spawning
     const currentDir = global.process.cwd();
 
+    // Import required modules first - outside of the Promise
+    const { join } = await import('path');
+    const { ensureDirectory } = await import('./util/init.js');
+    
+    // Check if DEEBO_ROOT has been set
+    if (!process.env.DEEBO_ROOT) {
+      process.env.DEEBO_ROOT = currentDir;
+      logger.warn('DEEBO_ROOT not set, using current directory', { 
+        DEEBO_ROOT: process.env.DEEBO_ROOT 
+      });
+    }
+    
+    // Ensure reports directory exists before spawning
+    try {
+      // Await the promise from ensureDirectory
+      const reportsDir = await ensureDirectory('reports');
+      logger.debug('Ensured reports directory exists before spawning agent', {
+        reportsDir,
+        exists: true // We know it exists because ensureDirectory succeeded
+      });
+      
+      // Create a dummy file to test write permissions
+      const testFile = join(reportsDir, `test-spawn-${Date.now()}.json`);
+      await fs.writeFile(testFile, JSON.stringify({ test: 'spawn-test' }));
+      logger.debug('Successfully wrote test file to reports directory', { testFile });
+      
+    } catch (error) {
+      logger.error('Failed to ensure reports directory exists', { 
+        error: String(error), 
+        stack: error instanceof Error ? error.stack : 'No stack trace'
+      });
+      throw new Error(`Failed to create required reports directory: ${error}`);
+    }
+    
+    // Prepare scenario agent path
+    const scenarioAgentPath = join(currentDir, 'build/scenario-agent.js');
+    
+    logger.debug('Spawning scenario agent with path', { 
+      scenarioAgentPath,
+      DEEBO_ROOT: process.env.DEEBO_ROOT
+    });
+    
+    // Create a new environment object that includes DEEBO_ROOT
+    // Use type assertion to help TypeScript understand the environment object
+    const env = {
+      ...process.env,
+      DEEBO_ROOT: process.env.DEEBO_ROOT
+    } as NodeJS.ProcessEnv;
+    
+    // Log environment variables safely
+    const envPathValue = env['PATH'] || 'not set';
+    const envNodePathValue = env['NODE_PATH'] || 'not set';
+    
+    logger.debug('Environment for child process', {
+      PATH: typeof envPathValue === 'string' ? envPathValue.substring(0, 50) + '...' : envPathValue,
+      DEEBO_ROOT: env.DEEBO_ROOT || 'not set',
+      NODE_PATH: envNodePathValue
+    });
+    
     const result = await new Promise((resolve, reject) => {
+      
       const childProcess = spawn('node', [
-        'build/scenario-agent.js',
+        scenarioAgentPath,
         '--id', config.scenarioId,
         '--session', config.sessionId,
         '--type', config.scenario.type,
@@ -212,12 +321,14 @@ async function spawnScenarioAgent(config: ScenarioConfig) {
           error: config.error,
           context: config.context,
           filePath: config.filePath,
-          repoPath: config.repoPath
+          repoPath: config.repoPath,
+          suggestedTools: config.scenario.suggestedTools || [] // Pass Claude's tool suggestions
         })
       ], {
         stdio: 'pipe',
         detached: true,
-        cwd: currentDir
+        cwd: currentDir,
+        env: env // Pass the environment with DEEBO_ROOT
       });
       
       // Log process output
@@ -232,24 +343,46 @@ async function spawnScenarioAgent(config: ScenarioConfig) {
       childProcess.on('exit', (code: number) => {
         if (code === 0) {
           logger.info('Agent completed successfully');
-          // Read agent's report file
-          const reportPath = `reports/${config.scenarioId}.json`;
-          (async () => {
-            try {
-              const reportContent = await fs.readFile(reportPath, 'utf8');
-              const report = JSON.parse(reportContent);
-              logger.debug('Agent report loaded', { report });
-              resolve({
-                id: config.scenarioId,
-                type: config.scenario.type,
-                ...report
-              });
-            } catch (err) {
-              const error = `Failed to read agent report: ${err}`;
-              logger.error(error);
-              reject(new Error(error));
-            }
-          })();
+              // Read agent's report file
+              (async () => {
+                try {
+                  // Import path module
+                  const { join } = await import('path');
+                  const { readdir } = await import('fs/promises');
+                  
+                  // Ensure we're using the proper root directory
+                  const reportDir = process.env.DEEBO_ROOT 
+                    ? join(process.env.DEEBO_ROOT, 'reports') 
+                    : 'reports';
+                  
+                  // The scenario agent adds timestamp to filenames, so we need to find files matching the pattern
+                  const reportPrefix = `${config.scenarioId}-report-`;
+                  const files = await readdir(reportDir);
+                  
+                  // Find the report file that matches our scenario ID
+                  const reportFile = files.find(file => file.startsWith(reportPrefix) && file.endsWith('.json'));
+                  
+                  if (!reportFile) {
+                    throw new Error(`Report file not found for scenario: ${config.scenarioId}`);
+                  }
+                  
+                  const reportPath = join(reportDir, reportFile);
+                  logger.debug('Found report file', { reportPath });
+                  
+                  const reportContent = await fs.readFile(reportPath, 'utf8');
+                  const report = JSON.parse(reportContent);
+                  logger.debug('Agent report loaded', { report });
+                  resolve({
+                    id: config.scenarioId,
+                    type: config.scenario.type,
+                    ...report
+                  });
+                } catch (err) {
+                  const error = `Failed to read agent report: ${err}`;
+                  logger.error(error);
+                  reject(new Error(error));
+                }
+              })();
         } else {
           const error = `Agent exited with code ${code}`;
           logger.error(error);
@@ -290,10 +423,34 @@ async function generateHypotheses(anthropic: any, data: any) {
     3. Cache invalidation patterns
     4. Error handling in async flows
 
+    The following MCP tools are available:
+
+    git-mcp:
+    - git_status: Get repository status
+    - git_diff: Get changes diff
+    - git_log: View commit history
+    - git_branch: Create/manage branches
+    - git_commit: Commit changes
+
+    filesystem-mcp:
+    - read_file: Read file content
+    - write_file: Write to file
+    - create_directory: Create directories
+    - list_directory: List contents
+    - search_files: Search in files
+    - get_file_info: Get file metadata
+    - move_file: Move/rename files
+    - edit_block: Make targeted text changes
+
     Return array of hypotheses as JSON:
     [{
       "type": "string", // Short type name
-      "description": "string" // Detailed hypothesis
+      "description": "string", // Detailed hypothesis
+      "suggestedTools": [{ // Tools needed to investigate
+        "tool": "git-mcp" | "filesystem-mcp",
+        "name": string, // Tool name from above lists
+        "args": object // Arguments for the tool
+      }]
     }]`;
 
     const msg = await anthropic.messages.create({

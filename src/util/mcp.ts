@@ -30,16 +30,109 @@ interface ToolResponse {
 }
 
 // Clients for MCP servers
-let gitClient: Client | null = null;
-let commanderClient: Client | null = null;
+import { createLogger } from "./logger.js";
+
+const logger = createLogger('mcp', 'client');
+
+interface McpClient {
+  client: Client | null;
+  isConnecting: boolean;
+  retryCount: number;
+  lastError?: Error;
+}
+
+const clients: { [key: string]: McpClient } = {
+  git: {
+    client: null,
+    isConnecting: false,
+    retryCount: 0
+  },
+  filesystem: {
+    client: null,
+    isConnecting: false,
+    retryCount: 0
+  }
+};
 
 /**
  * Initialize MCP clients for Git and Desktop Commander
  */
+const MAX_RETRY_ATTEMPTS = 3;
+const RETRY_DELAY = 1000; // 1 second
+
+async function validateCapabilities(client: Client, requiredCapabilities: string[]) {
+  const serverCapabilities = await client.initialize();
+  const missingCapabilities = requiredCapabilities.filter(
+    cap => !serverCapabilities.capabilities[cap]
+  );
+  
+  if (missingCapabilities.length > 0) {
+    throw new Error(`Server missing required capabilities: ${missingCapabilities.join(', ')}`);
+  }
+}
+
 export async function initMcpClients() {
-  if (!gitClient) {
+  // Helper to handle client initialization with retries
+async function initializeClient(
+  clientKey: 'git' | 'filesystem',
+  createTransport: () => StdioClientTransport,
+  requiredCapabilities: string[]
+) {
+  const clientInfo = clients[clientKey];
+  
+  if (clientInfo.isConnecting) {
+    logger.debug(`${clientKey} client initialization already in progress`);
+    return;
+  }
+  
+  if (clientInfo.client && clientInfo.retryCount === 0) {
+    return;
+  }
+  
+  if (clientInfo.retryCount >= MAX_RETRY_ATTEMPTS) {
+    logger.error(`${clientKey} client initialization failed after ${MAX_RETRY_ATTEMPTS} attempts`);
+    return;
+  }
+  
+  clientInfo.isConnecting = true;
+  
+  try {
+    const client = new Client({
+      name: `deebo-${clientKey}-client`,
+      version: "0.1.0"
+    });
+    
+    const transport = createTransport();
+    await client.connect(transport);
+    await validateCapabilities(client, requiredCapabilities);
+    
+    clientInfo.client = client;
+    clientInfo.retryCount = 0;
+    clientInfo.lastError = undefined;
+    logger.info(`${clientKey} client initialized successfully`);
+  } catch (error) {
+    clientInfo.lastError = error as Error;
+    clientInfo.retryCount++;
+    logger.error(`${clientKey} client initialization failed:`, { error, attempt: clientInfo.retryCount });
+    
+    if (clientInfo.retryCount < MAX_RETRY_ATTEMPTS) {
+      setTimeout(() => {
+        clientInfo.isConnecting = false;
+        initializeClient(clientKey, createTransport, requiredCapabilities);
+      }, RETRY_DELAY * Math.pow(2, clientInfo.retryCount - 1));
+    }
+  } finally {
+    clientInfo.isConnecting = false;
+  }
+}
+
+// Initialize Git client
+if (!clients.git.client) {
     console.error("MCP: Initializing Git MCP client...");
-    gitClient = new Client({ name: "deebo-git-client", version: "0.1.0" });
+    await initializeClient('git', () => new StdioClientTransport({
+      command: gitCommand,
+      args: gitArgs,
+    }), ['git', 'resources']);
     
     // Determine Git MCP server command
     let gitCommand: string;
@@ -90,71 +183,49 @@ export async function initMcpClients() {
       args: gitArgs,
     });
     
-    try {
-      await gitClient.connect(gitTransport);
-      console.error("MCP: Git MCP client initialized successfully");
-    } catch (error) {
-      console.error("MCP: Failed to initialize Git MCP client:", error);
-      console.error("MCP: This is not fatal - continuing with limited functionality");
-      gitClient = null; // Reset to null so we can try again later
-    }
+    // Empty block to remove try-catch
   }
   
-  if (!commanderClient) {
-    console.error("MCP: Initializing Desktop Commander MCP client...");
-    commanderClient = new Client({ name: "deebo-commander-client", version: "0.1.0" });
+  // Initialize Filesystem client
+if (!clients.filesystem.client) {
+    console.error("MCP: Initializing Filesystem MCP client...");
+    await initializeClient('filesystem', () => new StdioClientTransport({
+      command: fsCommand,
+      args: fsArgs,
+    }), ['filesystem', 'tools']);
     
-    // Determine Desktop Commander command
-    let commanderCommand: string;
-    let commanderArgs: string[];
+    // Determine Filesystem MCP command
+    let fsCommand: string;
+    let fsArgs: string[];
     
-    // Check if MCP_COMMANDER_PATH is set in .env
-    if (process.env.MCP_COMMANDER_PATH) {
-      console.error(`MCP: Using configured MCP_COMMANDER_PATH: ${process.env.MCP_COMMANDER_PATH}`);
-      if (process.env.MCP_COMMANDER_PATH.endsWith('.js')) {
+    // Check if MCP_FILESYSTEM_PATH is set in .env
+    if (process.env.MCP_FILESYSTEM_PATH) {
+      console.error(`MCP: Using configured MCP_FILESYSTEM_PATH: ${process.env.MCP_FILESYSTEM_PATH}`);
+      if (process.env.MCP_FILESYSTEM_PATH.endsWith('.js')) {
         // It's a JavaScript file
-        commanderCommand = "node";
-        commanderArgs = [process.env.MCP_COMMANDER_PATH];
+        fsCommand = "node";
+        fsArgs = [process.env.MCP_FILESYSTEM_PATH];
       } else {
         // It's a directory or command
-        commanderCommand = process.env.MCP_COMMANDER_PATH;
-        commanderArgs = [];
+        fsCommand = process.env.MCP_FILESYSTEM_PATH;
+        fsArgs = [];
       }
     } else {
-      // Use locally installed package if available
-      const localCommanderPath = path.join(projectRoot, "node_modules", ".bin", "desktop-commander");
-      console.error(`MCP: Looking for local Desktop Commander at: ${localCommanderPath}`);
-      
-      try {
-        await fs.access(localCommanderPath);
-        // Local package exists, use it
-        console.error(`MCP: Found local Desktop Commander`);
-        commanderCommand = localCommanderPath;
-        commanderArgs = [];
-      } catch (e) {
-        // Fallback to npx
-        console.error("MCP: Local Desktop Commander not found, falling back to npx");
-        commanderCommand = "npx";
-        commanderArgs = ["-y", "@wonderwhy-er/desktop-commander"];
-      }
+      // Use npx to run the filesystem MCP server with allowed directories
+      console.error("MCP: MCP_FILESYSTEM_PATH not set, using npx with server-filesystem");
+      fsCommand = "npx";
+      fsArgs = ["-y", "@modelcontextprotocol/server-filesystem", projectRoot];
     }
     
-    console.error(`MCP: Starting Desktop Commander with command: ${commanderCommand} ${commanderArgs.join(" ")}`);
+    console.error(`MCP: Starting Filesystem MCP client with command: ${fsCommand} ${fsArgs.join(" ")}`);
     
     // Create transport and connect
-    const commanderTransport = new StdioClientTransport({
-      command: commanderCommand,
-      args: commanderArgs,
+    const filesystemTransport = new StdioClientTransport({
+      command: fsCommand,
+      args: fsArgs,
     });
     
-    try {
-      await commanderClient.connect(commanderTransport);
-      console.error("MCP: Desktop Commander MCP client initialized successfully");
-    } catch (error) {
-      console.error("MCP: Failed to initialize Desktop Commander MCP client:", error);
-      console.error("MCP: This is not fatal - continuing with limited functionality");
-      commanderClient = null; // Reset to null so we can try again later
-    }
+    // Empty block to remove try-catch
   }
 }
 
@@ -176,11 +247,11 @@ function getTextContent(result: any): string {
 export const gitOperations = {
   async status(repoPath: string) {
     try {
-      if (!gitClient) await initMcpClients();
+      await initMcpClients();
       
-      // If gitClient is still null after initialization, return an error message
-      if (!gitClient) {
-        console.error("MCP: Git client not available for status operation");
+      // Check client status after initialization
+      if (!clients.git.client) {
+        logger.error("Git client not available for status operation", { lastError: clients.git.lastError });
         return "Error: Git MCP client not available. Check server initialization.";
       }
       
@@ -197,8 +268,9 @@ export const gitOperations = {
   },
   
   async diffUnstaged(repoPath: string) {
-    if (!gitClient) await initMcpClients();
-    const result = await gitClient!.callTool({
+    await initMcpClients();
+if (!clients.git.client) throw new Error("Git client not available");
+const result = await clients.git.client.callTool({
       name: "git_diff_unstaged",
       arguments: { repo_path: repoPath }
     }) as ToolResponse;
@@ -234,12 +306,13 @@ export const gitOperations = {
 };
 
 /**
- * Desktop Commander MCP operations
+ * Filesystem MCP operations
  */
-export const commanderOperations = {
+export const filesystemOperations = {
   async executeCommand(command: string, timeoutMs = 10000) {
-    if (!commanderClient) await initMcpClients();
-    const result = await commanderClient!.callTool({
+    await initMcpClients();
+if (!clients.filesystem.client) throw new Error("Filesystem client not available");
+const result = await clients.filesystem.client.callTool({
       name: "execute_command",
       arguments: { 
         command: command,
@@ -255,8 +328,8 @@ export const commanderOperations = {
   },
   
   async readOutput(pid: number) {
-    if (!commanderClient) await initMcpClients();
-    const result = await commanderClient!.callTool({
+    if (!filesystemClient) await initMcpClients();
+    const result = await filesystemClient!.callTool({
       name: "read_output",
       arguments: { pid }
     }) as ToolResponse;
@@ -265,8 +338,8 @@ export const commanderOperations = {
   },
   
   async readFile(filePath: string) {
-    if (!commanderClient) await initMcpClients();
-    const result = await commanderClient!.callTool({
+    if (!filesystemClient) await initMcpClients();
+    const result = await filesystemClient!.callTool({
       name: "read_file",
       arguments: { path: filePath }
     }) as ToolResponse;
@@ -275,8 +348,8 @@ export const commanderOperations = {
   },
   
   async writeFile(filePath: string, content: string) {
-    if (!commanderClient) await initMcpClients();
-    const result = await commanderClient!.callTool({
+    if (!filesystemClient) await initMcpClients();
+    const result = await filesystemClient!.callTool({
       name: "write_file",
       arguments: { 
         path: filePath,
@@ -288,8 +361,8 @@ export const commanderOperations = {
   },
   
   async editBlock(blockContent: string) {
-    if (!commanderClient) await initMcpClients();
-    const result = await commanderClient!.callTool({
+    if (!filesystemClient) await initMcpClients();
+    const result = await filesystemClient!.callTool({
       name: "edit_block",
       arguments: { blockContent }
     }) as ToolResponse;
@@ -298,8 +371,8 @@ export const commanderOperations = {
   },
   
   async listDirectory(dirPath: string) {
-    if (!commanderClient) await initMcpClients();
-    const result = await commanderClient!.callTool({
+    if (!filesystemClient) await initMcpClients();
+    const result = await filesystemClient!.callTool({
       name: "list_directory",
       arguments: { path: dirPath }
     }) as ToolResponse;
@@ -308,8 +381,8 @@ export const commanderOperations = {
   },
   
   async createDirectory(dirPath: string) {
-    if (!commanderClient) await initMcpClients();
-    const result = await commanderClient!.callTool({
+    if (!filesystemClient) await initMcpClients();
+    const result = await filesystemClient!.callTool({
       name: "create_directory",
       arguments: { path: dirPath }
     }) as ToolResponse;
@@ -318,8 +391,8 @@ export const commanderOperations = {
   },
   
   async codeSearch(directory: string, pattern: string) {
-    if (!commanderClient) await initMcpClients();
-    const result = await commanderClient!.callTool({
+    if (!filesystemClient) await initMcpClients();
+    const result = await filesystemClient!.callTool({
       name: "code_search",
       arguments: { 
         directory,
@@ -336,29 +409,29 @@ export const commanderOperations = {
  */
 export const gitBranchOperations = {
   async createBranch(repoPath: string, branchName: string) {
-    return await commanderOperations.executeCommand(`cd ${repoPath} && git checkout -b ${branchName}`);
+    return await filesystemOperations.executeCommand(`cd ${repoPath} && git checkout -b ${branchName}`);
   },
   
   async checkoutBranch(repoPath: string, branchName: string) {
-    return await commanderOperations.executeCommand(`cd ${repoPath} && git checkout ${branchName}`);
+    return await filesystemOperations.executeCommand(`cd ${repoPath} && git checkout ${branchName}`);
   },
   
   async commitChanges(repoPath: string, message: string) {
-    return await commanderOperations.executeCommand(`cd ${repoPath} && git add . && git commit -m "${message}"`);
+    return await filesystemOperations.executeCommand(`cd ${repoPath} && git add . && git commit -m "${message}"`);
   },
   
   async deleteBranch(repoPath: string, branchName: string) {
     // First checkout main to avoid being on the branch we're deleting
-    await commanderOperations.executeCommand(`cd ${repoPath} && git checkout main || git checkout master`);
-    return await commanderOperations.executeCommand(`cd ${repoPath} && git branch -D ${branchName}`);
+    await filesystemOperations.executeCommand(`cd ${repoPath} && git checkout main || git checkout master`);
+    return await filesystemOperations.executeCommand(`cd ${repoPath} && git branch -D ${branchName}`);
   },
   
   async getCurrentBranch(repoPath: string) {
-    const result = await commanderOperations.executeCommand(`cd ${repoPath} && git branch --show-current`);
+    const result = await filesystemOperations.executeCommand(`cd ${repoPath} && git branch --show-current`);
     return result.output.trim();
   },
   
   async mergeFromBranch(repoPath: string, sourceBranch: string) {
-    return await commanderOperations.executeCommand(`cd ${repoPath} && git merge ${sourceBranch}`);
+    return await filesystemOperations.executeCommand(`cd ${repoPath} && git merge ${sourceBranch}`);
   }
 };

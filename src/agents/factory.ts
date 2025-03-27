@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { ScenarioConfig, DebugRequest } from '../types.js';
-import { gitOperations, commanderOperations } from '../util/mcp.js';
+import { gitOperations, filesystemOperations } from '../util/mcp.js';
 import { runScenarioAgent } from '../util/anthropic.js';
 
 /**
@@ -10,20 +10,26 @@ export class ScenarioAgentFactory {
   /**
    * Create a new scenario agent
    */
-  static createAgent(
+  static async createAgent(
     sessionId: string,
-    scenarioType: string,
     debugRequest: DebugRequest
-  ): ScenarioConfig {
+  ): Promise<ScenarioConfig> {
     const id = uuidv4();
+    
+    // Let Claude analyze and determine the approach
+    const { hypothesis, scenarioType } = await getHypothesisFromClaude(
+      debugRequest.error,
+      debugRequest.context || ''
+    );
+
     const branchName = `deebo-${sessionId}-${scenarioType}-${Date.now()}`;
     
     return {
       id,
       sessionId,
-      scenarioType,
+      scenarioType, // Only used for logging/tracking
       branchName,
-      hypothesis: generateHypothesis(scenarioType, debugRequest.error),
+      hypothesis,
       debugRequest,
       timeout: 60000, // 1 minute timeout
       startTime: Date.now()
@@ -32,29 +38,14 @@ export class ScenarioAgentFactory {
 }
 
 /**
- * Generate a hypothesis for a scenario type
+ * Get hypothesis and approach from Claude
  */
-function generateHypothesis(scenarioType: string, errorMessage: string): string {
-  switch (scenarioType) {
-    case 'dependency':
-      return `The error "${errorMessage}" may be caused by a missing or incompatible dependency.`;
-    case 'syntax':
-      return `The error "${errorMessage}" may be caused by a syntax or type error in the code.`;
-    case 'environment':
-      return `The error "${errorMessage}" may be caused by an environment configuration issue.`;
-    case 'api':
-      return `The error "${errorMessage}" may be caused by an issue with API integration or usage.`;
-    case 'performance':
-      return `The error "${errorMessage}" may be related to performance issues or resource constraints.`;
-    case 'runtime':
-      return `The error "${errorMessage}" may be a runtime exception that occurs during execution.`;
-    case 'cache':
-      return `The error "${errorMessage}" may be related to caching issues or stale data.`;
-    case 'async':
-      return `The error "${errorMessage}" may be caused by race conditions or asynchronous timing issues.`;
-    default:
-      return `The error "${errorMessage}" requires investigation.`;
-  }
+async function getHypothesisFromClaude(error: string, context: string): Promise<{
+  hypothesis: string,
+  scenarioType: string  // For tracking/logging purposes only
+}> {
+  const { runScenarioAnalysis } = await import('../util/anthropic.js');
+  return runScenarioAnalysis(error, context);
 }
 
 /**
@@ -70,7 +61,7 @@ export async function runAutonomousAgent(config: ScenarioConfig): Promise<any> {
   // Create branch for this agent if we have a repo
   if (repoPath && config.branchName) {
     try {
-      const { output } = await commanderOperations.executeCommand(
+      const { output } = await filesystemOperations.executeCommand(
         `cd ${repoPath} && git checkout -b ${config.branchName}`
       );
       console.error(`Created branch ${config.branchName} for investigation`);
@@ -118,7 +109,7 @@ export async function runAutonomousAgent(config: ScenarioConfig): Promise<any> {
         try {
           const filePath = analysis.match(/file[:\s]+([^\n]+)/i)?.[1].trim();
           if (filePath) {
-            const content = await commanderOperations.readFile(filePath);
+            const content = await filesystemOperations.readFile(filePath);
             context += `\n\nFile Content (${filePath}):\n${content}`;
           }
         } catch (error) {
@@ -132,7 +123,7 @@ export async function runAutonomousAgent(config: ScenarioConfig): Promise<any> {
         try {
           const editBlock = analysis.match(/```[\s\S]*?```/)?.[0];
           if (editBlock) {
-            const result = await commanderOperations.editBlock(editBlock);
+            const result = await filesystemOperations.editBlock(editBlock);
             context += `\n\nEdit Result: ${result}`;
           }
         } catch (error) {
@@ -146,7 +137,7 @@ export async function runAutonomousAgent(config: ScenarioConfig): Promise<any> {
         try {
           const command = analysis.match(/run command[:\s]+([^\n]+)/i)?.[1].trim();
           if (command) {
-            const { output } = await commanderOperations.executeCommand(command);
+            const { output } = await filesystemOperations.executeCommand(command);
             context += `\n\nCommand Output:\n${output}`;
           }
         } catch (error) {
@@ -181,7 +172,7 @@ export async function runAutonomousAgent(config: ScenarioConfig): Promise<any> {
     // Cleanup: Delete branch if it exists
     if (repoPath && config.branchName) {
       try {
-        await commanderOperations.executeCommand(
+        await filesystemOperations.executeCommand(
           `cd ${repoPath} && git checkout main || git checkout master && git branch -D ${config.branchName}`
         );
         console.error(`Cleaned up branch ${config.branchName}`);
