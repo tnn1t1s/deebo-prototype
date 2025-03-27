@@ -42,15 +42,24 @@ async function initializePaths() {
     'reports'
   ];
 
+  // Get base directory - use process.cwd() as root
+  const baseDir = process.cwd();
+  console.error('[setup] Using base directory:', baseDir);
+
   for (const dir of defaultDirs) {
-    const dirPath = path.join(process.cwd(), dir);
+    const dirPath = path.join(baseDir, dir);
+    console.error(`[setup] Creating directory: ${dirPath}`);
+    
     if (!fs.existsSync(dirPath)) {
       try {
         fs.mkdirSync(dirPath, { recursive: true });
+        console.error(`[setup] Successfully created directory: ${dirPath}`);
       } catch (error) {
-        console.error(`Failed to create directory: ${dirPath}`, error);
+        console.error(`[error] Failed to create directory: ${dirPath}`, error);
         throw error;
       }
+    } else {
+      console.error(`[setup] Directory already exists: ${dirPath}`);
     }
   }
 }

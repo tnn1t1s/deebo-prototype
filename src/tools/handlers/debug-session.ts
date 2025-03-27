@@ -7,7 +7,7 @@ import {
 import { sessionManager } from "../../resources/index.js";
 import { agentCoordinator } from "../../agents/coordinator.js";
 import { getLogger } from "../logger.js";
-import type { DeeboMcpServer, ToolResponse } from "../../types/mcp.d.js";
+import type { DeeboMcpServer, ToolResponse, DebugSession } from "../../types/mcp.d.js";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import { startDebugSessionSchema, debugSessionResponseSchema } from '../schemas.js';
 
@@ -22,7 +22,13 @@ export async function handleStartDebugSession(
   extra: RequestHandlerExtra
 ): Promise<ToolResponse> {
   const logger = await getLogger();
-  logger.info(`Executing start_debug_session tool`, { error_message });
+  logger.info('Debug session request received', { 
+    error_short: error_message.substring(0, 100),
+    language,
+    hasFilePath: !!file_path,
+    hasRepoPath: !!repo_path,
+    hasContext: !!code_context
+  });
   
   const sessionId = uuidv4();
   const { createLogger } = await import("../../util/logger.js");
@@ -36,55 +42,41 @@ export async function handleStartDebugSession(
   });
   
   try {
-    // Use PathResolver for safe directory handling
+    // Initialize directories using PathResolver
     const { getPathResolver } = await import('../../util/path-resolver-helper.js');
     const pathResolver = await getPathResolver();
+    await pathResolver.ensureDirectory('reports');
     
-    // Validate root directory
-    const rootDir = pathResolver.getRootDir();
-    if (!rootDir || rootDir === '/') {
-      throw new Error('Invalid root directory configuration');
-    }
-    
-    // Ensure required directories exist with validation
-    const reportsDir = await pathResolver.ensureDirectory('reports');
-    if (!(await pathResolver.validateDirectory(reportsDir))) {
-      throw new Error('Failed to create and validate reports directory');
-    }
-    
-    // Log successful initialization
-    sessionLogger.info('Session directories initialized', {
-      reportsDir,
-      rootDir
-    });
-  
-    // Create session
-    const session = {
+    // Create session with structured logging
+    const session: DebugSession = {
       id: sessionId,
       status: "running",
-      logs: [
-        "Deebo debugging session initialized",
-        `Received error: ${error_message}`,
-        `Language: ${language || "Not specified"}`,
-        repo_path ? `Repository path: ${repo_path}` : "No repository path provided",
-        file_path ? `File path: ${file_path}` : "No file path provided",
-        `DEEBO_ROOT set to: ${process.env.DEEBO_ROOT}`,
-        `Reports directory initialized at: ${reportsDir}`,
-        "Deebo will analyze your error through the following process:",
-        "1. Mother agent will analyze the error and codebase to identify potential causes",
-        "2. Scenario agents will be created to test different hypotheses in isolation", 
-        "3. Each scenario agent will create its own Git branch for investigation",
-        "4. Results from all scenario agents will be collected and evaluated",
-        "5. The mother agent will select the best fix and verify it works",
-        "6. A final recommendation will be provided with implementation details"
-      ],
       startTime: Date.now(),
       lastChecked: Date.now(),
+      logs: [
+        JSON.stringify({
+          timestamp: new Date().toISOString(),
+          type: 'session_start',
+          data: {
+            sessionId,
+            config: {
+              language: language || "Not specified",
+              filePath: file_path || "Not provided",
+              repoPath: repo_path || "Not provided",
+              contextSize: code_context?.length || 0
+            },
+            error: error_message
+          }
+        })
+      ],
       scenarioResults: [],
       request: {
         error: error_message,
         context: code_context,
-        codebase: repo_path ? { repoPath: repo_path, filePath: file_path } : undefined
+        codebase: repo_path ? {
+          repoPath: repo_path,
+          filePath: file_path
+        } : undefined
       }
     };
 

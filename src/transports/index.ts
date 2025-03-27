@@ -36,16 +36,11 @@ export async function createTransport<T extends BaseMcpServer>(
 ): Promise<StdioServerTransport | SSEServerTransport> {
   try {
     // Use PathResolver for safe initialization
-    const { PathResolver } = await import('../util/path-resolver.js');
-    const pathResolver = PathResolver.getInstance();
-    
-    // Initialize if needed - this handles DEEBO_ROOT validation
-    if (!pathResolver.isInitialized()) {
-      await pathResolver.initialize();
-    }
+    const { getPathResolver } = await import('../util/path-resolver-helper.js');
+    const pathResolver = await getPathResolver();
     
     // Validate root directory
-    const rootDir = pathResolver.getRootDir();
+    const rootDir = await pathResolver.getRootDir();
     if (!rootDir || rootDir === '/') {
       throw new Error('Invalid root directory configuration');
     }
@@ -69,7 +64,7 @@ export async function createTransport<T extends BaseMcpServer>(
       // Keep using initLogger if regular logger fails
       logger.error('Failed to initialize regular logger, continuing with initLogger', { 
         error,
-        rootDir 
+        rootDir: await pathResolver.getRootDir() 
       });
     }
 
@@ -122,12 +117,6 @@ export async function createTransport<T extends BaseMcpServer>(
 
   transport.onclose = handleDisconnect;
   
-  try {
-    await transport.start();
-    logger.info('Transport started successfully', { type });
-    return transport;
-  } catch (error) {
-    logger.error('Failed to start transport', { error });
-    throw error;
-  }
+  logger.info('Transport created successfully', { type });
+  return transport;
 }

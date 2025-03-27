@@ -141,32 +141,6 @@ async function getLogger(sessionId: string, component: string) {
   }
 }
 
-// Helper function to ensure session directories exist
-async function ensureSessionDirectories(sessionId: string): Promise<boolean> {
-  const logger = await getLogger(sessionId, 'directory-setup');
-  
-  try {
-    // Import required modules
-    const { join } = await import('path');
-    const { ensureDirectory } = await import('./util/init.js');
-    
-    // Ensure logs directory exists for this session
-    const sessionLogsDir = await ensureDirectory(`sessions/${sessionId}/logs`);
-    logger.info('Ensured session logs directory exists', { 
-      sessionId, 
-      logsDir: sessionLogsDir 
-    });
-    
-    return true;
-  } catch (error) {
-    logger.error('Failed to create session directories', { 
-      error: String(error), 
-      sessionId 
-    });
-    return false;
-  }
-}
-
 
 // OODA Loop: Mother Agent orchestrates macro debugging cycle
 export async function runMotherAgent(
@@ -177,28 +151,25 @@ export async function runMotherAgent(
   filePath: string | undefined,
   repoPath: string | undefined
 ) {
-  // Ensure session directories exist before creating logger
-  await ensureSessionDirectories(sessionId);
+  // Initialize using PathResolver
+  const { getPathResolver } = await import('./util/path-resolver-helper.js');
+  const pathResolver = await getPathResolver();
+  await pathResolver.ensureDirectory(`sessions/${sessionId}/logs`);
   
   const logger = await getLogger(sessionId, 'mother');
-
-  // Initialize MCP clients early
-  try {
-    logger.info('Initializing MCP clients');
-    await initMcpClients();
-    logger.info('MCP clients initialized successfully');
-  } catch (error) {
+  
+  // Initialize MCP clients
+  logger.info('Initializing MCP clients');
+  await initMcpClients().catch(error => {
     logger.error('Failed to initialize MCP clients', { error });
     throw new Error(`Failed to initialize required MCP clients: ${error}`);
-  }
-
-  // Validate paths early
-  if (!repoPath) {
-    logger.warn('No repository path provided, some features will be limited');
-  }
-  if (!filePath) {
-    logger.warn('No file path provided, some features will be limited');
-  }
+  });
+  
+  // Log path configuration
+  logger.info('Path configuration', {
+    repoPath: repoPath || 'not provided',
+    filePath: filePath || 'not provided'
+  });
 
   logger.info('Mother agent started', {
     error: error.substring(0, 100), // Truncate long errors
@@ -268,7 +239,9 @@ Return JSON:
         throw new Error('Expected text response from Claude');
       }
       
-      const plan = JSON.parse(content.text) as { numAgents: number; reasoning: string };
+      // Sanitize and parse JSON response
+      const sanitizedJson = content.text.trim().replace(/\n/g, '');
+      const plan = JSON.parse(sanitizedJson) as { numAgents: number; reasoning: string };
       logger.debug('Investigation plan generated', { plan });
       
       // DECIDE: Create appropriate number of agents
@@ -285,10 +258,10 @@ Return JSON:
               repoPath: repoPath || ''
             },
             environment: {
-              deeboRoot: process.cwd(),
+              deeboRoot: repoPath || '',
               processIsolation: true,
               gitAvailable: true,
-              validatedPaths: []
+              validatedPaths: [repoPath || '']
             },
             initRequirements: {
               requiredDirs: ['reports', 'sessions'],
@@ -405,8 +378,11 @@ interface SpawnConfig {
 }
 
 async function spawnScenarioAgent(config: SpawnConfig) {
-  // Ensure session directories exist before creating logger
-  await ensureSessionDirectories(config.sessionId);
+  // Initialize using PathResolver
+  const { getPathResolver } = await import('./util/path-resolver-helper.js');
+  const pathResolver = await getPathResolver();
+  await pathResolver.ensureDirectory(`sessions/${config.sessionId}/logs`);
+  await pathResolver.ensureDirectory('reports');
   
   const logger = await getLogger(config.sessionId, `mother-spawn-${config.scenarioId}`);
   
@@ -422,37 +398,6 @@ async function spawnScenarioAgent(config: SpawnConfig) {
   });
   
   try {
-    // Get PathResolver instance for safe path handling
-    const { getPathResolver } = await import('./util/path-resolver-helper.js');
-    const pathResolver = await getPathResolver();
-    
-    // Validate root directory is set correctly
-    const rootDir = pathResolver.getRootDir();
-    if (!rootDir || rootDir === '/') {
-      throw new Error('Invalid root directory configuration');
-    }
-    
-    // Ensure reports directory exists before spawning
-    try {
-      // Await the promise from ensureDirectory
-      const reportsDir = await ensureDirectory('reports');
-      logger.debug('Ensured reports directory exists before spawning agent', {
-        reportsDir,
-        exists: true // We know it exists because ensureDirectory succeeded
-      });
-      
-      // Create a dummy file to test write permissions
-      const testFile = join(reportsDir, `test-spawn-${Date.now()}.json`);
-      await fs.writeFile(testFile, JSON.stringify({ test: 'spawn-test' }));
-      logger.debug('Successfully wrote test file to reports directory', { testFile });
-      
-    } catch (error) {
-      logger.error('Failed to ensure reports directory exists', { 
-        error: String(error), 
-        stack: error instanceof Error ? error.stack : 'No stack trace'
-      });
-      throw new Error(`Failed to create required reports directory: ${error}`);
-    }
     
     // Get path to scenario agent safely
     const scenarioAgentPath = pathResolver.resolvePath('build/scenario-agent.js');
@@ -647,7 +592,9 @@ async function generateHypotheses(anthropicClient: any, data: any) {
     if (!content || !('text' in content)) {
       throw new Error('Expected text response from Claude');
     }
-    const hypotheses = JSON.parse(content.text);
+    // Sanitize and parse JSON response
+    const sanitizedJson = content.text.trim().replace(/\n/g, '');
+    const hypotheses = JSON.parse(sanitizedJson);
     logger.debug('Hypotheses generated', { hypotheses });
     return hypotheses;
   } catch (error: any) {
@@ -688,7 +635,9 @@ async function evaluateResults(anthropicClient: any, results: AgentResult[]) {
     if (!content || !('text' in content)) {
       throw new Error('Expected text response from Claude');
     }
-    const evaluation = JSON.parse(content.text) as ClaudeResponse;
+    // Sanitize and parse JSON response
+    const sanitizedJson = content.text.trim().replace(/\n/g, '');
+    const evaluation = JSON.parse(sanitizedJson) as ClaudeResponse;
     logger.debug('Evaluation complete', { evaluation });
     return evaluation;
   } catch (error: any) {

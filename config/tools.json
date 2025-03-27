@@ -14,7 +14,7 @@
       ]
     },
     "filesystem-mcp": {
-      "path": "tools/filesystem-mcp.js",
+      "path": "tools/filesystem.js",
       "timeout": 10000,
       "retries": 3,
       "baseDelay": 1000,

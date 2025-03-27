@@ -4,6 +4,8 @@ import { z } from 'zod';
 import { AnthropicClient } from './util/anthropic.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { join } from 'path';
+import { getPathResolver } from './util/path-resolver-helper.js';
 import { createLogger } from './util/logger.js';
 import { isInitialized } from './agents/index.js';
 import { ToolConfigManager } from './util/tool-config.js';
@@ -559,7 +561,9 @@ Return a JSON response in this format:
       throw new Error('Expected text response from Claude');
     }
     
-    const parsedJson = JSON.parse(textContent.text);
+    // Sanitize and parse JSON response
+    const sanitizedJson = textContent.text.trim().replace(/\n/g, '');
+    const parsedJson = JSON.parse(sanitizedJson);
     logger.debug('Parsing Claude response', { raw: parsedJson });
     
     const validatedResponse = ClaudeResponseSchema.safeParse(parsedJson);
@@ -579,38 +583,6 @@ Return a JSON response in this format:
   }
 }
 
-/**
- * Ensure a directory exists by creating it if necessary
- */
-async function ensureDirectoryExists(directoryPath: string, client: any, logger: any): Promise<string> {
-  if (!directoryPath) {
-    throw new Error('Directory path cannot be undefined');
-  }
-
-  logger.debug('Ensuring directory exists', { directoryPath });
-  
-  await withRetry(
-    () => timeoutPromise(
-      client.callTool({
-        name: 'create_directory',
-        arguments: {
-          path: directoryPath
-        }
-      }),
-      5000,
-      'Create directory'
-    ),
-    {
-      maxRetries: 3,
-      baseDelay: 1000,
-      operation: 'Create directory',
-      logger
-    }
-  );
-  
-  return directoryPath;
-}
-
 async function writeReport(agentId: string, data: any, logger: any) {
   if (!agentId) {
     logger.error('Agent ID is undefined', { data });
@@ -621,62 +593,17 @@ async function writeReport(agentId: string, data: any, logger: any) {
   const client = await connectMcpTool('filesystem-mcp', logger);
   
   try {
-    // Import modules
     const { join } = await import('path');
     const { getPathResolver } = await import('./util/path-resolver-helper.js');
-    
-    // Get the path resolver instance
     const pathResolver = await getPathResolver();
     
-    // Get the reports directory path
-    const reportDir = await pathResolver.getReportsDirectory();
-    
-    logger.debug('Using reports directory', { 
-      reportDir,
-      rootDir: await pathResolver.getRootDir()
-    });
-    
-    // Write a test file to verify write permissions
-    const testFileName = `test-write-${Date.now()}.txt`;
-    const testFilePath = await pathResolver.resolvePath(join('reports', testFileName));
-    
-    logger.debug('Writing test file for permission check', { testFilePath });
-    
-    // Use withRetry to handle transient failures
-    await withRetry(
-      () => timeoutPromise(
-        client.callTool({
-          name: 'write_file',
-          arguments: {
-            path: testFilePath,
-            content: 'Test write permissions'
-          }
-        }),
-        5000,
-        'Test write permissions'
-      ),
-      {
-        maxRetries: 3,
-        baseDelay: 1000,
-        operation: 'Test write permissions',
-        logger
-      }
-    );
-    
-    logger.debug('Successfully wrote test file', { testFilePath });
-    
-    // Write the actual report
+    // Write report directly to reports directory
     const timestamp = Date.now();
     const reportFile = `${agentId}-report-${timestamp}.json`;
     const reportPath = await pathResolver.resolvePath(join('reports', reportFile));
     
-    logger.debug('Writing report file', { 
-      reportPath,
-      agentId,
-      timestamp
-    });
+    logger.debug('Writing report file', { reportPath });
     
-    // Use withRetry to handle transient failures
     await withRetry(
       () => timeoutPromise(
         client.callTool({
@@ -696,41 +623,12 @@ async function writeReport(agentId: string, data: any, logger: any) {
         logger
       }
     );
+    
     logger.info('Report written successfully', { reportPath });
-    
-    return reportPath; // Return the path for reference
+    return reportPath;
   } catch (error: any) {
-    logger.error('Failed to write report', { 
-      error: error.message,
-      stack: error.stack
-    });
-    
-    // Try fallback approach using temp directory
-    try {
-      logger.info('Attempting fallback report writing');
-      const timestamp = Date.now();
-      const reportFile = `${agentId}-report-fallback-${timestamp}.json`;
-      
-      // Get a temporary directory path
-      const tempPath = await pathResolver.getTempDirectory();
-      const reportPath = await pathResolver.resolvePath(join(tempPath, reportFile));
-      
-      logger.debug('Writing report with fallback method', { reportPath });
-      
-      // Write directly with fs.writeFile
-      await fs.writeFile(
-        reportPath, 
-        JSON.stringify({ ...data, _writtenWithFallback: true }, null, 2)
-      );
-      
-      logger.info('Report written with fallback method', { reportPath });
-      return reportPath;
-    } catch (fallbackError: any) {
-      logger.error('Fallback report writing also failed', { 
-        error: fallbackError.message 
-      });
-      throw new Error(`Failed to write report: ${error.message}, fallback also failed: ${fallbackError.message}`);
-    }
+    logger.error('Failed to write report', { error: error.message });
+    throw error;
   } finally {
     await client.close();
   }

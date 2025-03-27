@@ -37,10 +37,11 @@ export async function initializeTools(server: DeeboMcpServer): Promise<void> {
   try {
     // Ensure required directories exist
     const { PathResolver } = await import('../util/path-resolver.js');
-    const pathResolver = PathResolver.getInstance();
+    const pathResolver = await PathResolver.getInstance();
     
-    if (!pathResolver.isInitialized()) {
-      await pathResolver.initialize();
+    const resolver = await pathResolver;
+    if (!resolver.isInitialized()) {
+      await resolver.initialize();
     }
 
     // Now safe to use regular logger

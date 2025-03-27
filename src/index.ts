@@ -33,35 +33,35 @@ async function startServer() {
     
     logger.info('Starting MCP server initialization');
     
-    // Initialize server with capabilities
+    // Initialize server
     const server = new McpServer({
       name: CONFIG.serverName,
       version: CONFIG.serverVersion
     });
     
-    // McpServer already has these capabilities built-in
-    // No need to explicitly add them
-    
-    // Create transport with reconnection support
-    const transport = await createTransport('stdio', server, {
-      reconnect: {
-        maxAttempts: 5,  // More retries for production
-        initialDelay: 1000,
-        maxDelay: 10000
-      }
-    });
-
-    await server.connect(transport);
-
     // Import components
     const { initializeResources } = await import('./resources/index.js');
     const { initializeTools } = await import('./tools/index.js');
     const { initializeAgents } = await import('./agents/index.js');
 
-    // Set up components
+    // Set up all components BEFORE connecting transport
+    logger.info('Initializing server components');
     await initializeResources(server as DeeboMcpServer);
     await initializeTools(server as DeeboMcpServer);
     await initializeAgents(server as DeeboMcpServer);
+    
+    // Create and connect transport after all capabilities are registered
+    logger.info('Creating transport');
+    const transport = await createTransport('stdio', server, {
+      reconnect: {
+        maxAttempts: 5,
+        initialDelay: 1000,
+        maxDelay: 10000
+      }
+    });
+
+    logger.info('Connecting transport');
+    await server.connect(transport);
 
     // Set up process handlers
     process.on('uncaughtException', (error: Error) => {
