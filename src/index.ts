@@ -1,37 +1,42 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { DeeboMcpServer } from "./types/mcp.d.js";
+import type { DeeboMcpServer } from "./types/mcp.js";
 import { createTransport } from "./transports/index.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { initializeDirectories } from './util/init.js';
 import { initLogger } from './util/init-logger.js';
-import * as dotenv from "dotenv";
 
-// Configure environment
-dotenv.config();
+// Load configuration using ES modules
+const CONFIG = await (async () => {
+  const { loadConfig } = await import('./util/config.js');
+  return loadConfig();
+})();
 
-// Server configuration
-const CONFIG = {
-  name: process.env.SERVER_NAME || "deebo-prototype",
-  version: process.env.SERVER_VERSION || "0.1.0"
-};
+// Set DEEBO_ROOT early if not already set
+if (!process.env.DEEBO_ROOT) {
+  process.env.DEEBO_ROOT = CONFIG.deeboRoot;
+}
 
 async function startServer() {
   try {
-    // Set DEEBO_ROOT to current working directory
-    process.env.DEEBO_ROOT = process.cwd();
+    // Initialize directories and validate DEEBO_ROOT
+    const rootDir = await initializeDirectories();
     
-    // Initialize directories
-    await initializeDirectories();
+    if (!process.env.DEEBO_ROOT || process.env.DEEBO_ROOT !== rootDir) {
+      throw new Error('DEEBO_ROOT validation failed after directory initialization');
+    }
     
-    // Create logger
+    // Now create logger after directories are initialized
     const { createLogger } = await import('./util/logger.js');
+    
     const logger = createLogger('server', 'mcp-server');
+    
+    logger.info('Starting MCP server initialization');
     
     // Initialize server with capabilities
     const server = new McpServer({
-      name: CONFIG.name,
-      version: CONFIG.version
+      name: CONFIG.serverName,
+      version: CONFIG.serverVersion
     });
     
     // McpServer already has these capabilities built-in
@@ -54,7 +59,7 @@ async function startServer() {
     const { initializeAgents } = await import('./agents/index.js');
 
     // Set up components
-    await initializeResources(server as DeeboMcpServer, transport);
+    await initializeResources(server as DeeboMcpServer);
     await initializeTools(server as DeeboMcpServer);
     await initializeAgents(server as DeeboMcpServer);
 
@@ -77,8 +82,8 @@ async function startServer() {
     logger.info('Deebo MCP server initialized successfully');
 
     logger.info('Server started successfully', {
-      name: CONFIG.name,
-      version: CONFIG.version
+      name: CONFIG.serverName,
+      version: CONFIG.serverVersion
     });
 
   } catch (error) {

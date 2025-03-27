@@ -36,9 +36,29 @@ export class ToolConfigManager {
   }
 
   private async initialize() {
-    this.logger = createLogger('system', 'tool-config');
-    await this.loadConfig();
-    await this.watchConfig();
+    // Start with initLogger
+    const { initLogger } = await import('./init-logger.js');
+    this.logger = initLogger;
+    
+    try {
+      // Get path resolver and ensure config directory exists
+      const { getPathResolver } = await import('./path-resolver-helper.js');
+      const pathResolver = await getPathResolver();
+      
+      // Ensure config directory exists
+      const configDir = await pathResolver.ensureDirectory('config');
+      this.logger.info('Config directory ensured', { path: configDir });
+      
+      // Now safe to switch to regular logger
+      const { createLogger } = await import('./logger.js');
+      this.logger = createLogger('system', 'tool-config');
+      
+      await this.loadConfig();
+      await this.watchConfig();
+    } catch (error) {
+      this.logger.error('Tool config initialization failed', { error });
+      throw error;
+    }
   }
 
   private async loadConfig() {

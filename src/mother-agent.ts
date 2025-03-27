@@ -1,19 +1,144 @@
+// External imports
 import { spawn } from 'child_process';
-import { v4 as uuidv4 } from 'uuid';
-import { Anthropic } from '@anthropic-ai/sdk';
-import { createLogger } from './util/logger.js';
-import { agentCoordinator } from './agents/coordinator.js';
-import { McpError } from '@modelcontextprotocol/sdk/types.js';
-import { ProtocolErrorCodes } from './protocol/index.js';
-import { isInitialized } from './agents/index.js';
+import { AnthropicClient } from './util/anthropic.js';
+import { join } from 'path';
 import fs from 'fs/promises';
 
-// Helper function to create logger with initialization check
+// MCP SDK imports
+import { McpError } from '@modelcontextprotocol/sdk/types.js';
+
+// Internal imports
+import { createLogger } from './util/logger.js';
+import { ensureDirectory } from './util/init.js';
+import { getPathResolver } from './util/path-resolver-helper.js';
+import { filesystemOperations, initMcpClients } from './util/mcp.js';
+import { agentCoordinator } from './agents/coordinator.js';
+import { ProtocolErrorCodes } from './protocol/index.js';
+import { isInitialized } from './agents/index.js';
+import { ScenarioAgentFactory, runAutonomousAgent } from './agents/factory.js';
+import type { LoggerLike } from './types/logger.js';
+
+// Types for Claude responses
+interface ClaudeResponse {
+  complete: boolean;
+  result: {
+    fix: string;
+    confidence: number;
+    explanation: string;
+  } | null;
+}
+
+interface ClaudeMessage {
+  content: Array<{
+    type: string;
+    text: string;
+  }>;
+}
+
+interface AgentResult {
+  id: string;
+  sessionId: string;
+  success: boolean;
+  confidence: number;
+  fix: string | null;
+  explanation: string;
+}
+
+// Agent configurations aligned with agentic debugging vision
+interface BaseAgentConfig {
+  id: string;
+  sessionId: string;
+  startTime: number;
+}
+
+interface DebugEnvironment {
+  // Required environment configuration
+  deeboRoot: string;
+  processIsolation: boolean;
+  gitAvailable: boolean;
+  validatedPaths: string[];
+}
+
+interface ValidationState {
+  environmentChecked: boolean;
+  pathsValidated: boolean;
+  toolsValidated: boolean;
+  errors: string[];
+}
+
+interface InitializationRequirements {
+  requiredDirs: string[];
+  requiredTools: string[];
+  requiredCapabilities: string[];
+}
+
+// Standardized debug request that all agents can process
+interface DebugRequest {
+  error: string;
+  context: string;
+  codebase?: {
+    filePath?: string;
+    repoPath?: string;
+  };
+  // Required by type system but with safe defaults
+  environment: DebugEnvironment;
+  initRequirements: InitializationRequirements;
+  validation: ValidationState;
+}
+
+// Specific configuration for scenario agents
+interface ScenarioConfig extends BaseAgentConfig {
+  branchName?: string;
+  hypothesis: string;
+  scenarioType: string;
+  debugRequest: DebugRequest;
+  timeout?: number;
+}
+
+// Complete agent configuration
+interface AgentConfig extends BaseAgentConfig {
+  branchName?: string;
+  hypothesis: string;
+  error: string;
+  context: string;
+  codebase?: {
+    filePath?: string;
+    repoPath?: string;
+  };
+  scenarioType: string;
+  debugRequest: DebugRequest;
+}
+
+interface AgentResult {
+  success: boolean;
+  confidence: number;
+  fix: string | null;
+  explanation: string;
+}
+
+// Helper function to create logger with safe initialization
 async function getLogger(sessionId: string, component: string) {
-  if (!isInitialized) {
-    throw new Error('Cannot create logger - system not initialized');
+  // Start with initLogger
+  const { initLogger } = await import('./util/init-logger.js');
+  
+  try {
+    if (!process.env.DEEBO_ROOT) {
+      initLogger.info('DEEBO_ROOT not set, initializing directories');
+      const { initializeDirectories } = await import('./util/init.js');
+      await initializeDirectories();
+    }
+    
+    if (!isInitialized) {
+      initLogger.info('System not initialized, using initLogger');
+      return initLogger;
+    }
+    
+    // Now safe to create regular logger
+    return createLogger(sessionId, component);
+  } catch (error) {
+    initLogger.error('Logger initialization failed, using initLogger', { error });
+    return initLogger;
   }
-  return createLogger(sessionId, component);
 }
 
 // Helper function to ensure session directories exist
@@ -42,7 +167,6 @@ async function ensureSessionDirectories(sessionId: string): Promise<boolean> {
   }
 }
 
-import { initMcpClients } from './util/mcp.js';
 
 // OODA Loop: Mother Agent orchestrates macro debugging cycle
 export async function runMotherAgent(
@@ -83,7 +207,7 @@ export async function runMotherAgent(
     repoPath: repoPath || 'not provided'
   });
 
-  const anthropic = new Anthropic();
+  const anthropicClient = await AnthropicClient.getClient();
   let complete = false;
   let iteration = 0;
   const maxIterations = 3;
@@ -110,53 +234,108 @@ export async function runMotherAgent(
       const observations = await gatherObservations(sessionId, iteration);
       logger.debug('Observations gathered', { observations });
       
-      // ORIENT: Determine possible hypotheses based on observations
-      logger.info('ORIENT: Generating hypotheses');
-      const hypotheses: any[] = await generateHypotheses(anthropic, {
-        error,
-        context,
-        observations, 
-        iteration
+      // ORIENT: Let Claude analyze error and suggest approaches
+      logger.info('ORIENT: Analyzing error and generating investigation plan');
+      const analysis = await anthropicClient.messages.create({
+        model: 'claude-3-5-sonnet-20241022',
+        max_tokens: 1024,
+        system: `You are a master debugging strategist.
+Given the error and observations, determine:
+1. How many parallel investigations would be most effective (1-3)
+2. What aspects of the error to focus on
+3. What validation strategies are needed
+4. Whether additional agents should be spawned for validation
+
+Return JSON:
+{
+  "numAgents": number,
+  "reasoning": string,
+  "validationStrategy": {
+    "needsValidation": boolean,
+    "description": string,
+    "suggestedAgents": number
+  }
+}`,
+        messages: [{
+          role: 'user',
+          content: `Analyze this error and previous observations to determine the investigation approach:\nError: ${error}\n\nContext:${context}\n\nObservations: ${JSON.stringify(observations)}`
+        }]
       });
-      logger.debug('Hypotheses generated', { hypotheses });
+
+      // Extract text content from Claude's response
+      const content = analysis.content[0] as ClaudeMessage['content'][0];
+      if (!content || !('text' in content)) {
+        throw new Error('Expected text response from Claude');
+      }
       
-      // DECIDE: Which hypotheses to investigate
-      logger.info('DECIDE: Creating scenarios from hypotheses');
-      const scenarios = hypotheses.map((h: any) => ({
-        type: h.type,
-        hypothesis: h.description
-      }));
-      logger.debug('Scenarios created', { scenarios });
+      const plan = JSON.parse(content.text) as { numAgents: number; reasoning: string };
+      logger.debug('Investigation plan generated', { plan });
       
-      // Register scenario agents
-      scenarios.forEach((scenario, index) => {
-        const scenarioId = `${sessionId}-${index}`;
-        agentCoordinator.registerScenarioAgent({
-          sessionId,
-          scenarioId,
-          hypothesis: scenario.hypothesis
-        });
-      });
+      // DECIDE: Create appropriate number of agents
+      logger.info(`DECIDE: Creating ${plan.numAgents} investigation agents`);
       
-      // ACT: Spawn scenario agents to test hypotheses
-      logger.info(`ACT: Spawning ${scenarios.length} scenario agents`);
-      const results = await Promise.all(scenarios.map((scenario: any, index) => 
-        spawnScenarioAgent({
-          sessionId,
-          scenario,
-          error,
-          context,
-          language,
-          filePath,
-          repoPath,
-          scenarioId: `${sessionId}-${index}`
+      // Create agents in parallel
+      const agents = await Promise.all(
+        Array(plan.numAgents).fill(null).map(async () => {
+          const agent = await ScenarioAgentFactory.createAgent(sessionId, {
+            error,
+            context,
+            codebase: {
+              filePath: filePath || '',
+              repoPath: repoPath || ''
+            },
+            environment: {
+              deeboRoot: process.cwd(),
+              processIsolation: true,
+              gitAvailable: true,
+              validatedPaths: []
+            },
+            initRequirements: {
+              requiredDirs: ['reports', 'sessions'],
+              requiredTools: ['git-mcp', 'filesystem-mcp'],
+              requiredCapabilities: ['git', 'filesystem']
+            },
+            validation: {
+              environmentChecked: false,
+              pathsValidated: false,
+              toolsValidated: false,
+              errors: []
+            }
+          }) as AgentConfig;
+          
+          // Register with coordinator
+          agentCoordinator.registerScenarioAgent({
+            sessionId,
+            scenarioId: agent.id,
+            hypothesis: agent.hypothesis
+          });
+          
+          logger.debug('Created investigation agent', {
+            id: agent.id,
+            branch: agent.branchName
+          });
+          
+          return agent;
         })
-      ));
+      );
+      
+      // ACT: Run agents in parallel
+      logger.info(`ACT: Running ${agents.length} investigation agents`);
+      const results = await Promise.all(
+        agents.map((agent: AgentConfig) => 
+          runAutonomousAgent(agent).catch(error => ({
+            success: false,
+            confidence: 0,
+            fix: null,
+            explanation: `Agent failed: ${error.message}`
+          }))
+        )
+      );
       logger.debug('Scenario agent results received', { results });
       
       // Evaluate results to determine if we're done
       logger.info('Evaluating scenario results');
-      const evaluation = await evaluateResults(anthropic, results);
+      const evaluation = await evaluateResults(anthropicClient, results);
       logger.debug('Evaluation complete', { evaluation });
       
       complete = evaluation.complete;
@@ -205,7 +384,8 @@ export async function runMotherAgent(
   }
 }
 
-interface ScenarioConfig {
+// Scenario spawn configuration
+interface SpawnConfig {
   sessionId: string;
   scenarioId: string;
   scenario: {
@@ -224,7 +404,7 @@ interface ScenarioConfig {
   repoPath?: string;
 }
 
-async function spawnScenarioAgent(config: ScenarioConfig) {
+async function spawnScenarioAgent(config: SpawnConfig) {
   // Ensure session directories exist before creating logger
   await ensureSessionDirectories(config.sessionId);
   
@@ -242,19 +422,14 @@ async function spawnScenarioAgent(config: ScenarioConfig) {
   });
   
   try {
-    // Store the current working directory before spawning
-    const currentDir = global.process.cwd();
-
-    // Import required modules first - outside of the Promise
-    const { join } = await import('path');
-    const { ensureDirectory } = await import('./util/init.js');
+    // Get PathResolver instance for safe path handling
+    const { getPathResolver } = await import('./util/path-resolver-helper.js');
+    const pathResolver = await getPathResolver();
     
-    // Check if DEEBO_ROOT has been set
-    if (!process.env.DEEBO_ROOT) {
-      process.env.DEEBO_ROOT = currentDir;
-      logger.warn('DEEBO_ROOT not set, using current directory', { 
-        DEEBO_ROOT: process.env.DEEBO_ROOT 
-      });
+    // Validate root directory is set correctly
+    const rootDir = pathResolver.getRootDir();
+    if (!rootDir || rootDir === '/') {
+      throw new Error('Invalid root directory configuration');
     }
     
     // Ensure reports directory exists before spawning
@@ -279,13 +454,18 @@ async function spawnScenarioAgent(config: ScenarioConfig) {
       throw new Error(`Failed to create required reports directory: ${error}`);
     }
     
-    // Prepare scenario agent path
-    const scenarioAgentPath = join(currentDir, 'build/scenario-agent.js');
+    // Get path to scenario agent safely
+    const scenarioAgentPath = pathResolver.resolvePath('build/scenario-agent.js');
     
-    logger.debug('Spawning scenario agent with path', { 
-      scenarioAgentPath,
-      DEEBO_ROOT: process.env.DEEBO_ROOT
-    });
+    // Validate the scenario agent exists
+    try {
+      const { access } = await import('fs/promises');
+      await access(scenarioAgentPath);
+    } catch (error) {
+      throw new Error(`Scenario agent not found at: ${scenarioAgentPath}`);
+    }
+    
+    logger.debug('Validated scenario agent path', { scenarioAgentPath });
     
     // Create a new environment object that includes DEEBO_ROOT
     // Use type assertion to help TypeScript understand the environment object
@@ -315,8 +495,8 @@ async function spawnScenarioAgent(config: ScenarioConfig) {
         '--context', config.context,
         '--hypothesis', config.scenario.hypothesis,
         '--language', config.language,
-        '--file', config.filePath || '',
-        '--repo', config.repoPath || '',
+        '--file', config.filePath ?? '',
+        '--repo', config.repoPath ?? '',
         '--request', JSON.stringify({
           error: config.error,
           context: config.context,
@@ -327,7 +507,7 @@ async function spawnScenarioAgent(config: ScenarioConfig) {
       ], {
         stdio: 'pipe',
         detached: true,
-        cwd: currentDir,
+        cwd: process.cwd(),
         env: env // Pass the environment with DEEBO_ROOT
       });
       
@@ -412,7 +592,7 @@ async function spawnScenarioAgent(config: ScenarioConfig) {
   }
 }
 
-async function generateHypotheses(anthropic: any, data: any) {
+async function generateHypotheses(anthropicClient: any, data: any) {
   const logger = await getLogger(data.sessionId, 'mother-hypotheses');
   logger.info('Generating hypotheses', { iteration: data.iteration });
   try {
@@ -453,7 +633,7 @@ async function generateHypotheses(anthropic: any, data: any) {
       }]
     }]`;
 
-    const msg = await anthropic.messages.create({
+    const msg = await anthropicClient.messages.create({
       model: 'claude-3-5-sonnet-20241022',
       max_tokens: 1024,
       system: systemPrompt,
@@ -463,7 +643,11 @@ async function generateHypotheses(anthropic: any, data: any) {
       }]
     });
 
-    const hypotheses = JSON.parse(msg.content[0].text);
+    const content = msg.content[0] as ClaudeMessage['content'][0];
+    if (!content || !('text' in content)) {
+      throw new Error('Expected text response from Claude');
+    }
+    const hypotheses = JSON.parse(content.text);
     logger.debug('Hypotheses generated', { hypotheses });
     return hypotheses;
   } catch (error: any) {
@@ -474,7 +658,7 @@ async function generateHypotheses(anthropic: any, data: any) {
   }
 }
 
-async function evaluateResults(anthropic: any, results: any) {
+async function evaluateResults(anthropicClient: any, results: AgentResult[]) {
   const logger = await getLogger(results[0]?.sessionId, 'mother-evaluate');
   logger.info('Evaluating results', { numResults: results.length });
   try {
@@ -490,7 +674,7 @@ async function evaluateResults(anthropic: any, results: any) {
       "result": object | null // Solution details if complete
     }`;
 
-    const msg = await anthropic.messages.create({
+    const msg = await anthropicClient.messages.create({
       model: 'claude-3-5-sonnet-20241022',
       max_tokens: 1024,
       system: systemPrompt,
@@ -500,7 +684,11 @@ async function evaluateResults(anthropic: any, results: any) {
       }]
     });
 
-    const evaluation = JSON.parse(msg.content[0].text);
+    const content = msg.content[0] as ClaudeMessage['content'][0];
+    if (!content || !('text' in content)) {
+      throw new Error('Expected text response from Claude');
+    }
+    const evaluation = JSON.parse(content.text) as ClaudeResponse;
     logger.debug('Evaluation complete', { evaluation });
     return evaluation;
   } catch (error: any) {

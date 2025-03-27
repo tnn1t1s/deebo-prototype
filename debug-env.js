@@ -2,15 +2,53 @@
 import * as path from 'path';
 import * as fs from 'fs/promises';
 
+import * as os from 'os';
+
+async function validatePath(testPath) {
+  // Never allow root directory
+  if (testPath === '/' || testPath.match(/^\/[^/]+$/)) {
+    throw new Error(`CRITICAL SAFETY ERROR: Attempted to access system root level: ${testPath}`);
+  }
+  
+  // If absolute path, ensure it's under a valid root
+  if (path.isAbsolute(testPath)) {
+    const validRoots = [
+      process.cwd(),
+      path.join(os.homedir(), '.deebo-prototype'),
+      path.join(os.tmpdir(), 'deebo-prototype')
+    ];
+    const isUnderValidRoot = validRoots.some(root => testPath.startsWith(root));
+    if (!isUnderValidRoot) {
+      throw new Error(`Path not under valid root directory: ${testPath}`);
+    }
+  }
+  return true;
+}
+
 async function debugPaths() {
   console.log('======== DEBUGGING PATH ENVIRONMENT ========');
-  console.log('Current working directory:', process.cwd());
-  console.log('DEEBO_ROOT environment variable:', process.env.DEEBO_ROOT);
+  
+  // Validate working directory isn't root
+  const cwd = process.cwd();
+  if (cwd === '/') {
+    throw new Error('CRITICAL: Working directory is system root');
+  }
+  console.log('Current working directory:', cwd);
+  
+  // Validate DEEBO_ROOT
+  const deeboRoot = process.env.DEEBO_ROOT;
+  if (!deeboRoot) {
+    throw new Error('DEEBO_ROOT not set');
+  }
+  await validatePath(deeboRoot);
+  console.log('DEEBO_ROOT validated:', deeboRoot);
+  
   console.log('NODE_PATH environment variable:', process.env.NODE_PATH);
   
-  // Test reports directory
-  const reportsDir = path.join(process.cwd(), 'reports');
-  console.log('Reports directory path:', reportsDir);
+  // Test reports directory with validation
+  const reportsDir = path.join(deeboRoot, 'reports');
+  await validatePath(reportsDir);
+  console.log('Reports directory path validated:', reportsDir);
   
   try {
     const reportsStat = await fs.stat(reportsDir);

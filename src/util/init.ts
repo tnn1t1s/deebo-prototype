@@ -2,7 +2,6 @@ import { mkdirSync, existsSync } from 'fs';
 import path, { join } from 'path';
 import { homedir, tmpdir } from 'os';
 import { initLogger } from './init-logger.js';
-import { PathResolver } from './path-resolver.js';
 
 /**
  * Create a directory and its parents if they don't exist
@@ -28,15 +27,31 @@ function createDirSafe(baseDir: string, dir: string): void {
 export async function initializeDirectories(): Promise<string> {
   initLogger.info('Initializing required directories');
   
-  // Emergency safety check - ensure we never try to use the system root as our base directory
-  if (process.cwd() === '/') {
-    const errMsg = 'CRITICAL SAFETY ISSUE: Current working directory is system root (/). This is not supported.';
+  // Get path resolver for safety checks
+  const { getPathResolver } = await import('./path-resolver-helper.js');
+  const resolver = await getPathResolver();
+  
+  // Strict validation of current directory
+  const currentDir = process.cwd();
+  if (currentDir === '/' || currentDir.split('/').length < 3) {
+    const errMsg = 'CRITICAL SAFETY ISSUE: Current working directory is system root or unsafe path. This is not supported.';
     initLogger.error(errMsg);
-    throw new Error(errMsg);
+    // Instead of throwing, try to use a safe fallback
+    const safeDir = join(homedir(), '.local', 'share', 'deebo-prototype');
+    
+    initLogger.info('Using safe fallback directory', { path: safeDir });
+    await resolver.initialize(safeDir);
+    
+    // Create core directories under the safe path
+    const paths = ['logs', 'tmp', 'sessions', 'reports'];
+    for (const dir of paths) {
+      const dirPath = await resolver.ensureDirectory(dir);
+      initLogger.info('Created core directory', { dir, path: dirPath });
+    }
+    
+    return safeDir;
   }
   
-  const pathResolver = PathResolver.getInstance();
-
   try {
     // Try project directory first - make sure it's not the system root
     const projectDir = process.cwd();
@@ -46,17 +61,17 @@ export async function initializeDirectories(): Promise<string> {
     
     initLogger.info('Initializing with project directory', { path: projectDir });
     
-    // Initialize the path resolver with the project directory and await it
-    await pathResolver.initialize(projectDir);
+    // Initialize the path resolver with the project directory
+    await resolver.initialize(projectDir);
     
     // CRITICAL SAFETY CHECK - ensure we're not using system root
-    if (pathResolver.getRootDir() === '/') {
+    if (resolver.getRootDir() === '/') {
       throw new Error('CRITICAL SAFETY ERROR: Path resolver root directory is system root (/)');
     }
     
     // Guarantee that DEEBO_ROOT is set and matches the resolver's root
-    if (process.env.DEEBO_ROOT !== pathResolver.getRootDir()) {
-      process.env.DEEBO_ROOT = pathResolver.getRootDir();
+    if (process.env.DEEBO_ROOT !== resolver.getRootDir()) {
+      process.env.DEEBO_ROOT = resolver.getRootDir();
       initLogger.info('Updated DEEBO_ROOT environment variable', { path: process.env.DEEBO_ROOT });
     }
     
@@ -64,16 +79,16 @@ export async function initializeDirectories(): Promise<string> {
     initLogger.info('Creating required directories using relative paths only');
     
     // Use a consistent naming convention for all output paths
-    const tmpDir = await pathResolver.ensureDirectory('tmp');
+    const tmpDir = await resolver.ensureDirectory('tmp');
     initLogger.info('Created directory', { name: 'tmp', path: tmpDir });
     
-    const sessionsDir = await pathResolver.ensureDirectory('sessions');
+    const sessionsDir = await resolver.ensureDirectory('sessions');
     initLogger.info('Created directory', { name: 'sessions', path: sessionsDir });
     
-    const serverDir = await pathResolver.ensureDirectory('sessions/server');
+    const serverDir = await resolver.ensureDirectory('sessions/server');
     initLogger.info('Created directory', { name: 'sessions/server', path: serverDir });
     
-    const reportsDir = await pathResolver.ensureDirectory('reports');
+    const reportsDir = await resolver.ensureDirectory('reports');
     initLogger.info('Created directory', { name: 'reports', path: reportsDir });
     
     initLogger.info('Directory initialization complete', { location: 'project directory', path: projectDir });
@@ -98,19 +113,19 @@ export async function initializeDirectories(): Promise<string> {
     }
     
     // Re-initialize the path resolver with the fallback directory
-    await pathResolver.initialize(fallbackDir);
+    await resolver.initialize(fallbackDir);
     
     // Create all required directories - using only relative paths for safety
-    const tmpDir = await pathResolver.ensureDirectory('tmp');
+    const tmpDir = await resolver.ensureDirectory('tmp');
     initLogger.info('Created directory in home fallback', { name: 'tmp', path: tmpDir });
     
-    const sessionsDir = await pathResolver.ensureDirectory('sessions');
+    const sessionsDir = await resolver.ensureDirectory('sessions');
     initLogger.info('Created directory in home fallback', { name: 'sessions', path: sessionsDir });
     
-    const serverDir = await pathResolver.ensureDirectory('sessions/server');
+    const serverDir = await resolver.ensureDirectory('sessions/server');
     initLogger.info('Created directory in home fallback', { name: 'sessions/server', path: serverDir });
     
-    const reportsDir = await pathResolver.ensureDirectory('reports');
+    const reportsDir = await resolver.ensureDirectory('reports');
     initLogger.info('Created directory in home fallback', { name: 'reports', path: reportsDir });
     
     initLogger.info('Directory initialization complete', { location: 'home directory', path: fallbackDir });
@@ -130,19 +145,19 @@ export async function initializeDirectories(): Promise<string> {
     }
     
     // Re-initialize the path resolver with the temp directory
-    await pathResolver.initialize(tempDir);
+    await resolver.initialize(tempDir);
     
     // Create all required directories - using only relative paths for safety
-    const tmpDir = await pathResolver.ensureDirectory('tmp');
+    const tmpDir = await resolver.ensureDirectory('tmp');
     initLogger.info('Created directory in temp fallback', { name: 'tmp', path: tmpDir });
     
-    const sessionsDir = await pathResolver.ensureDirectory('sessions');
+    const sessionsDir = await resolver.ensureDirectory('sessions');
     initLogger.info('Created directory in temp fallback', { name: 'sessions', path: sessionsDir });
     
-    const serverDir = await pathResolver.ensureDirectory('sessions/server');
+    const serverDir = await resolver.ensureDirectory('sessions/server');
     initLogger.info('Created directory in temp fallback', { name: 'sessions/server', path: serverDir });
     
-    const reportsDir = await pathResolver.ensureDirectory('reports');
+    const reportsDir = await resolver.ensureDirectory('reports');
     initLogger.info('Created directory in temp fallback', { name: 'reports', path: reportsDir });
     
     initLogger.info('Directory initialization complete', { location: 'temp directory', path: tempDir });
@@ -173,38 +188,14 @@ export async function ensureDirectory(dirPath: string): Promise<string> {
     throw new Error(errorMsg);
   }
   
-  const pathResolver = PathResolver.getInstance();
-  
-  // Ensure the PathResolver is properly initialized
-  if (!pathResolver.isInitialized()) {
-    initLogger.info('Initializing PathResolver before directory creation');
-    await pathResolver.initialize();
-  }
-  
-  // CRITICAL SAFETY CHECK: Ensure the root directory is not the system root
-  if (pathResolver.getRootDir() === '/') {
-    const errorMsg = 'CRITICAL SAFETY ERROR: Path resolver root directory is system root (/)';
-    initLogger.error(errorMsg);
-    
-    // Emergency override - use home directory
-    const home = homedir();
-    const fallbackDir = join(home, '.deebo-prototype');
-    
-    initLogger.info('Emergency override: re-initializing with home directory', { path: fallbackDir });
-    
-    // Create the fallback directory
-    if (!existsSync(fallbackDir)) {
-      mkdirSync(fallbackDir, { recursive: true, mode: 0o755 });
-    }
-    
-    // Re-initialize the path resolver with this safe directory
-    await pathResolver.initialize(fallbackDir);
-  }
+  // Get path resolver instance for safe path handling
+  const { getPathResolver } = await import('./path-resolver-helper.js');
+  const resolver = await getPathResolver();
   
   // Log the operation with clear input information
   initLogger.info('Ensuring directory exists', { 
     dirPath,
-    rootDir: pathResolver.getRootDir()
+    rootDir: resolver.getRootDir()
   });
   
   try {
@@ -219,10 +210,10 @@ export async function ensureDirectory(dirPath: string): Promise<string> {
     }
     
     // Use the improved path resolver to ensure the directory exists
-    const absolutePath = await pathResolver.ensureDirectory(normalizedPath);
+    const absolutePath = await resolver.ensureDirectory(normalizedPath);
     
     // Verify the directory exists after creation
-    const exists = await pathResolver.validateDirectory(absolutePath);
+    const exists = await resolver.validateDirectory(absolutePath);
     if (!exists) {
       throw new Error(`Directory creation succeeded but verification failed: ${absolutePath}`);
     }

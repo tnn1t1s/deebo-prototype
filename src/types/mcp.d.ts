@@ -1,6 +1,6 @@
 import { McpServer as BaseMcpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { ErrorCode, McpError, ReadResourceResult, RequestHandlerExtra } from "@modelcontextprotocol/sdk/types.js";
+import { ErrorCode, McpError, ReadResourceResult, RequestHandlerExtra, CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 // Extend the McpServer interface to include required methods for our project
@@ -57,14 +57,10 @@ export interface CancelDebugSessionParams {
   session_id: string;
 }
 
-// Tool response types
-export interface ToolResponse {
-  content: {
-    type: "text";
-    text: string;
-  }[];
-  isError?: boolean;
-}
+// Use SDK's CallToolResult type for tool responses
+export type ToolResponse = CallToolResult & {
+  [key: string]: unknown;
+};
 
 export interface DebugSessionResult {
   fix: string;

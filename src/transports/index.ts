@@ -1,88 +1,89 @@
-import { Transport } from "@modelcontextprotocol/sdk/types.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { createLogger } from "../util/logger.js";
+import { McpServer as BaseMcpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ServerResponse } from "http";
+import { initLogger } from "../util/init-logger.js";
 
-const logger = createLogger('server', 'transport');
-
-/**
- * Configure reconnection settings for transports
- */
-export interface ReconnectionConfig {
-  maxAttempts: number;
-  initialDelay: number;  // in milliseconds
-  maxDelay: number;      // in milliseconds
-  onMaxAttemptsReached?: () => void;
+// Type that works for both loggers
+interface LoggerLike {
+  info(message: string, metadata?: Record<string, any>): void;
+  error(message: string, metadata?: Record<string, any>): void;
 }
 
-const DEFAULT_RECONNECT_CONFIG: ReconnectionConfig = {
-  maxAttempts: 3,
-  initialDelay: 1000,  // 1 second
-  maxDelay: 5000,     // 5 seconds
-  onMaxAttemptsReached: () => {
-    logger.error('Max reconnection attempts reached, transport will not attempt further reconnections');
-  }
-};
+// Start with initLogger and transition to regular logger when ready
+let logger: LoggerLike = initLogger;
+
+interface TransportOptions {
+  port?: number;
+  path?: string;
+  reconnect?: {
+    maxAttempts: number;
+    initialDelay: number;
+    maxDelay: number;
+  };
+}
+
+let transport: StdioServerTransport | SSEServerTransport;
+let reconnectAttempts = 0;
 
 /**
- * Create an MCP transport with reconnection support
+ * Create a transport with reconnection support
  */
-export async function createTransport(
+export async function createTransport<T extends BaseMcpServer>(
   type: 'stdio' | 'sse',
-  server: Server,
-  options?: {
-    port?: number;
-    path?: string;
-    reconnect?: Partial<ReconnectionConfig>;
-  }
-): Promise<Transport> {
-  const reconnectConfig = {
-    ...DEFAULT_RECONNECT_CONFIG,
-    ...options?.reconnect
-  };
-
-  let transport: Transport;
-
-  if (type === 'stdio') {
-    transport = new StdioServerTransport();
-  } else if (type === 'sse') {
-    if (!options?.port || !options?.path) {
-      throw new Error('Port and path are required for SSE transport');
+  server: T,
+  options: TransportOptions = {}
+): Promise<StdioServerTransport | SSEServerTransport> {
+  try {
+    // Use PathResolver for safe initialization
+    const { PathResolver } = await import('../util/path-resolver.js');
+    const pathResolver = PathResolver.getInstance();
+    
+    // Initialize if needed - this handles DEEBO_ROOT validation
+    if (!pathResolver.isInitialized()) {
+      await pathResolver.initialize();
     }
-    transport = new SSEServerTransport(options.path);
-  } else {
-    throw new Error(`Unknown transport type: ${type}`);
+    
+    // Validate root directory
+    const rootDir = pathResolver.getRootDir();
+    if (!rootDir || rootDir === '/') {
+      throw new Error('Invalid root directory configuration');
+    }
+    
+    // Try to switch to regular logger now that paths are validated
+    try {
+      const { createLogger } = await import("../util/logger.js");
+      const newLogger = createLogger('server', 'transport');
+      
+      // Test that the new logger works with validated paths
+      const logsPath = await pathResolver.ensureDirectory('logs');
+      await pathResolver.validateDirectory(logsPath);
+      
+      // If we got here, the new logger is safe to use
+      logger = newLogger;
+      logger.info('Initialized transport logging', { 
+        rootDir,
+        logsPath
+      });
+    } catch (error) {
+      // Keep using initLogger if regular logger fails
+      logger.error('Failed to initialize regular logger, continuing with initLogger', { 
+        error,
+        rootDir 
+      });
+    }
+
+  } catch (error) {
+    // If anything fails, keep using initLogger
+    logger.error('Error during logger initialization', { error });
   }
 
-  // Add reconnection handling
-  let reconnectAttempts = 0;
-  let reconnectTimeout: NodeJS.Timeout;
-let isConnected = false;
-let isReconnecting = false;
-let cleanupHandlers: Array<() => void> = [];
-
-  const cleanupTransport = () => {
-    clearTimeout(reconnectTimeout);
-    cleanupHandlers.forEach(handler => handler());
-    cleanupHandlers = [];
-    isConnected = false;
-    isReconnecting = false;
-};
-
-const handleDisconnect = async () => {
-    if (reconnectAttempts >= reconnectConfig.maxAttempts) {
-      reconnectConfig.onMaxAttemptsReached?.();
-      cleanupTransport();
+  const handleDisconnect = async () => {
+    const reconnectConfig = options.reconnect;
+    if (!reconnectConfig || reconnectAttempts >= reconnectConfig.maxAttempts) {
+      logger.error('Transport disconnected and max reconnect attempts reached');
       return;
     }
-
-    if (isReconnecting) {
-      logger.debug('Reconnection already in progress');
-      return;
-    }
-
-    isReconnecting = true;
 
     reconnectAttempts++;
     const delay = Math.min(
@@ -90,41 +91,43 @@ const handleDisconnect = async () => {
       reconnectConfig.maxDelay
     );
 
-    logger.info(`Attempting reconnection in ${delay}ms (attempt ${reconnectAttempts})`);
+    logger.info(`Attempting reconnect in ${delay}ms`, {
+      attempt: reconnectAttempts,
+      maxAttempts: reconnectConfig.maxAttempts
+    });
 
-    reconnectTimeout = setTimeout(async () => {
-      try {
-        await server.connect(transport);
-        reconnectAttempts = 0;
-        isConnected = true;
-        isReconnecting = false;
-        logger.info('Reconnection successful');
-      } catch (error) {
-        logger.error('Reconnection failed', { error });
-        handleDisconnect();
-      }
-    }, delay);
-  };
-
-  // Setup transport lifecycle handlers
-  transport.onclose = () => {
-    logger.info('Transport connection closed');
-    handleDisconnect();
-  };
-
-  transport.onerror = (error: Error) => {
-    logger.error('Transport error', { error });
-    if (isConnected) {
+    await new Promise(resolve => setTimeout(resolve, delay));
+    
+    try {
+      await createTransport(type, server, options);
+      reconnectAttempts = 0; // Reset on successful reconnect
+    } catch (error) {
+      logger.error('Reconnection failed', { error });
       handleDisconnect();
     }
   };
 
-  // Add cleanup handler
-  cleanupHandlers.push(() => {
-    transport.onclose = null;
-    transport.onerror = null;
-    transport.onmessage = null;
-  });
+  if (type === 'stdio') {
+    transport = new StdioServerTransport();
+  } else if (type === 'sse') {
+    if (!options?.port || !options?.path) {
+      throw new Error('Port and path are required for SSE transport');
+    }
+    // Note: SSEServerTransport requires response object which should be passed
+    // when actually handling an SSE request. This is just initialization.
+    transport = new SSEServerTransport(options.path, undefined as unknown as ServerResponse);
+  } else {
+    throw new Error(`Unknown transport type: ${type}`);
+  }
 
-  return transport;
+  transport.onclose = handleDisconnect;
+  
+  try {
+    await transport.start();
+    logger.info('Transport started successfully', { type });
+    return transport;
+  } catch (error) {
+    logger.error('Failed to start transport', { error });
+    throw error;
+  }
 }

@@ -33,15 +33,42 @@ if (hasAnthropicKey) {
   console.log(`ℹ️ API Key format: ${process.env.ANTHROPIC_API_KEY.substring(0, 12)}...`);
 }
 
-// Try to initialize Anthropic client
-console.log('\nTesting Anthropic client initialization');
+// Validate and test Anthropic client
+console.log('\nValidating Anthropic client');
 try {
+  // First validate API key format
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new Error('ANTHROPIC_API_KEY not found in environment');
+  }
+  if (!apiKey.startsWith('sk-')) {
+    throw new Error('Invalid ANTHROPIC_API_KEY format - should start with sk-');
+  }
+  if (apiKey.length < 30) {
+    throw new Error('ANTHROPIC_API_KEY appears too short');
+  }
+  console.log('✅ API key format validated');
+
+  // Initialize client
   const anthropic = new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY || ''
+    apiKey: apiKey.trim() // Remove any whitespace
   });
-  console.log('✅ Anthropic client initialized successfully');
+  
+  // Test the client with minimal API call
+  try {
+    await anthropic.messages.create({
+      model: 'claude-3-5-sonnet-20241022',
+      max_tokens: 10,
+      messages: [{ role: 'user', content: 'test' }]
+    });
+    console.log('✅ Anthropic client validated with test API call');
+  } catch (error) {
+    console.error('❌ Anthropic client API test failed:', error.message);
+    throw error;
+  }
 } catch (error) {
-  console.error(`❌ Anthropic client initialization failed: ${error.message}`);
+  console.error(`❌ Anthropic client validation failed: ${error.message}`);
+  process.exit(1);
 }
 
 // Display all environment variables available (excluding actual values)

@@ -1,6 +1,15 @@
 import { ChildProcess } from 'child_process';
 import Docker from 'dockerode';
 
+// Session initialization state interface
+export interface SessionInitState {
+  directoriesReady: boolean;
+  environmentValid: boolean;
+  toolsInitialized: boolean;
+  timeInitialized?: number;
+  failedChecks: string[];
+}
+
 // Debug Session Interface
 export interface DebugSession {
   id: string;
@@ -14,22 +23,75 @@ export interface DebugSession {
   process?: ChildProcess;
   scenarioResults: ScenarioResult[];
   finalResult?: DebugResult;
+  initState: SessionInitState;
+  processInfo?: {
+    pid: number;
+    startTime: number;
+    isolatedRoot: string;
+    gitBranch: string;
+  };
+  validationState: {
+    lastValidation: number;
+    errors: string[];
+    requiredPaths: string[];
+  };
 }
 
-// Debug Request Interface
+// Debug Request Interface with validation
 export interface DebugRequest {
   error: string;
   logs?: string;
   context?: string;
   codebase?: CodebaseReference;
+  environment: {
+    deeboRoot: string;
+    processIsolation: boolean;
+    gitAvailable: boolean;
+    validatedPaths: string[];
+  };
+  initRequirements: {
+    requiredDirs: string[];
+    requiredTools: string[];
+    requiredCapabilities: string[];
+  };
+  validation: {
+    environmentChecked: boolean;
+    pathsValidated: boolean;
+    toolsValidated: boolean;
+    errors: string[];
+  };
 }
 
 // Codebase Reference Interface
 export interface CodebaseReference {
-  repoPath: string;
+  repoPath?: string;  // Made optional to match usage
   branch?: string;
   filePath?: string;
   lineNumber?: number;
+}
+
+// Codebase Info Interface for Agent Config
+export interface CodebaseInfo {
+  filePath?: string;
+  repoPath?: string;
+}
+
+// Base Agent Configuration Interface
+export interface BaseAgentConfig {
+  id: string;
+  sessionId: string;
+  startTime: number;
+}
+
+// Complete Agent Configuration Interface
+export interface AgentConfig extends BaseAgentConfig {
+  branchName?: string;
+  hypothesis: string;
+  error: string;
+  context: string;
+  codebase?: CodebaseInfo;
+  scenarioType: string;
+  debugRequest: DebugRequest;
 }
 
 // Scenario Result Interface
@@ -66,15 +128,12 @@ export interface Change {
 }
 
 // Scenario Agent Configuration Interface
-export interface ScenarioConfig {
-  id: string;
-  sessionId: string;
+export interface ScenarioConfig extends BaseAgentConfig {
   scenarioType: string;
   branchName?: string;
   hypothesis: string;
   debugRequest: DebugRequest;
   timeout?: number;
-  startTime: number;
 }
 
 // Mother Agent Interface

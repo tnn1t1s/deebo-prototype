@@ -6,14 +6,69 @@ import fs from "fs";
 import path from "path";
 import { exec } from "child_process";
 
-// Create MCP server for file system and command execution operations
+import { join } from 'path';
+import { homedir, tmpdir } from 'os';
+
+// Track initialization state
+let isInitialized = false;
+
+// Path validation helper
+function validatePath(filePath) {
+  // Never allow root directory
+  if (filePath === '/' || filePath.match(/^\/[^/]+$/)) {
+    throw new Error(`CRITICAL SAFETY ERROR: Attempted to access system root level: ${filePath}`);
+  }
+
+  // If absolute path, ensure it's under a valid root
+  if (path.isAbsolute(filePath)) {
+    const validRoots = [
+      process.cwd(),
+      join(homedir(), '.deebo-prototype'),
+      join(tmpdir(), 'deebo-prototype')
+    ];
+    const isUnderValidRoot = validRoots.some(root => filePath.startsWith(root));
+    if (!isUnderValidRoot) {
+      throw new Error(`Path not under valid root directory: ${filePath}`);
+    }
+  }
+}
+
+// Initialize paths
+async function initializePaths() {
+  // Create required directories with safe defaults
+  const defaultDirs = [
+    'tmp',
+    'sessions',
+    'reports'
+  ];
+
+  for (const dir of defaultDirs) {
+    const dirPath = path.join(process.cwd(), dir);
+    if (!fs.existsSync(dirPath)) {
+      try {
+        fs.mkdirSync(dirPath, { recursive: true });
+      } catch (error) {
+        console.error(`Failed to create directory: ${dirPath}`, error);
+        throw error;
+      }
+    }
+  }
+}
+
+// Create MCP server with initialization check
 const server = new McpServer({
   name: "filesystem-mcp",
   version: "1.0.0"
 });
 
-// Add capability
+// Initialize paths before adding capability
+await initializePaths();
+
+// Add capabilities after initialization
 server.addCapability('tools');
+server.addCapability('filesystem');
+
+isInitialized = true;
 
 // Tool: Read File
 server.tool(
@@ -23,6 +78,24 @@ server.tool(
   },
   async ({ path: filePath }) => {
     try {
+      if (!isInitialized) {
+        throw new Error('Filesystem MCP not initialized');
+      }
+      
+      // Validate path
+      validatePath(filePath);
+      
+      // Ensure file exists
+      if (!fs.existsSync(filePath)) {
+        throw new Error(`File not found: ${filePath}`);
+      }
+      
+      // Get file stats
+      const stats = fs.statSync(filePath);
+      if (!stats.isFile()) {
+        throw new Error(`Not a file: ${filePath}`);
+      }
+      
       const content = fs.readFileSync(filePath, 'utf-8');
       return {
         content: [{ type: "text", text: content }],

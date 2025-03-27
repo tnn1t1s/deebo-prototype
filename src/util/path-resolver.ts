@@ -11,17 +11,49 @@ export class PathResolver {
   private _isInitialized = false;
 
   private constructor() {
-    // Initialize with a sensible default - ensure it's an absolute valid path
+    // Initialize with temporary values - real initialization happens in init()
+    this.rootDir = process.cwd();
+    this._isInitialized = false;
+  }
+
+  /**
+   * Get the singleton instance of the path resolver
+   */
+  public static async getInstance(): Promise<PathResolver> {
+    if (!PathResolver.instance) {
+      PathResolver.instance = new PathResolver();
+      await PathResolver.instance.init();
+    }
+    return PathResolver.instance;
+  }
+
+  /**
+   * Initialize the path resolver with proper async operations
+   */
+  private async init(): Promise<void> {
+    if (this._isInitialized) return;
+
     const currentDir = process.cwd();
+    const { homedir } = await import('os');
+    const homeDir = homedir();
     
     // Safety check - never allow root directory to be system root
-    if (currentDir === '/' || !currentDir || currentDir.trim() === '') {
-      console.error('[PathResolver] WARNING: Invalid working directory detected, using fallback');
-      // Use a safe fallback directory (user's home directory)
-      const os = require('os');
-      this.rootDir = require('path').join(os.homedir(), '.deebo-prototype');
+    // Also prevent directories close to system root
+    if (currentDir === '/' || 
+        !currentDir || 
+        currentDir.trim() === '' ||
+        currentDir.split('/').length < 3) { // Prevent shallow paths like /usr
+      console.error('[PathResolver] WARNING: Invalid or unsafe working directory detected, using fallback');
+      // Always use a deeply nested directory under home as fallback
+      this.rootDir = path.join(homeDir, '.local', 'share', 'deebo-prototype');
     } else {
-      this.rootDir = currentDir;
+      // Additional safety checks for the current directory
+      if (currentDir.startsWith(homeDir)) {
+        this.rootDir = currentDir;
+      } else {
+        // If outside home directory, use the safe fallback
+        this.rootDir = path.join(homeDir, '.local', 'share', 'deebo-prototype');
+      }
     }
     
     console.error(`[PathResolver] Created with default root directory: ${this.rootDir}`);
@@ -31,16 +63,6 @@ export class PathResolver {
     
     // Set initialized flag to true to prevent additional initialization attempts
     this._isInitialized = true;
-  }
-
-  /**
-   * Get the singleton instance of the path resolver
-   */
-  public static getInstance(): PathResolver {
-    if (!PathResolver.instance) {
-      PathResolver.instance = new PathResolver();
-    }
-    return PathResolver.instance;
   }
 
   /**
@@ -66,8 +88,8 @@ export class PathResolver {
       if (currentDir === '/' || !currentDir || currentDir.trim() === '') {
         console.error('[PathResolver] WARNING: Invalid working directory detected, using fallback');
         // Use a safe fallback directory
-        const os = require('os');
-        this.rootDir = require('path').join(os.homedir(), '.deebo-prototype');
+        const { homedir } = await import('os');
+        this.rootDir = path.join(homedir(), '.deebo-prototype');
       } else {
         this.rootDir = currentDir;
       }
@@ -76,8 +98,8 @@ export class PathResolver {
 
     // Safety check - guard against root directory being system root
     if (this.rootDir === '/' || !this.rootDir || this.rootDir.trim() === '') {
-      const os = require('os');
-      const newRootDir = require('path').join(os.homedir(), '.deebo-prototype');
+      const { homedir } = await import('os');
+      const newRootDir = path.join(homedir(), '.deebo-prototype');
       console.error(`[PathResolver] CRITICAL SAFETY OVERRIDE: Root directory "${this.rootDir}" was invalid, using safe fallback: ${newRootDir}`);
       this.rootDir = newRootDir;
     }
@@ -199,8 +221,8 @@ export class PathResolver {
 
     // Emergency validation check - we should never have root directory as /
     if (this.rootDir === '/') {
-      const os = require('os');
-      const newRootDir = require('path').join(os.homedir(), '.deebo-prototype');
+      const { homedir } = await import('os');
+      const newRootDir = path.join(homedir(), '.deebo-prototype');
       console.error(`[PathResolver] EMERGENCY ROOT DIRECTORY FIX: Root directory was '/' at runtime! Using ${newRootDir} instead.`);
       this.rootDir = newRootDir;
       

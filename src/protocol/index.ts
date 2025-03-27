@@ -4,22 +4,49 @@ import {
   JSONRPCMessage 
 } from "@modelcontextprotocol/sdk/types.js";
 
-// Ensure initialization is complete before creating logger
-export let isInitialized = false;
-let logger: any; // Type will be set when logger is created
+import type { LoggerLike } from '../types/logger.js';
 
-export function setInitialized() {
-  isInitialized = true;
+// Track initialization state
+export let isInitialized = false;
+let logger: LoggerLike;
+
+export async function initializeProtocol(): Promise<void> {
+  if (isInitialized) {
+    return;
+  }
+
+  // Start with initLogger
+  const { initLogger } = await import('../util/init-logger.js');
+  logger = initLogger;
+
+  try {
+    // Initialize path resolver for safe path handling
+    const { getPathResolver } = await import('../util/path-resolver-helper.js');
+    const pathResolver = await getPathResolver();
+    
+    // Validate root directory is set correctly
+    const rootDir = pathResolver.getRootDir();
+    if (!rootDir || rootDir === '/') {
+      throw new Error('Invalid root directory configuration');
+    }
+    
+    // Now safe to use regular logger
+    const { createLogger } = await import('../util/logger.js');
+    logger = createLogger('server', 'protocol');
+    
+    isInitialized = true;
+    logger.info('Protocol system initialized');
+  } catch (error) {
+    logger.error('Failed to initialize protocol system', { error });
+    throw error;
+  }
 }
 
-async function getLogger() {
-  if (!isInitialized) {
-    throw new Error('Cannot create logger - system not initialized');
-  }
-  
+async function getLogger(): Promise<LoggerLike> {
   if (!logger) {
-    const { createLogger } = await import("../util/logger.js");
-    logger = createLogger('server', 'protocol');
+    // Start with initLogger
+    const { initLogger } = await import('../util/init-logger.js');
+    logger = initLogger;
   }
   return logger;
 }

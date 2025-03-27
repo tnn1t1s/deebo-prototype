@@ -3,35 +3,47 @@ import {
   ErrorCode, 
   McpError
 } from "@modelcontextprotocol/sdk/types.js";
-import { activeSessions } from "../../resources/index.js";
+import { sessionManager } from "../../resources/index.js";
 import { agentCoordinator } from "../../agents/coordinator.js";
 import { getLogger } from "../logger.js";
-import type { DeeboMcpServer, CancelDebugSessionParams, ToolResponse } from "../../types/mcp.d.js";
-
+import type { DeeboMcpServer, ToolResponse } from "../../types/mcp.d.js";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import { cancelDebugSessionSchema, debugSessionResponseSchema } from '../schemas.js';
-import type { z } from 'zod';
 
 export type CancelDebugSessionParams = z.infer<typeof cancelDebugSessionSchema>;
-
-
 
 /**
  * Handler for the cancel_debug_session tool
  * Cancels an active debug session and cleans up resources
  */
 export async function handleCancelDebugSession(
-  { session_id }: CancelDebugSessionParams
+  { session_id }: CancelDebugSessionParams,
+  extra: RequestHandlerExtra
 ): Promise<ToolResponse> {
+  // Get safe loggers
   const logger = await getLogger();
   logger.info(`Executing cancel_debug_session tool`, { session_id });
   
-  const { createLogger } = await import("../../util/logger.js");
-  const sessionLogger = createLogger(session_id, 'mcp-cancel');
+  let sessionLogger;
+  try {
+    // Get path resolver for validation
+    const { getPathResolver } = await import('../../util/path-resolver-helper.js');
+    const pathResolver = await getPathResolver();
+    
+    // Create session-specific logger after validation
+    const { createLogger } = await import("../../util/logger.js");
+    sessionLogger = createLogger(session_id, 'mcp-cancel');
+  } catch (error) {
+    // Fallback to main logger if session logger creation fails
+    logger.warn('Failed to create session logger, using main logger', { error });
+    sessionLogger = logger;
+  }
+  
   sessionLogger.info('Cancelling debug session');
 
   try {
     // Get session and agents
-    const session = activeSessions.get(session_id);
+    const session = sessionManager.get(session_id);
     if (!session) {
       const response = debugSessionResponseSchema.parse({
         session_id,

@@ -4,13 +4,12 @@ import {
   ErrorCode, 
   McpError
 } from "@modelcontextprotocol/sdk/types.js";
-import { activeSessions } from "../../resources/index.js";
+import { sessionManager } from "../../resources/index.js";
 import { agentCoordinator } from "../../agents/coordinator.js";
 import { getLogger } from "../logger.js";
-import type { DeeboMcpServer, StartDebugSessionParams, ToolResponse } from "../../types/mcp.d.js";
-
+import type { DeeboMcpServer, ToolResponse } from "../../types/mcp.d.js";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import { startDebugSessionSchema, debugSessionResponseSchema } from '../schemas.js';
-import type { z } from 'zod';
 
 export type StartDebugSessionParams = z.infer<typeof startDebugSessionSchema>;
 
@@ -18,13 +17,9 @@ export type StartDebugSessionParams = z.infer<typeof startDebugSessionSchema>;
  * Handler for the start_debug_session tool
  * Creates a new debug session and launches the mother agent to coordinate debugging
  */
-
-/**
- * Handler for the start_debug_session tool
- * Creates a new debug session and launches the mother agent to coordinate debugging
- */
 export async function handleStartDebugSession(
-  { error_message, code_context, language, file_path, repo_path }: StartDebugSessionParams
+  { error_message, code_context, language, file_path, repo_path }: StartDebugSessionParams,
+  extra: RequestHandlerExtra
 ): Promise<ToolResponse> {
   const logger = await getLogger();
   logger.info(`Executing start_debug_session tool`, { error_message });
@@ -41,20 +36,26 @@ export async function handleStartDebugSession(
   });
   
   try {
-    // Ensure DEEBO_ROOT is set properly
-    if (!process.env.DEEBO_ROOT) {
-      process.env.DEEBO_ROOT = process.cwd();
-      sessionLogger.info('Setting DEEBO_ROOT to current directory', { 
-        DEEBO_ROOT: process.env.DEEBO_ROOT 
-      });
+    // Use PathResolver for safe directory handling
+    const { getPathResolver } = await import('../../util/path-resolver-helper.js');
+    const pathResolver = await getPathResolver();
+    
+    // Validate root directory
+    const rootDir = pathResolver.getRootDir();
+    if (!rootDir || rootDir === '/') {
+      throw new Error('Invalid root directory configuration');
     }
     
-    // Ensure reports directory exists
-    const { join } = await import('path');
-    const { ensureDirectory } = await import('../../util/init.js');
-    const reportsDir = ensureDirectory('reports');
-    sessionLogger.info('Ensured reports directory exists', { 
-      reportsDir
+    // Ensure required directories exist with validation
+    const reportsDir = await pathResolver.ensureDirectory('reports');
+    if (!(await pathResolver.validateDirectory(reportsDir))) {
+      throw new Error('Failed to create and validate reports directory');
+    }
+    
+    // Log successful initialization
+    sessionLogger.info('Session directories initialized', {
+      reportsDir,
+      rootDir
     });
   
     // Create session
@@ -88,7 +89,7 @@ export async function handleStartDebugSession(
     };
 
     // Add to active sessions for resource access
-    activeSessions.set(sessionId, session);
+    sessionManager.set(sessionId, session);
     sessionLogger.debug('Session object created', { session });
 
     // Start debug session with agent coordinator
@@ -121,20 +122,20 @@ export async function handleStartDebugSession(
     sessionLogger.close();
     
     // Construct error response
-  const errorResponse = debugSessionResponseSchema.parse({
-    session_id: sessionId,
-    status: "error",
-    message: `Failed to start debug session: ${error.message}`,
-    result: null,
-    timestamp: new Date().toISOString()
-  });
+    const errorResponse = debugSessionResponseSchema.parse({
+      session_id: sessionId,
+      status: "error",
+      message: `Failed to start debug session: ${error.message}`,
+      result: null,
+      timestamp: new Date().toISOString()
+    });
 
-  return {
-    content: [{ 
-      type: "text" as const,
-      text: JSON.stringify(errorResponse)
-    }],
-    isError: true
-  };
+    return {
+      content: [{ 
+        type: "text" as const,
+        text: JSON.stringify(errorResponse)
+      }],
+      isError: true
+    };
   }
 }

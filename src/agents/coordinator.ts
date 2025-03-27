@@ -1,21 +1,41 @@
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { ProtocolErrorCodes } from "../protocol/index.js";
-import { activeSessions } from "../resources/index.js";
+import { sessionManager } from "../resources/index.js";
 import { runMotherAgent } from "../mother-agent.js";
 import { isInitialized } from "./index.js";
+import type { DebugSession } from "../types/mcp.d.js";
 
-// Lazy initialize logger when needed
-let logger: any; // Type will be set when logger is created
-async function getLogger() {
-  if (!isInitialized) {
-    throw new Error('Cannot create logger - system not initialized');
-  }
+import type { LoggerLike } from '../types/logger.js';
+
+// Safe logger initialization
+let logger: LoggerLike;
+
+async function getLogger(): Promise<LoggerLike> {
+  if (logger) return logger;
   
-  if (!logger) {
+  // Start with initLogger
+  const { initLogger } = await import("../util/init-logger.js");
+  
+  try {
+    if (!process.env.DEEBO_ROOT) {
+      initLogger.info('DEEBO_ROOT not set, initializing directories');
+      const { initializeDirectories } = await import('../util/init.js');
+      await initializeDirectories();
+    }
+    
+    if (!isInitialized) {
+      initLogger.info('System not initialized, using initLogger');
+      return initLogger;
+    }
+    
+    // Now safe to create regular logger
     const { createLogger } = await import("../util/logger.js");
     logger = createLogger('server', 'agent-coordinator');
+    return logger;
+  } catch (error) {
+    initLogger.error('Logger initialization failed, using initLogger', { error });
+    return initLogger;
   }
-  return logger;
 }
 
 /**
@@ -31,7 +51,6 @@ export interface AgentState {
   progress?: number;
   result?: any;
   metadata?: {
-    debugType?: 'general' | 'race-condition' | 'race-condition-validator';
     parentAgent?: string;
     hypothesis?: string;
   };
@@ -54,7 +73,7 @@ export class AgentCoordinator {
     language?: string;
     filePath?: string;
     repoPath?: string;
-    debugType?: 'race-condition' | 'general';
+
   }): Promise<void> {
     const { sessionId, error, context, language, filePath, repoPath } = params;
     const log = await getLogger();
@@ -99,11 +118,15 @@ export class AgentCoordinator {
         motherAgent.lastUpdate = Date.now();
         
         // Update session
-        const session = activeSessions.get(sessionId);
+        const session = sessionManager.get(sessionId);
         if (session) {
-          session.status = 'complete';
-          session.finalResult = result;
-          session.logs.push('Debug session completed successfully');
+          const updatedSession: DebugSession = {
+            ...session,
+            status: 'complete',
+            finalResult: result,
+            logs: [...session.logs, 'Debug session completed successfully']
+          };
+          sessionManager.set(sessionId, updatedSession);
         }
         
         const log = await getLogger();
@@ -117,11 +140,15 @@ export class AgentCoordinator {
         motherAgent.lastUpdate = Date.now();
         
         // Update session
-        const session = activeSessions.get(sessionId);
+        const session = sessionManager.get(sessionId);
         if (session) {
-          session.status = 'error';
-          session.error = motherAgent.error;
-          session.logs.push(`Error: ${motherAgent.error}`);
+          const updatedSession: DebugSession = {
+            ...session,
+            status: 'error',
+            error: motherAgent.error,
+            logs: [...session.logs, `Error: ${motherAgent.error}`]
+          };
+          sessionManager.set(sessionId, updatedSession);
         }
         
         const log = await getLogger();
@@ -172,7 +199,6 @@ export class AgentCoordinator {
       startTime: Date.now(),
       lastUpdate: Date.now(),
       metadata: {
-        debugType: debugType || 'general',
         hypothesis
       }
     };
@@ -180,25 +206,8 @@ export class AgentCoordinator {
     this.agents.set(agentId, agent);
     log.debug('Created scenario agent state', { agent });
 
-    // For race conditions, automatically spawn a second agent to validate the fix
-    if (debugType === 'race-condition') {
-      const validatorId = `${agentId}-validator`;
-      const validatorAgent: AgentState = {
-        id: validatorId,
-        type: 'scenario',
-        status: 'initializing',
-        startTime: Date.now(),
-        lastUpdate: Date.now(),
-        metadata: {
-          debugType: 'race-condition-validator',
-          parentAgent: agentId,
-          hypothesis: `Validate fix for: ${hypothesis}`
-        }
-      };
-      
-      this.agents.set(validatorId, validatorAgent);
-      log.debug('Created validator agent state', { agent: validatorAgent });
-    }
+    // Let Claude decide validation strategy through mother agent
+    log.debug('Created scenario agent state', { agent });
   }
 
   /**

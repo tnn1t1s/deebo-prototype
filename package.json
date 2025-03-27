@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "start": "node --max-old-space-size=4096 -r dotenv/config build/index.js",
-    "dev": "tsc --watch & node --max-old-space-size=4096 -r dotenv/config --watch build/index.js",
+    "start": "node --experimental-specifier-resolution=node --experimental-modules --max-old-space-size=4096 build/index.js",
+    "dev": "tsc --watch & node --experimental-specifier-resolution=node --experimental-modules --max-old-space-size=4096 --watch build/index.js",
     "setup": "bash setup.sh",
     "setup:win": "powershell -ExecutionPolicy Bypass -File .\\setup.ps1",
     "check-env": "node check-env.js",
