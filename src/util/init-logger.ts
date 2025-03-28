@@ -1,8 +1,8 @@
 import { WriteStream, createWriteStream } from 'fs';
-import { join, dirname } from 'path';
+import { mkdir } from 'fs/promises';
+import { join } from 'path';
 import { tmpdir } from 'os';
-import { mkdirSync, existsSync } from 'fs';
-import { PathResolver } from './path-resolver.js';
+import { DIRS } from './config.js';
 
 class InitLogger {
   private stream: WriteStream | null = null;
@@ -28,40 +28,11 @@ class InitLogger {
     if (this.initialized) return;
 
     try {
-      // Get path resolver instance for safe directory operations
-      const pathResolver = await PathResolver.getInstance();
+      // Use logs directory from config
+      this.fallbackDirectory = DIRS.logs;
       
-      // Use path resolver to get safe log directory
-      const absoluteLogDir = await pathResolver.ensureDirectory('logs');
-      
-      if (!absoluteLogDir || absoluteLogDir === '/') {
-        throw new Error('Failed to get safe log directory');
-      }
-      
-      // Set this as our fallback directory
-      this.fallbackDirectory = absoluteLogDir;
-      
-      // Create temp directory with retries and exponential backoff
-      let retries = 3;
-      let delay = 100;
-      
-      while (retries > 0) {
-        try {
-          // Use validateDirectory to ensure it exists
-          const exists = await pathResolver.validateDirectory(this.fallbackDirectory);
-          if (!exists) {
-            // Use ensureDirectory which has built-in safety checks
-            await pathResolver.ensureDirectory('logs');
-          }
-          break;
-        } catch (error) {
-          if (retries === 1) throw error;
-          retries--;
-          // Exponential backoff
-          await new Promise(resolve => setTimeout(resolve, delay));
-          delay *= 2;
-        }
-      }
+      // Create logs directory
+      await mkdir(this.fallbackDirectory, { recursive: true });
 
       this.logPath = join(this.fallbackDirectory, 'init.log');
       

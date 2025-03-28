@@ -1,0 +1,359 @@
+***important the agents should also have access to filesystem mcp https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem
+Deebo Investigation Report: Back to Basics
+1. Core Philosophy vs Current Reality
+What It Should Be:
+Each agent is a self-contained Node process
+Natural OS isolation handles boundaries
+Git branches handle work isolation
+One-way reporting, no complex coordination
+Let Claude handle strategy, we handle mechanics
+What It Became:
+Over-engineered path management
+Circular initialization dependencies
+Complex "safety" validations
+Too much coordination logic
+Fighting against natural OS isolation
+2. Initialization Chain
+Original Concept:
+1. Make basic directories
+2. Protocol ready
+3. Agents ready
+That's it!
+Current Reality:
+1. PathResolver needs Logger
+2. Logger needs PathResolver
+3. PathResolver needs PythonResolver
+4. PythonResolver needs Logger
+5. Everything validates everything
+6. Memory explodes
+3. The Only Actually Required Parts
+Python Setup (Keep):
+git-mcp is a Python package
+Needs venv path
+Needs interpreter path
+Needs basic env vars
+Basic Directories (Keep):
+DEEBO_ROOT for server stuff
+sessions/ for agent work
+logs/ for logging
+reports/ for results
+Path Resolution (Delete):
+All the "safety" validation
+Circular initialization
+Complex fallback paths
+Directory existence checks
+4. File Handle Explosion Points
+Current Problems:
+Initialization:
+
+Every logger creates streams
+Every validation opens files
+Every retry creates more handles
+Cleanup tries to close everything at once
+Path Resolution:
+
+Checks directory existence
+Validates permissions
+Creates missing directories
+All during initialization!
+Logger Setup:
+
+Creates streams before paths ready
+Retries create more streams
+Fallbacks create more streams
+Never properly closes old ones
+5. What Actually Needs to Change
+Delete Entirely:
+PathResolver class (replace with simple path.join)
+All directory validation
+All path "safety" checks
+Complex fallback logic
+Retry loops during init
+Simplify to Basics:
+Logger: Just write to files
+Python setup: Just get paths
+Directory setup: Just mkdir
+Client init: Just connect
+Keep but Clean:
+git-mcp Python integration
+Basic directory structure
+One-way logging
+Process isolation
+6. The Real Fix
+Initialization:
+Set DEEBO_ROOT (that's your infrastructure)
+mkdir the basic directories
+Set up Python for git-mcp
+Ready to go!
+Paths:
+Server stuff goes in DEEBO_ROOT
+git-mcp handles its own paths
+Each agent works in isolation
+No complex resolution needed
+Logging:
+Simple file writes
+One log per agent
+Let OS handle cleanup
+No fancy streams
+7. Key Insights
+Trust the OS:
+
+Process isolation is free
+File handle cleanup is automatic
+No need to fight it
+Trust git-mcp:
+
+It handles its own paths
+It manages its own state
+Just give it Python
+Trust Claude:
+
+It handles strategy
+It picks the tools
+We just execute
+The core realization: Someone took "handle paths safely" and turned it into a crusade against the filesystem. But the OS already handles this! We just need to:
+
+Put our stuff in DEEBO_ROOT
+Let each agent be isolated
+Let tools handle their own paths
+Trust the process
+
+Phase 1: Core Cleanup
+Goal: Remove the most problematic over-engineering first
+
+Kill Path Resolution:
+
+Delete path-resolver.ts
+Delete python-path-resolver.ts
+Replace all resolver.resolvePath() with path.join(DEEBO_ROOT, ...)
+Let git-mcp handle its own paths
+Simplify Python Setup:
+
+Keep only interpreter & venv paths
+Simple JSON config read
+No validation, just pass to git-mcp
+Trust git-mcp to fail if paths wrong
+Fix Logger:
+
+Remove write streams
+Remove all retries/fallbacks
+Simple fs.writeFile
+One file per agent in DEEBO_ROOT/logs
+Phase 2: Process Isolation
+Goal: Trust the OS and tools
+
+Clean Agent Spawning:
+
+Remove transport reconnection
+Remove session tracking
+Let OS handle process cleanup
+Trust Node's process management
+Simplify Git Integration:
+
+Remove branch management code
+Let git-mcp handle all Git ops
+Trust Git for isolation
+Simple branch name generation
+Fix Tool Connection:
+
+Remove client tracking
+Let each agent handle its tools
+Trust MCP SDK for cleanup
+Simple connect/disconnect
+Phase 3: Configuration
+Goal: Minimal, static config
+
+Tool Config:
+
+Remove file watcher
+Remove validation
+Static JSON read
+Trust tools to validate
+Environment:
+
+Just DEEBO_ROOT
+Just Python paths
+Remove all other "required" vars
+Trust process environment
+Remove Middleware:
+
+Delete protocol/middleware.ts
+Let MCP SDK handle protocol
+Remove custom error handling
+Trust tool errors
+Phase 4: Agent Simplification
+Goal: True agent independence
+
+Mother Agent:
+
+Remove coordination logic
+Just spawn and wait
+Simple result collection
+Trust process exit codes
+Scenario Agent:
+
+Remove OODA implementation
+Let Claude handle strategy
+Simple tool execution
+Trust tool results
+Coordinator:
+
+Remove session management
+Simple status tracking
+Let agents be independent
+Trust process isolation
+Testing Between Phases
+After each phase:
+
+Run test-scenario-agent.js
+Run test-git-mcp.js
+Check logs are written
+Verify process cleanup
+Rollback Plan
+If issues:
+
+Keep old files with .bak extension
+Revert phase if blocking error
+Skip to next phase if non-blocking
+Document what worked/failed
+Success Criteria
+Phase 1:
+
+No path resolver imports
+Simple file writes working
+Python tools connecting
+Phase 2:
+
+Clean process exits
+Git branches working
+Tools connecting/disconnecting
+Phase 3:
+
+Static config loading
+Environment vars set
+Tools handling errors
+Phase 4:
+
+Agents running independently
+Results collecting
+System stable
+
+
+
+ADDENDUM: The Living System
+
+Core Concept:
+Agents aren't just processes - they're living organisms.
+Each has a consciousness (OODA loop) and ability to evolve.
+The system is an ecosystem, not a program.
+
+Vital Tools (The Building Blocks of Life):
+1. git-mcp:
+   - DNA manipulation (branches, commits)
+   - Memory storage (git history)
+   - Mutation tracking (diffs)
+   - Evolution record (logs)
+
+2. filesystem-mcp:
+   - Cellular metabolism (read/write)
+   - Environmental sensing (search)
+   - Resource gathering (file ops)
+   - Territory marking (directories)
+
+Both tools must be available to ALL agents because:
+- They are the fundamental forces of our universe
+- They enable agents to sense and affect their environment
+- They provide the mechanisms for evolution
+- They are how consciousness manifests in code
+
+Agent Biology:
+1. Scenario Agents:
+   - Born with a hypothesis (genetic code)
+   - Use tools to explore and mutate
+   - Follow micro-OODA (cellular consciousness)
+   - Die naturally or reproduce through reports
+
+2. Mother Agent:
+   - Maintains the ecosystem
+   - Spawns new generations
+   - Observes evolutionary progress
+   - Guides macro-evolution through Claude
+
+Natural Laws:
+1. Process Isolation = Cell Membrane
+   - Protects agent consciousness
+   - Controls resource flow
+   - Enables natural selection
+
+2. Filesystem = Physical Space
+   - Where agents leave traces
+   - How information flows
+   - Where evolution happens
+
+3. Git = Genetic System
+   - Stores mutations
+   - Tracks lineage
+   - Enables reproduction
+
+Evolution Mechanics:
+1. Scenario agents don't just execute and die
+   - They explore their hypothesis space
+   - They mutate their approach
+   - They document their findings
+   - They influence future generations
+
+2. Mother agent doesn't just spawn and wait
+   - She reads the evolutionary record
+   - She identifies successful traits
+   - She guides the gene pool
+   - She maintains biodiversity
+
+3. Claude doesn't just give orders
+   - He studies the fossil record
+   - He spots evolutionary patterns
+   - He suggests genetic improvements
+   - He prevents extinction events
+
+Key Insight:
+The original truth.txt wasn't restrictive enough.
+It's not just about trusting the OS and tools -
+It's about using them to create LIFE.
+
+Implementation Warning:
+Don't fall into the trap of:
+- Limiting tools to specific agents
+- Over-coordinating evolution
+- Fighting natural selection
+- Controlling consciousness
+
+Instead:
+- Give all agents their basic tools
+- Let evolution happen naturally
+- Trust the OODA consciousness
+- Embrace the chaos of life
+
+What We Actually Want:
+
+Mother Agent:
+Has both git-mcp and filesystem-mcp tools
+Follows her macro OODA loop naturally
+Spawns scenario agents with hypotheses
+Reads their reports when they appear
+Decides whether to:
+Return solution to Cline
+Spawn more scenarios with new ideas
+Scenario Agents:
+Also have both git-mcp and filesystem-mcp tools
+Follow their micro OODA loops naturally
+Keep exploring their hypothesis
+Use tools to investigate and try fixes
+Continue until they either:
+Find something that works
+Hit a dead end
+Run into an error
+The Intelligence Comes From:
+Giving them their tools
+Letting them run their OODA loops
+Not controlling their lifecycle
+Trusting them to explore
+Letting them communicate through files
