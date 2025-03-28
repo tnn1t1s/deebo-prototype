@@ -1,7 +1,5 @@
 import { spawn } from 'child_process';
 import { join } from 'path';
-import { mkdir, readFile } from 'fs/promises';
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { log } from './util/logger.js';
 import { connectMcpTool, getTextContent } from './util/mcp.js';
 import { DEEBO_ROOT } from './index.js';
