@@ -1,7 +1,8 @@
 import { mkdir } from 'fs/promises';
 import { join } from 'path';
-import { createLogger } from './util/logger.js';
-import { gitOperations, gitBranchOperations, filesystemOperations } from './util/mcp.js';
+import { log } from './util/logger.js';
+import { connectMcpTool } from './util/mcp.js';
+import { DEEBO_ROOT } from './index.js';
 
 type MicroOodaState = 'investigate' | 'analyze' | 'validate' | 'report';
 
@@ -49,38 +50,57 @@ function parseArgs(args: string[]): ScenarioArgs {
  * - Follows micro-OODA naturally
  */
 export async function runScenarioAgent(args: ScenarioArgs) {
-  const logger = await createLogger(args.session, `scenario-${args.id}`);
-  await logger.info('Scenario agent started', { hypothesis: args.hypothesis });
+  await log(args.session, `scenario-${args.id}`, 'info', 'Scenario agent started', { hypothesis: args.hypothesis });
 
   try {
     // INVESTIGATE: Connect to tools
-    await logger.info('Micro OODA cycle', { state: 'investigate' as MicroOodaState });
+    await log(args.session, `scenario-${args.id}`, 'info', 'Micro OODA cycle', { state: 'investigate' as MicroOodaState });
+    const gitClient = await connectMcpTool('scenario-git', 'git-mcp');
+    const filesystemClient = await connectMcpTool('scenario-filesystem', 'filesystem-mcp');
+
     // Create investigation branch if we have a repo
     if (args.repoPath) {
       const branchName = `debug-${args.session}-${Date.now()}`;
-      await gitBranchOperations.createBranch(args.repoPath, branchName);
-      await gitBranchOperations.checkoutBranch(args.repoPath, branchName);
+      await gitClient.callTool({
+        name: 'git_create_branch',
+        arguments: { repo_path: args.repoPath, branch_name: branchName }
+      });
+      await gitClient.callTool({
+        name: 'git_checkout',
+        arguments: { repo_path: args.repoPath, branch_name: branchName }
+      });
     }
 
     let complete = false;
     while (!complete) {
       // INVESTIGATE: Gather current state
-      await logger.info('Micro OODA cycle', { state: 'investigate' as MicroOodaState });
+      await log(args.session, `scenario-${args.id}`, 'info', 'Micro OODA cycle', { state: 'investigate' as MicroOodaState });
       const observations = {
         git: args.repoPath ? {
-          status: await gitOperations.status(args.repoPath),
-          diff: await gitOperations.diffUnstaged(args.repoPath)
+          status: await gitClient.callTool({
+            name: 'git_status',
+            arguments: { repo_path: args.repoPath }
+          }),
+          diff: await gitClient.callTool({
+            name: 'git_diff',
+            arguments: { repo_path: args.repoPath }
+          })
         } : null,
-        files: args.filePath ? 
-          await filesystemOperations.readFile(args.filePath) : null,
-        context: await filesystemOperations.searchCode(
-          '*.{js,ts,json}',
-          args.repoPath || process.env.DEEBO_ROOT || process.cwd()
-        )
+        files: args.filePath ? await filesystemClient.callTool({
+          name: 'read_file',
+          arguments: { path: args.filePath }
+        }) : null,
+        context: await filesystemClient.callTool({
+          name: 'search_files',
+          arguments: { 
+            path: args.repoPath || DEEBO_ROOT,
+            pattern: '*.{js,ts,json}'
+          }
+        })
       };
 
       // ANALYZE: Let Claude determine next actions
-      await logger.info('Micro OODA cycle', { state: 'analyze' as MicroOodaState });
+      await log(args.session, `scenario-${args.id}`, 'info', 'Micro OODA cycle', { state: 'analyze' as MicroOodaState });
       // Trust process environment - no need to handle API key
       const anthropic = new (await import('@anthropic-ai/sdk')).default();
 
@@ -113,44 +133,16 @@ Return JSON with:
       const { actions, complete: shouldComplete, success, explanation } = JSON.parse(content.text);
 
       // VALIDATE: Execute suggested actions
-      await logger.info('Micro OODA cycle', { state: 'validate' as MicroOodaState });
+      await log(args.session, `scenario-${args.id}`, 'info', 'Micro OODA cycle', { state: 'validate' as MicroOodaState });
       if (actions?.length) {
-        // Define which operations need different argument handling
-        const GIT_REPO_OPS = ['git_status', 'git_diff', 'git_checkout', 'git_create_branch'];
-        const CACHE_OPS = ['get_cached_tasks', 'set_cached_tasks', 'invalidate_task_cache'];
-
         for (const action of actions) {
-          if (action.tool === 'git-mcp') {
-            if (GIT_REPO_OPS.includes(action.name) && args.repoPath) {
-              switch (action.name) {
-                case 'git_status':
-                  await gitOperations.status(args.repoPath);
-                  break;
-                case 'git_diff':
-                  await gitOperations.diffUnstaged(args.repoPath);
-                  break;
-                case 'git_checkout':
-                  await gitBranchOperations.checkoutBranch(args.repoPath, action.args.branch_name);
-                  break;
-                case 'git_create_branch':
-                  await gitBranchOperations.createBranch(args.repoPath, action.args.branch_name);
-                  break;
-              }
-            }
-          } else {
-            // Handle filesystem operations
-            switch (action.name) {
-              case 'read_file':
-                await filesystemOperations.readFile(action.args.path);
-                break;
-              case 'write_file':
-                await filesystemOperations.writeFile(action.args.path, action.args.content);
-                break;
-              case 'search_files':
-                await filesystemOperations.searchCode(action.args.pattern, action.args.path);
-                break;
-            }
-          }
+          const client = action.tool === 'git-mcp' ? gitClient : filesystemClient;
+          const toolArgs = action.tool === 'git-mcp' ? { ...action.args, repo_path: args.repoPath } : action.args;
+
+          await client.callTool({
+            name: action.name,
+            arguments: toolArgs
+          });
         }
       }
 
@@ -158,27 +150,32 @@ Return JSON with:
       if (shouldComplete) {
         complete = true;
         // REPORT: Write findings
-        await logger.info('Micro OODA cycle', { state: 'report' as MicroOodaState });
+        await log(args.session, `scenario-${args.id}`, 'info', 'Micro OODA cycle', { state: 'report' as MicroOodaState });
         // Create reports directory
-        const reportsDir = join(process.env.DEEBO_ROOT || process.cwd(), 'reports');
+        const reportsDir = join(DEEBO_ROOT, 'reports');
         await mkdir(reportsDir, { recursive: true });
         
-        const reportPath = join(process.env.DEEBO_ROOT || process.cwd(), 'reports', `${args.id}-report-${Date.now()}.json`);
+        const reportPath = join(DEEBO_ROOT, 'reports', `${args.id}-report-${Date.now()}.json`);
         const report = {
           success,
           explanation,
-          changes: success && args.repoPath ? 
-            await gitOperations.diffUnstaged(args.repoPath) : null
+          changes: success ? await gitClient.callTool({
+            name: 'git_diff',
+            arguments: { repo_path: args.repoPath }
+          }) : null
         };
 
-        await filesystemOperations.writeFile(
-          reportPath,
-          JSON.stringify(report, null, 2)
-        );
+        await filesystemClient.callTool({
+          name: 'write_file',
+          arguments: {
+            path: reportPath,
+            content: JSON.stringify(report, null, 2)
+          }
+        });
       }
     }
   } catch (error) {
-    await logger.error('Scenario agent failed', { error });
+    await log(args.session, `scenario-${args.id}`, 'error', 'Scenario agent failed', { error });
     throw error;
   }
 }

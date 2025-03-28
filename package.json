@@ -22,7 +22,7 @@
     "@modelcontextprotocol/server-filesystem": "^2025.1.14",
     "cors": "^2.8.5",
     "dockerode": "^4.0.0",
-    "dotenv": "^16.4.1",
+    "dotenv": "^16.4.7",
     "express": "^5.0.1",
     "p-limit": "^6.2.0",
     "urlpattern-polyfill": "^10.0.0",
