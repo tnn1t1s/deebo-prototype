@@ -1,6 +1,7 @@
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { ProtocolErrorCodes } from "../protocol/index.js";
 import { sessionManager } from "../resources/index.js";
+import { createLogEntry } from "../util/log-validator.js";
 import { runMotherAgent } from "../mother-agent.js";
 import { isInitialized } from "./index.js";
 import type { DebugSession } from "../types/mcp.d.js";
@@ -18,22 +19,22 @@ async function getLogger(): Promise<LoggerLike> {
   
   try {
     if (!process.env.DEEBO_ROOT) {
-      initLogger.info('DEEBO_ROOT not set, initializing directories');
+      await initLogger.info('DEEBO_ROOT not set, initializing directories');
       const { initializeDirectories } = await import('../util/init.js');
       await initializeDirectories();
     }
     
     if (!isInitialized) {
-      initLogger.info('System not initialized, using initLogger');
+      await initLogger.info('System not initialized, using initLogger');
       return initLogger;
     }
     
     // Now safe to create regular logger
     const { createLogger } = await import("../util/logger.js");
-    logger = createLogger('server', 'agent-coordinator');
+    logger = await createLogger('server', 'agent-coordinator');
     return logger;
   } catch (error) {
-    initLogger.error('Logger initialization failed, using initLogger', { error });
+    await initLogger.error('Logger initialization failed, using initLogger', { error });
     return initLogger;
   }
 }
@@ -77,7 +78,7 @@ export class AgentCoordinator {
   }): Promise<void> {
     const { sessionId, error, context, language, filePath, repoPath } = params;
     const log = await getLogger();
-    log.info('Starting new debug session', { 
+    await log.info('Starting new debug session', { 
       sessionId,
       hasFilePath: !!filePath,
       hasRepoPath: !!repoPath
@@ -86,10 +87,10 @@ export class AgentCoordinator {
     try {
       // Log warnings for missing paths
       if (!repoPath) {
-        log.warn('No repository path provided, some features will be limited');
+        await log.warn('No repository path provided, some features will be limited');
       }
       if (!filePath) {
-        log.warn('No file path provided, some features will be limited');
+        await log.warn('No file path provided, some features will be limited');
       }
 
       // Create mother agent state
@@ -102,7 +103,7 @@ export class AgentCoordinator {
       };
       
       this.agents.set(motherAgent.id, motherAgent);
-      log.debug('Created mother agent state', { agent: motherAgent });
+      await log.debug('Created mother agent state', { agent: motherAgent });
 
       // Start mother agent
       runMotherAgent(
@@ -124,13 +125,13 @@ export class AgentCoordinator {
             ...session,
             status: 'complete',
             finalResult: result,
-            logs: [...session.logs, 'Debug session completed successfully']
+            logs: [...session.logs, createLogEntry('session_complete', 'Debug session completed successfully', { result })]
           };
           sessionManager.set(sessionId, updatedSession);
         }
         
         const log = await getLogger();
-        log.info('Mother agent completed successfully', { 
+        await log.info('Mother agent completed successfully', { 
           sessionId,
           result 
         });
@@ -146,13 +147,13 @@ export class AgentCoordinator {
             ...session,
             status: 'error',
             error: motherAgent.error,
-            logs: [...session.logs, `Error: ${motherAgent.error}`]
+            logs: [...session.logs, createLogEntry('session_error', 'Debug session failed', { error: motherAgent.error })]
           };
           sessionManager.set(sessionId, updatedSession);
         }
         
         const log = await getLogger();
-        log.error('Mother agent failed', { 
+        await log.error('Mother agent failed', { 
           sessionId,
           error: motherAgent.error 
         });
@@ -160,7 +161,7 @@ export class AgentCoordinator {
 
     } catch (error) {
       const log = await getLogger();
-      log.error('Failed to start debug session', {
+      await log.error('Failed to start debug session', {
         sessionId,
         error: error instanceof Error ? error.message : String(error)
       });
@@ -185,7 +186,7 @@ export class AgentCoordinator {
     const log = await getLogger();
     
     const agentId = `scenario-${scenarioId}`;
-    log.info('Registering scenario agent', { 
+    await log.info('Registering scenario agent', { 
       sessionId, 
       scenarioId,
       hypothesis,
@@ -204,10 +205,10 @@ export class AgentCoordinator {
     };
 
     this.agents.set(agentId, agent);
-    log.debug('Created scenario agent state', { agent });
+    await log.debug('Created scenario agent state', { agent });
 
     // Let Claude decide validation strategy through mother agent
-    log.debug('Created scenario agent state', { agent });
+    await log.debug('Created scenario agent state', { agent });
   }
 
   /**
@@ -224,7 +225,7 @@ export class AgentCoordinator {
 
     Object.assign(agent, update, { lastUpdate: Date.now() });
     const log = await getLogger();
-    log.debug('Updated agent state', { agentId, update });
+    await log.debug('Updated agent state', { agentId, update });
   }
 
   /**
@@ -254,14 +255,24 @@ export class AgentCoordinator {
    */
   async cleanupSession(sessionId: string): Promise<void> {
     const log = await getLogger();
-    log.info('Cleaning up session agents', { sessionId });
+    await log.info('Cleaning up session agents', { sessionId });
     
+    // Clean up agents
     for (const [agentId, agent] of this.agents.entries()) {
       if (agent.id.includes(sessionId)) {
         this.agents.delete(agentId);
-        log.debug('Removed agent', { agentId });
+        await log.debug('Removed agent', { agentId });
       }
     }
+
+    // Clean up tool config
+    const { ToolConfigManager } = await import('../util/tool-config.js');
+    const configManager = await ToolConfigManager.getInstance();
+    await configManager.dispose();
+
+    // Clean up MCP clients
+    const { disposeMcpClients } = await import('../util/mcp.js');
+    await disposeMcpClients();
   }
 }
 

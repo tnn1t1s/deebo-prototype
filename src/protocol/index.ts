@@ -21,8 +21,11 @@ export async function initializeProtocol(): Promise<void> {
 
   try {
     // Initialize path resolver for safe path handling
-    const { getPathResolver } = await import('../util/path-resolver-helper.js');
-    const pathResolver = await getPathResolver();
+    const { PathResolver } = await import('../util/path-resolver.js');
+    const pathResolver = await PathResolver.getInstance();
+    if (!pathResolver.isInitialized()) {
+      await pathResolver.initialize(process.env.DEEBO_ROOT || process.cwd());
+    }
     
     // Validate root directory is set correctly
     const rootDir = pathResolver.getRootDir();
@@ -32,12 +35,14 @@ export async function initializeProtocol(): Promise<void> {
     
     // Now safe to use regular logger
     const { createLogger } = await import('../util/logger.js');
-    logger = createLogger('server', 'protocol');
+    logger = await createLogger('server', 'protocol');
     
     isInitialized = true;
-    logger.info('Protocol system initialized');
-  } catch (error) {
-    logger.error('Failed to initialize protocol system', { error });
+    await logger.info('Protocol system initialized');
+  } catch (error: unknown) {
+    await logger.error('Failed to initialize protocol system', { 
+      error: error instanceof Error ? error.message : String(error) 
+    });
     throw error;
   }
 }
@@ -223,7 +228,7 @@ export class RateLimiter {
 
     // Log rate limit check
     const log = await getLogger();
-    log.debug('Rate limit check', {
+    await log.debug('Rate limit check', {
       clientId,
       count: state.count,
       resetTime: state.resetTime
@@ -237,7 +242,7 @@ export class RateLimiter {
   async resetLimit(clientId: string) {
     this.requests.delete(clientId);
     const log = await getLogger();
-    log.debug('Rate limit reset', { clientId });
+    await log.debug('Rate limit reset', { clientId });
   }
 }
 

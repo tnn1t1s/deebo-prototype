@@ -1,23 +1,34 @@
-import { mkdirSync, existsSync } from 'fs';
-import path, { join } from 'path';
+let isInitialized = false;
+
+// Track initialization state
+export function getInitialized() {
+  console.log('getInitialized called, current state:', isInitialized);
+  return isInitialized;
+}
+
+// Initialize all core systems
+export async function initializeCore(server?: any) {
+  console.log('Starting core initialization');
+
+  // Initialize key directories first
+  await initializeDirectories();
+
+  // Initialize protocol layer
+  const { initializeProtocol } = await import('../protocol/index.js');
+  await initializeProtocol();
+
+  // Initialize agents if server provided
+  if (server) {
+    const { initializeAgents } = await import('../agents/index.js');
+    await initializeAgents(server);
+  }
+
+  isInitialized = true;
+  console.log('Core initialization complete');
+}
+
 import { homedir, tmpdir } from 'os';
 import { initLogger } from './init-logger.js';
-
-/**
- * Create a directory and its parents if they don't exist
- */
-function createDirSafe(baseDir: string, dir: string): void {
-  const fullPath = join(baseDir, dir);
-  if (!existsSync(fullPath)) {
-    try {
-      mkdirSync(fullPath, { recursive: true, mode: 0o755 });
-      initLogger.info('Created directory', { path: fullPath });
-    } catch (error) {
-      initLogger.error('Failed to create directory', { path: fullPath, error: String(error) });
-      throw error;
-    }
-  }
-}
 
 /**
  * Initialize all required directories
@@ -28,8 +39,11 @@ export async function initializeDirectories(): Promise<string> {
   initLogger.info('Initializing required directories');
   
   // Get path resolver for safety checks
-  const { getPathResolver } = await import('./path-resolver-helper.js');
-  const resolver = await getPathResolver();
+  const { PathResolver } = await import('./path-resolver.js');
+  const resolver = await PathResolver.getInstance();
+  if (!resolver.isInitialized()) {
+    await resolver.initialize(process.env.DEEBO_ROOT || process.cwd());
+  }
   
   // Strict validation of current directory
   const currentDir = process.cwd();
@@ -37,7 +51,7 @@ export async function initializeDirectories(): Promise<string> {
     const errMsg = 'CRITICAL SAFETY ISSUE: Current working directory is system root or unsafe path. This is not supported.';
     initLogger.error(errMsg);
     // Instead of throwing, try to use a safe fallback
-    const safeDir = join(homedir(), '.local', 'share', 'deebo-prototype');
+    const safeDir = `${homedir()}/.local/share/deebo-prototype`;
     
     initLogger.info('Using safe fallback directory', { path: safeDir });
     await resolver.initialize(safeDir);
@@ -75,21 +89,15 @@ export async function initializeDirectories(): Promise<string> {
       initLogger.info('Updated DEEBO_ROOT environment variable', { path: process.env.DEEBO_ROOT });
     }
     
-    // Create required directories, using relative paths only to avoid any absolute path issues
     initLogger.info('Creating required directories using relative paths only');
     
-    // Use a consistent naming convention for all output paths
-    const tmpDir = await resolver.ensureDirectory('tmp');
-    initLogger.info('Created directory', { name: 'tmp', path: tmpDir });
-    
-    const sessionsDir = await resolver.ensureDirectory('sessions');
-    initLogger.info('Created directory', { name: 'sessions', path: sessionsDir });
-    
-    const serverDir = await resolver.ensureDirectory('sessions/server');
-    initLogger.info('Created directory', { name: 'sessions/server', path: serverDir });
-    
-    const reportsDir = await resolver.ensureDirectory('reports');
-    initLogger.info('Created directory', { name: 'reports', path: reportsDir });
+    const dirs = ['tmp', 'sessions', 'sessions/server', 'reports'];
+    await Promise.all(
+      dirs.map(async (dir) => {
+        const dirPath = await resolver.ensureDirectory(dir);
+        initLogger.info('Created directory', { name: dir, path: dirPath });
+      })
+    );
     
     initLogger.info('Directory initialization complete', { location: 'project directory', path: projectDir });
     return projectDir;
@@ -104,29 +112,20 @@ export async function initializeDirectories(): Promise<string> {
       throw new Error('Could not determine home directory');
     }
 
-    const fallbackDir = join(home, '.deebo-prototype');
+    const fallbackDir = `${home}/.deebo-prototype`;
     initLogger.info('Falling back to home directory', { path: fallbackDir });
-
-    // Create base fallback directory with traditional method first
-    if (!existsSync(fallbackDir)) {
-      mkdirSync(fallbackDir, { recursive: true, mode: 0o755 });
-    }
     
-    // Re-initialize the path resolver with the fallback directory
+    // Initialize resolver with fallback directory
     await resolver.initialize(fallbackDir);
     
-    // Create all required directories - using only relative paths for safety
-    const tmpDir = await resolver.ensureDirectory('tmp');
-    initLogger.info('Created directory in home fallback', { name: 'tmp', path: tmpDir });
-    
-    const sessionsDir = await resolver.ensureDirectory('sessions');
-    initLogger.info('Created directory in home fallback', { name: 'sessions', path: sessionsDir });
-    
-    const serverDir = await resolver.ensureDirectory('sessions/server');
-    initLogger.info('Created directory in home fallback', { name: 'sessions/server', path: serverDir });
-    
-    const reportsDir = await resolver.ensureDirectory('reports');
-    initLogger.info('Created directory in home fallback', { name: 'reports', path: reportsDir });
+    // Create required directories in parallel
+    const dirs = ['tmp', 'sessions', 'sessions/server', 'reports'];
+    await Promise.all(
+      dirs.map(async (dir) => {
+        const dirPath = await resolver.ensureDirectory(dir);
+        initLogger.info('Created directory in home fallback', { name: dir, path: dirPath });
+      })
+    );
     
     initLogger.info('Directory initialization complete', { location: 'home directory', path: fallbackDir });
     return fallbackDir;
@@ -136,15 +135,10 @@ export async function initializeDirectories(): Promise<string> {
 
   // Final fallback to system temp directory
   try {
-    const tempDir = join(tmpdir(), 'deebo-prototype');
+    const tempDir = `${tmpdir()}/deebo-prototype`;
     initLogger.info('Falling back to temp directory', { path: tempDir });
-
-    // Create base fallback directory with traditional method first
-    if (!existsSync(tempDir)) {
-      mkdirSync(tempDir, { recursive: true, mode: 0o755 });
-    }
     
-    // Re-initialize the path resolver with the temp directory
+    // Initialize resolver with temp directory
     await resolver.initialize(tempDir);
     
     // Create all required directories - using only relative paths for safety
@@ -181,78 +175,28 @@ export async function ensureDirectory(dirPath: string): Promise<string> {
     throw new Error(errorMsg);
   }
   
-  // CRITICAL SAFETY CHECK: Never attempt to create directories at system root level
-  if (dirPath === '/' || dirPath.match(/^\/[^/]+$/)) {
-    const errorMsg = `CRITICAL SAFETY ERROR: Attempted to create system root-level directory: ${dirPath}`;
-    initLogger.error(errorMsg);
-    throw new Error(errorMsg);
-  }
-  
   // Get path resolver instance for safe path handling
-  const { getPathResolver } = await import('./path-resolver-helper.js');
-  const resolver = await getPathResolver();
-  
-  // Log the operation with clear input information
-  initLogger.info('Ensuring directory exists', { 
-    dirPath,
-    rootDir: resolver.getRootDir()
-  });
+  const { PathResolver } = await import('./path-resolver.js');
+  const resolver = await PathResolver.getInstance();
+if (!resolver.isInitialized()) {
+  await resolver.initialize(process.env.DEEBO_ROOT || process.cwd());
+}
   
   try {
-    // Convert any absolute path to relative for safety
-    let normalizedPath = dirPath;
-    if (path.isAbsolute(dirPath)) {
-      normalizedPath = dirPath.replace(/^\/+/, '');
-      initLogger.info('Converted absolute path to relative for safety', {
-        original: dirPath,
-        normalized: normalizedPath
-      });
-    }
-    
-    // Use the improved path resolver to ensure the directory exists
-    const absolutePath = await resolver.ensureDirectory(normalizedPath);
-    
-    // Verify the directory exists after creation
-    const exists = await resolver.validateDirectory(absolutePath);
-    if (!exists) {
-      throw new Error(`Directory creation succeeded but verification failed: ${absolutePath}`);
-    }
+    // Use the path resolver to ensure the directory exists
+    const absolutePath = await resolver.ensureDirectory(dirPath);
     
     initLogger.info('Directory creation successful', { 
       requestedPath: dirPath,
-      normalizedPath,
       createdPath: absolutePath
     });
     
     return absolutePath;
   } catch (error) {
-    initLogger.error('Failed to ensure directory via path resolver', { 
+    initLogger.error('Failed to ensure directory', { 
       error: String(error),
       dirPath
     });
-    
-    // As a last resort, try system temp directory
-    try {
-      // For the fallback approach, remove any leading slashes for consistency
-      const normalizedPath = dirPath.replace(/^\/+/, '');
-      const systemTmpPath = join(tmpdir(), 'deebo-prototype', normalizedPath);
-      
-      initLogger.info('Attempting to create directory in system temp as last resort', { 
-        originalPath: dirPath,
-        normalizedPath,
-        systemTmpPath
-      });
-      
-      mkdirSync(systemTmpPath, { recursive: true, mode: 0o755 });
-      
-      initLogger.info('Successfully created directory in system temp', { path: systemTmpPath });
-      return systemTmpPath;
-    } catch (fallbackError) {
-      initLogger.error('Failed to create directory even in system temp', { 
-        error: String(fallbackError),
-        originalPath: dirPath 
-      });
-      throw new Error(`Failed to create directory ${dirPath} in any location: ${error}`);
-    }
+    throw error;
   }
 }

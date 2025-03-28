@@ -4,6 +4,7 @@ import {
   ErrorCode, 
   McpError
 } from "@modelcontextprotocol/sdk/types.js";
+import { createLogEntry } from "../../util/log-validator.js";
 import { sessionManager } from "../../resources/index.js";
 import { agentCoordinator } from "../../agents/coordinator.js";
 import { getLogger } from "../logger.js";
@@ -32,9 +33,9 @@ export async function handleStartDebugSession(
   
   const sessionId = uuidv4();
   const { createLogger } = await import("../../util/logger.js");
-  const sessionLogger = createLogger(sessionId, 'mcp-session');
+  const sessionLogger = await createLogger(sessionId, 'mcp-session');
   
-  sessionLogger.info('Starting new debug session', {
+  await sessionLogger.info('Starting new debug session', {
     error: error_message.substring(0, 100), // Truncate long errors
     language,
     file_path,
@@ -43,9 +44,41 @@ export async function handleStartDebugSession(
   
   try {
     // Initialize directories using PathResolver
-    const { getPathResolver } = await import('../../util/path-resolver-helper.js');
-    const pathResolver = await getPathResolver();
+    const { PathResolver } = await import('../../util/path-resolver.js');
+    await sessionLogger.info('Initializing PathResolver');
+    const pathResolver = await PathResolver.getInstance();
+    if (!pathResolver.isInitialized()) {
+      await pathResolver.initialize(process.env.DEEBO_ROOT || process.cwd());
+    }
+    
+    // Validate environment setup
+    await sessionLogger.info('Validating environment setup');
+    const deeboRoot = process.env.DEEBO_ROOT;
+    
+    if (!deeboRoot) {
+      throw new Error('DEEBO_ROOT environment variable not set');
+    }
+    
+    await sessionLogger.info('Environment validated', {
+      DEEBO_ROOT: deeboRoot
+    });
+    
+    // Ensure required directories exist
+    await sessionLogger.info('Creating required directories');
     await pathResolver.ensureDirectory('reports');
+    await pathResolver.ensureDirectory(`sessions/${sessionId}/logs`);
+    await pathResolver.ensureDirectory(`sessions/${sessionId}/workspace`);
+    await sessionLogger.info('Directories created successfully');
+    
+    // Validate repository path if provided
+    if (repo_path) {
+      await sessionLogger.info('Validating repository path', { repo_path });
+      const isValidDir = await pathResolver.validateDirectory(repo_path);
+      if (!isValidDir) {
+        throw new Error(`Invalid repository path: ${repo_path}`);
+      }
+      await sessionLogger.info('Repository path validated');
+    }
     
     // Create session with structured logging
     const session: DebugSession = {
@@ -54,19 +87,15 @@ export async function handleStartDebugSession(
       startTime: Date.now(),
       lastChecked: Date.now(),
       logs: [
-        JSON.stringify({
-          timestamp: new Date().toISOString(),
-          type: 'session_start',
-          data: {
-            sessionId,
-            config: {
-              language: language || "Not specified",
-              filePath: file_path || "Not provided",
-              repoPath: repo_path || "Not provided",
-              contextSize: code_context?.length || 0
-            },
-            error: error_message
-          }
+        createLogEntry('session_start', 'Debug session started', {
+          sessionId,
+          config: {
+            language: language || "Not specified",
+            filePath: file_path || "Not provided",
+            repoPath: repo_path || "Not provided",
+            contextSize: code_context?.length || 0
+          },
+          error: error_message
         })
       ],
       scenarioResults: [],
@@ -82,7 +111,19 @@ export async function handleStartDebugSession(
 
     // Add to active sessions for resource access
     sessionManager.set(sessionId, session);
-    sessionLogger.debug('Session object created', { session });
+    await sessionLogger.debug('Session object created', { 
+      sessionId,
+      status: session.status,
+      startTime: new Date(session.startTime).toISOString()
+    });
+
+    // Initialize MCP clients
+    await sessionLogger.info('Initializing MCP clients');
+    const { initMcpClients } = await import('../../util/mcp.js');
+    await initMcpClients().catch(error => {
+      throw new Error(`Failed to initialize MCP clients: ${error}`);
+    });
+    await sessionLogger.info('MCP clients initialized successfully');
 
     // Start debug session with agent coordinator
     await agentCoordinator.startSession({
@@ -94,7 +135,16 @@ export async function handleStartDebugSession(
       repoPath: repo_path
     });
 
-    sessionLogger.info('Debug session started successfully');
+    await sessionLogger.info('Debug session started successfully', {
+      sessionId,
+      startTime: new Date().toISOString(),
+      config: {
+        language,
+        filePath: file_path || 'not provided',
+        repoPath: repo_path || 'not provided',
+        contextSize: code_context?.length || 0
+      }
+    });
     const response = debugSessionResponseSchema.parse({
       session_id: sessionId,
       status: "running",
@@ -110,15 +160,60 @@ export async function handleStartDebugSession(
       }]
     };
   } catch (error: any) {
-    sessionLogger.error('Failed to start debug session', { error: error.message });
-    sessionLogger.close();
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorContext = {
+      sessionId,
+      language,
+      hasFilePath: !!file_path,
+      hasRepoPath: !!repo_path,
+      environmentState: {
+        DEEBO_ROOT: process.env.DEEBO_ROOT || 'not set',
+        PYTHONPATH: process.env.PYTHONPATH ? 'set' : 'not set',
+        PATH: process.env.PATH ? 'set' : 'not set'
+      }
+    };
+
+    // Log detailed error information
+    await sessionLogger.error('Failed to start debug session', { 
+      error: errorMessage,
+      ...errorContext,
+      stack: error instanceof Error ? error.stack : undefined
+    });
+
+    try {
+      // Clean up session gracefully
+      await sessionLogger.info('Cleaning up session resources');
+      await agentCoordinator.cleanupSession(sessionId);
+      
+      await sessionLogger.info('Session cleanup completed');
+    } catch (cleanupError) {
+      await sessionLogger.error('Failed to clean up session resources', {
+        error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+      });
+    }
+
+    await sessionLogger.close();
     
-    // Construct error response
+    // Determine appropriate error code
+    let errorCode = ErrorCode.InternalError;
+    if (errorMessage.includes('DEEBO_ROOT')) {
+      errorCode = ErrorCode.InvalidParams;
+    } else if (errorMessage.includes('repository path')) {
+      errorCode = ErrorCode.InvalidRequest;
+    }
+
+    // Construct detailed error response
     const errorResponse = debugSessionResponseSchema.parse({
       session_id: sessionId,
       status: "error",
-      message: `Failed to start debug session: ${error.message}`,
-      result: null,
+      message: `Failed to start debug session: ${errorMessage}`,
+      result: {
+        error: {
+          code: errorCode,
+          message: errorMessage,
+          context: errorContext
+        }
+      },
       timestamp: new Date().toISOString()
     });
 

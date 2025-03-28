@@ -1,6 +1,6 @@
 // External imports
 import { spawn } from 'child_process';
-import { AnthropicClient } from './util/anthropic.js';
+import AnthropicClient from './util/anthropic.js';
 import { join } from 'path';
 import fs from 'fs/promises';
 
@@ -10,12 +10,12 @@ import { McpError } from '@modelcontextprotocol/sdk/types.js';
 // Internal imports
 import { createLogger } from './util/logger.js';
 import { ensureDirectory } from './util/init.js';
-import { getPathResolver } from './util/path-resolver-helper.js';
+import { PathResolver } from './util/path-resolver.js';
 import { filesystemOperations, initMcpClients } from './util/mcp.js';
 import { agentCoordinator } from './agents/coordinator.js';
 import { ProtocolErrorCodes } from './protocol/index.js';
 import { isInitialized } from './agents/index.js';
-import { ScenarioAgentFactory, runAutonomousAgent } from './agents/factory.js';
+import { ScenarioAgentFactory } from './agents/factory.js';
 import type { LoggerLike } from './types/logger.js';
 
 // Types for Claude responses
@@ -152,26 +152,25 @@ export async function runMotherAgent(
   repoPath: string | undefined
 ) {
   // Initialize using PathResolver
-  const { getPathResolver } = await import('./util/path-resolver-helper.js');
-  const pathResolver = await getPathResolver();
+  const pathResolver = await PathResolver.getInstance();
   await pathResolver.ensureDirectory(`sessions/${sessionId}/logs`);
   
   const logger = await getLogger(sessionId, 'mother');
   
   // Initialize MCP clients
-  logger.info('Initializing MCP clients');
+  await logger.info('Initializing MCP clients');
   await initMcpClients().catch(error => {
     logger.error('Failed to initialize MCP clients', { error });
     throw new Error(`Failed to initialize required MCP clients: ${error}`);
   });
   
   // Log path configuration
-  logger.info('Path configuration', {
+  await logger.info('Path configuration', {
     repoPath: repoPath || 'not provided',
     filePath: filePath || 'not provided'
   });
 
-  logger.info('Mother agent started', {
+  await logger.info('Mother agent started', {
     error: error.substring(0, 100), // Truncate long errors
     language,
     filePath: filePath || 'not provided',
@@ -193,7 +192,7 @@ export async function runMotherAgent(
     });
 
     while (!complete && iteration < maxIterations) {
-      logger.info(`Starting OODA iteration ${iteration + 1}`);
+      await logger.info(`Starting OODA iteration ${iteration + 1}`);
       
       // Update progress
       agentCoordinator.updateAgentState(motherAgentId, {
@@ -201,121 +200,110 @@ export async function runMotherAgent(
       });
 
       // OBSERVE: Analyze error and results from previous iteration
-      logger.info('OBSERVE: Gathering observations');
+      await logger.info('OBSERVE: Gathering observations');
       const observations = await gatherObservations(sessionId, iteration);
-      logger.debug('Observations gathered', { observations });
+      await logger.debug('Observations gathered', { observations });
       
       // ORIENT: Let Claude analyze error and suggest approaches
-      logger.info('ORIENT: Analyzing error and generating investigation plan');
+      await logger.info('ORIENT: Analyzing error and generating investigation plan');
       const analysis = await anthropicClient.messages.create({
         model: 'claude-3-5-sonnet-20241022',
         max_tokens: 1024,
-        system: `You are a master debugging strategist.
-Given the error and observations, determine:
-1. How many parallel investigations would be most effective (1-3)
-2. What aspects of the error to focus on
-3. What validation strategies are needed
-4. Whether additional agents should be spawned for validation
+        system: `You are a master debugging strategist. You must respond with a JSON object in exactly this format:
 
-Return JSON:
 {
-  "numAgents": number,
-  "reasoning": string,
+  "numAgents": 2,  // Number between 1-3
+  "reasoning": "Detailed explanation of why this number of agents is needed",
   "validationStrategy": {
-    "needsValidation": boolean,
-    "description": string,
-    "suggestedAgents": number
+    "needsValidation": true,  // Boolean
+    "description": "Detailed description of validation approach",
+    "suggestedAgents": 1  // Number of additional validation agents needed
   }
-}`,
+}
+
+Do not include any other text or explanation outside of this JSON structure.`,
         messages: [{
           role: 'user',
-          content: `Analyze this error and previous observations to determine the investigation approach:\nError: ${error}\n\nContext:${context}\n\nObservations: ${JSON.stringify(observations)}`
+          content: `Analyze this error and previous observations to determine the investigation approach:
+
+Error: ${error}
+
+Context: ${context}
+
+Observations: ${JSON.stringify(observations)}
+
+Remember to respond with only the JSON object, no other text.`
         }]
       });
 
-      // Extract text content from Claude's response
-      const content = analysis.content[0] as ClaudeMessage['content'][0];
-      if (!content || !('text' in content)) {
+      // Extract text content from response
+      const content = analysis.content[0];
+      if (!('text' in content)) {
         throw new Error('Expected text response from Claude');
       }
-      
-      // Sanitize and parse JSON response
-      const sanitizedJson = content.text.trim().replace(/\n/g, '');
-      const plan = JSON.parse(sanitizedJson) as { numAgents: number; reasoning: string };
-      logger.debug('Investigation plan generated', { plan });
+      const plan = JSON.parse(content.text) as { numAgents: number; reasoning: string };
+      await logger.debug('Investigation plan generated', { plan });
       
       // DECIDE: Create appropriate number of agents
-      logger.info(`DECIDE: Creating ${plan.numAgents} investigation agents`);
+      await logger.info(`DECIDE: Creating ${plan.numAgents} investigation agents`);
       
-      // Create agents in parallel
-      const agents = await Promise.all(
-        Array(plan.numAgents).fill(null).map(async () => {
-          const agent = await ScenarioAgentFactory.createAgent(sessionId, {
-            error,
-            context,
-            codebase: {
-              filePath: filePath || '',
-              repoPath: repoPath || ''
-            },
-            environment: {
-              deeboRoot: repoPath || '',
-              processIsolation: true,
-              gitAvailable: true,
-              validatedPaths: [repoPath || '']
-            },
-            initRequirements: {
-              requiredDirs: ['reports', 'sessions'],
-              requiredTools: ['git-mcp', 'filesystem-mcp'],
-              requiredCapabilities: ['git', 'filesystem']
-            },
-            validation: {
-              environmentChecked: false,
-              pathsValidated: false,
-              toolsValidated: false,
-              errors: []
-            }
-          }) as AgentConfig;
-          
-          // Register with coordinator
-          agentCoordinator.registerScenarioAgent({
-            sessionId,
-            scenarioId: agent.id,
-            hypothesis: agent.hypothesis
-          });
-          
-          logger.debug('Created investigation agent', {
-            id: agent.id,
-            branch: agent.branchName
-          });
-          
-          return agent;
-        })
-      );
-      
-      // ACT: Run agents in parallel
-      logger.info(`ACT: Running ${agents.length} investigation agents`);
+      // Generate hypotheses for investigation
+      const hypotheses = await generateHypotheses(anthropicClient, {
+        sessionId,
+        iteration,
+        error,
+        context,
+        observations
+      });
+
+      // Create and run agents in parallel
+      await logger.info(`Creating ${plan.numAgents} investigation agents`);
       const results = await Promise.all(
-        agents.map((agent: AgentConfig) => 
-          runAutonomousAgent(agent).catch(error => ({
-            success: false,
-            confidence: 0,
-            fix: null,
-            explanation: `Agent failed: ${error.message}`
-          }))
-        )
-      );
-      logger.debug('Scenario agent results received', { results });
+        hypotheses.slice(0, plan.numAgents).map(async (hypothesis) => {
+          try {
+            const result = await spawnScenarioAgent({
+              sessionId,
+              scenarioId: `scenario-${sessionId}-${iteration}-${hypothesis.type}`,
+              scenario: {
+                type: hypothesis.type,
+                hypothesis: hypothesis.description,
+                suggestedTools: hypothesis.suggestedTools
+              },
+              error,
+              context,
+              language,
+              filePath,
+              repoPath
+            });
+            return result as AgentResult;
+          } catch (error) {
+            await logger.error('Agent failed', { 
+              error: error instanceof Error ? error.message : String(error),
+              hypothesis: hypothesis.type
+            });
+            return {
+              id: `failed-${hypothesis.type}`,
+              sessionId: sessionId,
+              success: false,
+              confidence: 0,
+              fix: null,
+              explanation: `Agent failed: ${error instanceof Error ? error.message : String(error)}`
+            } as AgentResult;
+          }
+        })
+      ) as AgentResult[];
+      await logger.debug('Scenario agent results received', { results });
       
       // Evaluate results to determine if we're done
-      logger.info('Evaluating scenario results');
+      await logger.info('Evaluating scenario results');
       const evaluation = await evaluateResults(anthropicClient, results);
-      logger.debug('Evaluation complete', { evaluation });
+      await logger.debug('Evaluation complete', { evaluation });
       
       complete = evaluation.complete;
       iteration++;
       
       if (complete) {
-        logger.info('Solution found', { solution: evaluation.result });
+        await logger.info('Solution found', { solution: evaluation.result });
         
         // Update mother agent status
         agentCoordinator.updateAgentState(motherAgentId, {
@@ -340,9 +328,9 @@ Return JSON:
     });
     
     throw maxIterationsError;
-  } catch (error: any) {
+  } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    logger.error('Mother agent failed', { error: errorMessage });
+    await logger.error('Mother agent failed', { error: errorMessage });
     
     // Update mother agent status
     agentCoordinator.updateAgentState(`mother-${sessionId}`, {
@@ -352,8 +340,8 @@ Return JSON:
     
     throw error;
   } finally {
-    logger.info('Mother agent shutting down');
-    logger.close();
+    await logger.info('Mother agent shutting down');
+    await logger.close();
   }
 }
 
@@ -379,14 +367,13 @@ interface SpawnConfig {
 
 async function spawnScenarioAgent(config: SpawnConfig) {
   // Initialize using PathResolver
-  const { getPathResolver } = await import('./util/path-resolver-helper.js');
-  const pathResolver = await getPathResolver();
+  const pathResolver = await PathResolver.getInstance();
   await pathResolver.ensureDirectory(`sessions/${config.sessionId}/logs`);
   await pathResolver.ensureDirectory('reports');
   
   const logger = await getLogger(config.sessionId, `mother-spawn-${config.scenarioId}`);
   
-  logger.info('Spawning scenario agent', {
+  await logger.info('Spawning scenario agent', {
     type: config.scenario.type,
     hypothesis: config.scenario.hypothesis
   });
@@ -410,23 +397,28 @@ async function spawnScenarioAgent(config: SpawnConfig) {
       throw new Error(`Scenario agent not found at: ${scenarioAgentPath}`);
     }
     
-    logger.debug('Validated scenario agent path', { scenarioAgentPath });
+    await logger.debug('Validated scenario agent path', { scenarioAgentPath });
     
-    // Create a new environment object that includes DEEBO_ROOT
-    // Use type assertion to help TypeScript understand the environment object
+    // Get Python environment configuration
+    const { PythonPathResolver } = await import('./util/python-path-resolver.js');
+    const pythonResolver = await PythonPathResolver.getInstance(process.env.DEEBO_ROOT);
+    
+    // Validate Python setup
+    await pythonResolver.validate();
+    
+    // Create environment with Python configuration
     const env = {
       ...process.env,
-      DEEBO_ROOT: process.env.DEEBO_ROOT
+      DEEBO_ROOT: process.env.DEEBO_ROOT,
+      ...pythonResolver.getEnv()
     } as NodeJS.ProcessEnv;
     
     // Log environment variables safely
-    const envPathValue = env['PATH'] || 'not set';
-    const envNodePathValue = env['NODE_PATH'] || 'not set';
-    
-    logger.debug('Environment for child process', {
-      PATH: typeof envPathValue === 'string' ? envPathValue.substring(0, 50) + '...' : envPathValue,
+    await logger.debug('Environment for child process', {
       DEEBO_ROOT: env.DEEBO_ROOT || 'not set',
-      NODE_PATH: envNodePathValue
+      VIRTUAL_ENV: env.VIRTUAL_ENV || 'not set',
+      PYTHONPATH: env.PYTHONPATH || 'not set',
+      PATH: env.PATH ? env.PATH.substring(0, 50) + '...' : 'not set'
     });
     
     const result = await new Promise((resolve, reject) => {
@@ -457,17 +449,17 @@ async function spawnScenarioAgent(config: SpawnConfig) {
       });
       
       // Log process output
-      childProcess.stdout.on('data', (data: any) => {
-        logger.debug(`Agent stdout: ${data}`);
+      childProcess.stdout.on('data', async (data: any) => {
+        await logger.debug(`Agent stdout: ${data}`);
       });
       
-      childProcess.stderr.on('data', (data: any) => {
-        logger.error(`Agent stderr: ${data}`);
+      childProcess.stderr.on('data', async (data: any) => {
+        await logger.error(`Agent stderr: ${data}`);
       });
       
-      childProcess.on('exit', (code: number) => {
+      childProcess.on('exit', async (code: number) => {
         if (code === 0) {
-          logger.info('Agent completed successfully');
+          await logger.info('Agent completed successfully');
               // Read agent's report file
               (async () => {
                 try {
@@ -492,11 +484,11 @@ async function spawnScenarioAgent(config: SpawnConfig) {
                   }
                   
                   const reportPath = join(reportDir, reportFile);
-                  logger.debug('Found report file', { reportPath });
+                  await logger.debug('Found report file', { reportPath });
                   
                   const reportContent = await fs.readFile(reportPath, 'utf8');
                   const report = JSON.parse(reportContent);
-                  logger.debug('Agent report loaded', { report });
+                  await logger.debug('Agent report loaded', { report });
                   resolve({
                     id: config.scenarioId,
                     type: config.scenario.type,
@@ -504,13 +496,13 @@ async function spawnScenarioAgent(config: SpawnConfig) {
                   });
                 } catch (err) {
                   const error = `Failed to read agent report: ${err}`;
-                  logger.error(error);
+                  await logger.error(error);
                   reject(new Error(error));
                 }
               })();
         } else {
           const error = `Agent exited with code ${code}`;
-          logger.error(error);
+          await logger.error(error);
           reject(new Error(error));
         }
       });
@@ -539,7 +531,7 @@ async function spawnScenarioAgent(config: SpawnConfig) {
 
 async function generateHypotheses(anthropicClient: any, data: any) {
   const logger = await getLogger(data.sessionId, 'mother-hypotheses');
-  logger.info('Generating hypotheses', { iteration: data.iteration });
+  await logger.info('Generating hypotheses', { iteration: data.iteration });
   try {
     const systemPrompt = `You are analyzing a bug report to generate debugging hypotheses.
     For a race condition in TypeScript, consider:
@@ -581,33 +573,68 @@ async function generateHypotheses(anthropicClient: any, data: any) {
     const msg = await anthropicClient.messages.create({
       model: 'claude-3-5-sonnet-20241022',
       max_tokens: 1024,
-      system: systemPrompt,
+      system: `You are analyzing a bug report to generate debugging hypotheses. You must respond with a JSON array in exactly this format:
+
+[
+  {
+    "type": "hypothesis-type",  // Short type name
+    "description": "Detailed explanation of the hypothesis",
+    "suggestedTools": [
+      {
+        "tool": "git-mcp",  // Must be either "git-mcp" or "filesystem-mcp"
+        "name": "tool-name",  // Name of the specific tool to use
+        "args": {  // Arguments for the tool
+          "key": "value"
+        }
+      }
+    ]
+  }
+]
+
+Do not include any other text or explanation outside of this JSON array.`,
       messages: [{
         role: 'user',
-        content: `Generate debugging hypotheses for iteration ${data.iteration}:\n${data.error}\n\nContext: ${data.context}\n\nPrevious observations: ${JSON.stringify(data.observations)}`
+        content: `Generate debugging hypotheses for iteration ${data.iteration}:
+
+Error: ${data.error}
+
+Context: ${data.context}
+
+Previous observations: ${JSON.stringify(data.observations)}
+
+Remember to respond with only the JSON array, no other text.`
       }]
     });
 
-    const content = msg.content[0] as ClaudeMessage['content'][0];
-    if (!content || !('text' in content)) {
+    // Extract text content from response
+    const content = msg.content[0];
+    if (!('text' in content)) {
       throw new Error('Expected text response from Claude');
     }
-    // Sanitize and parse JSON response
-    const sanitizedJson = content.text.trim().replace(/\n/g, '');
-    const hypotheses = JSON.parse(sanitizedJson);
-    logger.debug('Hypotheses generated', { hypotheses });
+    const hypotheses = JSON.parse(content.text) as Array<{
+      type: string;
+      description: string;
+      suggestedTools: Array<{
+        tool: 'git-mcp' | 'filesystem-mcp';
+        name: string;
+        args: Record<string, unknown>;
+      }>;
+    }>;
+    await logger.debug('Hypotheses generated', { hypotheses });
     return hypotheses;
-  } catch (error: any) {
-    logger.error('Failed to generate hypotheses', { error: error.message });
+  } catch (error: unknown) {
+    await logger.error('Failed to generate hypotheses', { 
+      error: error instanceof Error ? error.message : String(error) 
+    });
     throw error;
   } finally {
-    logger.close();
+    await logger.close();
   }
 }
 
 async function evaluateResults(anthropicClient: any, results: AgentResult[]) {
   const logger = await getLogger(results[0]?.sessionId, 'mother-evaluate');
-  logger.info('Evaluating results', { numResults: results.length });
+  await logger.info('Evaluating results', { numResults: results.length });
   try {
     const systemPrompt = `You are evaluating debugging results to determine if a solution has been found.
     Consider:
@@ -624,44 +651,62 @@ async function evaluateResults(anthropicClient: any, results: AgentResult[]) {
     const msg = await anthropicClient.messages.create({
       model: 'claude-3-5-sonnet-20241022',
       max_tokens: 1024,
-      system: systemPrompt,
+      system: `You are evaluating debugging results to determine if a solution has been found. You must respond with a JSON object in exactly this format:
+
+{
+  "complete": true,  // Boolean indicating if a solution was found
+  "result": {  // Can be null if complete is false
+    "fix": "Detailed description of the fix",
+    "confidence": 0.95,  // Number between 0 and 1
+    "explanation": "Detailed explanation of why this fix works"
+  }
+}
+
+Do not include any other text or explanation outside of this JSON structure.`,
       messages: [{
         role: 'user', 
-        content: `Evaluate debugging results and determine if we have a solution:\n${JSON.stringify(results)}`
+        content: `Evaluate these debugging results and determine if we have a solution:
+
+${JSON.stringify(results)}
+
+Remember to respond with only the JSON object, no other text.`
       }]
     });
 
-    const content = msg.content[0] as ClaudeMessage['content'][0];
-    if (!content || !('text' in content)) {
+    // Extract text content from response
+    const content = msg.content[0];
+    if (!('text' in content)) {
       throw new Error('Expected text response from Claude');
     }
-    // Sanitize and parse JSON response
-    const sanitizedJson = content.text.trim().replace(/\n/g, '');
-    const evaluation = JSON.parse(sanitizedJson) as ClaudeResponse;
-    logger.debug('Evaluation complete', { evaluation });
+    const evaluation = JSON.parse(content.text) as ClaudeResponse;
+    await logger.debug('Evaluation complete', { evaluation });
     return evaluation;
-  } catch (error: any) {
-    logger.error('Failed to evaluate results', { error: error.message });
+  } catch (error: unknown) {
+    await logger.error('Failed to evaluate results', { 
+      error: error instanceof Error ? error.message : String(error) 
+    });
     throw error;
   } finally {
-    logger.close();
+    await logger.close();
   }
 }
 
 async function gatherObservations(sessionId: string, iteration: number): Promise<any> {
   const logger = await getLogger(sessionId, 'mother-observe');
-  logger.info('Gathering observations', { iteration });
+  await logger.info('Gathering observations', { iteration });
 
   try {
     // For now, just return iteration number
     // This will be expanded when we implement report reading
     const observations = { iteration };
-    logger.debug('Observations gathered', { observations });
+    await logger.debug('Observations gathered', { observations });
     return observations;
-  } catch (error: any) {
-    logger.error('Failed to gather observations', { error: error.message });
+  } catch (error: unknown) {
+    await logger.error('Failed to gather observations', { 
+      error: error instanceof Error ? error.message : String(error) 
+    });
     throw error;
   } finally {
-    logger.close();
+    await logger.close();
   }
 }

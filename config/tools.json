@@ -1,20 +1,12 @@
 {
   "tools": {
-    "git-mcp": {
-      "path": "tools/git-mcp.js",
-      "timeout": 10000,
-      "retries": 3,
-      "baseDelay": 1000,
-      "allowedActions": [
-        "git_status",
-        "git_diff",
-        "git_log",
-        "git_branch",
-        "git_commit"
-      ]
-    },
     "filesystem-mcp": {
-      "path": "tools/filesystem.js",
+      "command": "node",
+      "args": [
+        "--experimental-specifier-resolution=node",
+        "node_modules/@modelcontextprotocol/server-filesystem/dist/esm/index.js",
+        "/Users/sriram/Documents/Cline/MCP/deebo-prototype"
+      ],
       "timeout": 10000,
       "retries": 3,
       "baseDelay": 1000,
@@ -26,7 +18,37 @@
         "search_files",
         "get_file_info",
         "move_file",
-        "edit_block"
+        "edit_file"
+      ]
+    },
+    "git-mcp": {
+      "command": "/Users/sriram/.local/share/deebo-prototype/venv/bin/python",
+      "args": [
+        "-m",
+        "mcp_server_git"
+      ],
+      "timeout": 10000,
+      "retries": 3,
+      "baseDelay": 1000,
+      "python": {
+        "usePythonResolver": true,
+        "pythonEnvVars": {
+          "PYTHONPATH": "/Users/sriram/.local/share/deebo-prototype/venv/lib/python3.13/site-packages"
+        }
+      },
+      "allowedActions": [
+        "git_status",
+        "git_diff",
+        "git_diff_unstaged",
+        "git_diff_staged",
+        "git_commit",
+        "git_add",
+        "git_reset",
+        "git_log",
+        "git_create_branch",
+        "git_checkout",
+        "git_show",
+        "git_init"
       ]
     }
   }

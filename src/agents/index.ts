@@ -14,14 +14,17 @@ export async function initializeAgents(server: DeeboMcpServer) {
   let logger: LoggerLike = initLogger;
 
   if (isInitialized) {
-    logger.info('Agents already initialized');
+    await logger.info('Agents already initialized');
     return;
   }
 
   try {
     // Get path resolver instance
-    const { getPathResolver } = await import('../util/path-resolver-helper.js');
-    const pathResolver = await getPathResolver();
+    const { PathResolver } = await import('../util/path-resolver.js');
+    const pathResolver = await PathResolver.getInstance();
+    if (!pathResolver.isInitialized()) {
+      await pathResolver.initialize(process.env.DEEBO_ROOT || process.cwd());
+    }
     
     // Initialize and validate key directories for agents
     const dirs = ['sessions', 'reports', 'tmp'];
@@ -35,7 +38,7 @@ export async function initializeAgents(server: DeeboMcpServer) {
 
     // Only create regular logger after directory validation
     const { createLogger } = await import('../util/logger.js');
-    logger = createLogger('server', 'agents');
+    logger = await createLogger('server', 'agents');
     
     // Validate Anthropic client early
     const { default: anthropic } = await import('../util/anthropic.js');
@@ -46,12 +49,12 @@ export async function initializeAgents(server: DeeboMcpServer) {
 
     // Only set initialized after all validations pass
     isInitialized = true;
-    logger.info('Agent system initialized successfully', {
+    await logger.info('Agent system initialized successfully', {
       paths: dirs.map(dir => pathResolver.resolvePath(dir))
     });
 
   } catch (error) {
-    logger.error('Failed to initialize agent system', { error });
+    await logger.error('Failed to initialize agent system', { error });
     throw error;
   }
 }

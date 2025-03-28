@@ -30,7 +30,7 @@ export async function initializeTools(server: DeeboMcpServer): Promise<void> {
   let logger: LoggerLike = initLogger;
 
   if (toolsInitialized) {
-    logger.info('Tools already initialized');
+    await logger.info('Tools already initialized');
     return;
   }
 
@@ -46,9 +46,9 @@ export async function initializeTools(server: DeeboMcpServer): Promise<void> {
 
     // Now safe to use regular logger
     const { createLogger } = await import('../util/logger.js');
-    logger = createLogger('server', 'tools');
+    logger = await createLogger('server', 'tools');
 
-    logger.info('Starting tool initialization');
+    await logger.info('Starting tool initialization');
 
     // Register debug session tools with proper typing
     server.tool(
@@ -73,9 +73,11 @@ export async function initializeTools(server: DeeboMcpServer): Promise<void> {
     );
 
     toolsInitialized = true;
-    logger.info('Tool handlers initialized successfully');
-  } catch (error) {
-    logger.error('Failed to initialize tools', { error });
+    await logger.info('Tool handlers initialized successfully');
+  } catch (error: unknown) {
+    await logger.error('Failed to initialize tools', { 
+      error: error instanceof Error ? error.message : String(error) 
+    });
     throw error;
   }
 }

@@ -19,7 +19,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
     "@modelcontextprotocol/sdk": "^1.7.0",
-    "@modelcontextprotocol/server-filesystem": "^1.0.0",
+    "@modelcontextprotocol/server-filesystem": "^2025.1.14",
     "cors": "^2.8.5",
     "dockerode": "^4.0.0",
     "dotenv": "^16.4.1",
@@ -33,7 +33,7 @@
     "@types/cors": "^2.8.17",
     "@types/dockerode": "^3.3.23",
     "@types/express": "^5.0.1",
-    "@types/node": "^22.13.13",
+    "@types/node": "^22.13.14",
     "@types/uuid": "^9.0.8",
     "typescript": "^5.8.2"
   },

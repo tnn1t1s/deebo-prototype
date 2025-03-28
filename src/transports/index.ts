@@ -4,11 +4,7 @@ import { McpServer as BaseMcpServer } from "@modelcontextprotocol/sdk/server/mcp
 import { ServerResponse } from "http";
 import { initLogger } from "../util/init-logger.js";
 
-// Type that works for both loggers
-interface LoggerLike {
-  info(message: string, metadata?: Record<string, any>): void;
-  error(message: string, metadata?: Record<string, any>): void;
-}
+import type { LoggerLike } from '../types/logger.js';
 
 // Start with initLogger and transition to regular logger when ready
 let logger: LoggerLike = initLogger;
@@ -23,21 +19,23 @@ interface TransportOptions {
   };
 }
 
-let transport: StdioServerTransport | SSEServerTransport;
-let reconnectAttempts = 0;
-
 /**
  * Create a transport with reconnection support
  */
-export async function createTransport<T extends BaseMcpServer>(
+export async function createTransport(
   type: 'stdio' | 'sse',
-  server: T,
+  server: BaseMcpServer,
   options: TransportOptions = {}
 ): Promise<StdioServerTransport | SSEServerTransport> {
+  // Let MCP SDK handle transport cleanup
+
   try {
     // Use PathResolver for safe initialization
-    const { getPathResolver } = await import('../util/path-resolver-helper.js');
-    const pathResolver = await getPathResolver();
+    const { PathResolver } = await import('../util/path-resolver.js');
+    const pathResolver = await PathResolver.getInstance();
+    if (!pathResolver.isInitialized()) {
+      await pathResolver.initialize(process.env.DEEBO_ROOT || process.cwd());
+    }
     
     // Validate root directory
     const rootDir = await pathResolver.getRootDir();
@@ -48,7 +46,7 @@ export async function createTransport<T extends BaseMcpServer>(
     // Try to switch to regular logger now that paths are validated
     try {
       const { createLogger } = await import("../util/logger.js");
-      const newLogger = createLogger('server', 'transport');
+      const newLogger = await createLogger('server', 'transport');
       
       // Test that the new logger works with validated paths
       const logsPath = await pathResolver.ensureDirectory('logs');
@@ -56,27 +54,32 @@ export async function createTransport<T extends BaseMcpServer>(
       
       // If we got here, the new logger is safe to use
       logger = newLogger;
-      logger.info('Initialized transport logging', { 
+      await logger.info('Initialized transport logging', { 
         rootDir,
         logsPath
       });
     } catch (error) {
       // Keep using initLogger if regular logger fails
-      logger.error('Failed to initialize regular logger, continuing with initLogger', { 
-        error,
-        rootDir: await pathResolver.getRootDir() 
+      await logger.error('Failed to initialize regular logger, continuing with initLogger', { 
+        error: error instanceof Error ? error.message : String(error),
+        rootDir: await pathResolver.getRootDir()
       });
     }
 
   } catch (error) {
     // If anything fails, keep using initLogger
-    logger.error('Error during logger initialization', { error });
+    await logger.error('Error during logger initialization', { 
+      error: error instanceof Error ? error.message : String(error) 
+    });
   }
+
+  let transport: StdioServerTransport | SSEServerTransport;
+  let reconnectAttempts = 0;
 
   const handleDisconnect = async () => {
     const reconnectConfig = options.reconnect;
     if (!reconnectConfig || reconnectAttempts >= reconnectConfig.maxAttempts) {
-      logger.error('Transport disconnected and max reconnect attempts reached');
+      await logger.error('Transport disconnected and max reconnect attempts reached');
       return;
     }
 
@@ -86,7 +89,7 @@ export async function createTransport<T extends BaseMcpServer>(
       reconnectConfig.maxDelay
     );
 
-    logger.info(`Attempting reconnect in ${delay}ms`, {
+    await logger.info(`Attempting reconnect in ${delay}ms`, {
       attempt: reconnectAttempts,
       maxAttempts: reconnectConfig.maxAttempts
     });
@@ -94,11 +97,17 @@ export async function createTransport<T extends BaseMcpServer>(
     await new Promise(resolve => setTimeout(resolve, delay));
     
     try {
-      await createTransport(type, server, options);
+      // Let MCP SDK handle transport creation and cleanup
+      await server.connect(transport);
       reconnectAttempts = 0; // Reset on successful reconnect
     } catch (error) {
-      logger.error('Reconnection failed', { error });
-      handleDisconnect();
+      await logger.error('Reconnection failed', { 
+        error: error instanceof Error ? error.message : String(error) 
+      });
+      // Don't recursively call handleDisconnect
+      if (reconnectAttempts < reconnectConfig.maxAttempts) {
+        setTimeout(handleDisconnect, delay);
+      }
     }
   };
 
@@ -108,15 +117,12 @@ export async function createTransport<T extends BaseMcpServer>(
     if (!options?.port || !options?.path) {
       throw new Error('Port and path are required for SSE transport');
     }
-    // Note: SSEServerTransport requires response object which should be passed
-    // when actually handling an SSE request. This is just initialization.
     transport = new SSEServerTransport(options.path, undefined as unknown as ServerResponse);
   } else {
     throw new Error(`Unknown transport type: ${type}`);
   }
 
   transport.onclose = handleDisconnect;
-  
-  logger.info('Transport created successfully', { type });
+  await logger.info('Transport created successfully', { type });
   return transport;
 }

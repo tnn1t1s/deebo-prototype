@@ -18,7 +18,7 @@ import type { LoggerLike } from '../types/logger.js';
 class SessionManager {
   private sessions: Map<string, DebugSession>;
   private server: McpServer;
-  private logger: LoggerLike;
+  private logger!: LoggerLike;
   private initialized = false;
 
   constructor(server: McpServer) {
@@ -26,11 +26,11 @@ class SessionManager {
     this.server = server;
     // Logger will be properly initialized in initialize()
     this.logger = {
-      debug: console.debug.bind(console),
-      info: console.info.bind(console),
-      warn: console.warn.bind(console),
-      error: console.error.bind(console),
-      close: () => {}
+      debug: async (...args) => console.debug(...args),
+      info: async (...args) => console.info(...args),
+      warn: async (...args) => console.warn(...args),
+      error: async (...args) => console.error(...args),
+      close: async () => {}
     };
   }
 
@@ -43,7 +43,7 @@ class SessionManager {
       // Only switch to regular logger if system is properly initialized
       if (process.env.DEEBO_ROOT) {
         const { createLogger } = await import('../util/logger.js');
-        this.logger = createLogger('server', 'session-manager');
+        this.logger = await createLogger('server', 'session-manager');
       }
     } catch (error) {
       console.error('Failed to initialize logger', error);
@@ -53,7 +53,7 @@ class SessionManager {
 
   public async initialize(): Promise<void> {
     if (this.initialized) {
-      this.logger.debug('Session manager already initialized');
+      await this.logger.debug('Session manager already initialized');
       return;
     }
 
@@ -62,8 +62,11 @@ class SessionManager {
       await this.initLogger();
       
       // Get path resolver instance
-      const { getPathResolver } = await import('../util/path-resolver-helper.js');
-      const pathResolver = await getPathResolver();
+      const { PathResolver } = await import('../util/path-resolver.js');
+      const pathResolver = await PathResolver.getInstance();
+      if (!pathResolver.isInitialized()) {
+        await pathResolver.initialize(process.env.DEEBO_ROOT || process.cwd());
+      }
       
       // Validate root directory is set correctly
       const rootDir = pathResolver.getRootDir();
@@ -73,25 +76,27 @@ class SessionManager {
       
       // Ensure session directory exists
       const sessionDir = await pathResolver.ensureDirectory('sessions');
-      this.logger.info('Session directory ensured', { path: sessionDir });
+      await this.logger.info('Session directory ensured', { path: sessionDir });
       
       this.initialized = true;
-      this.logger.info('Session manager initialized successfully');
-    } catch (error) {
-      this.logger.error('Failed to initialize session manager', { error });
+      await this.logger.info('Session manager initialized successfully');
+    } catch (error: unknown) {
+      await this.logger.error('Failed to initialize session manager', { 
+        error: error instanceof Error ? error.message : String(error) 
+      });
       throw error;
     }
   }
 
-  set(sessionId: string, session: DebugSession): void {
+  async set(sessionId: string, session: DebugSession): Promise<void> {
     this.sessions.set(sessionId, session);
-    this.notifyResourceChange();
+    await this.notifyResourceChange();
   }
 
-  delete(sessionId: string): boolean {
+  async delete(sessionId: string): Promise<boolean> {
     const result = this.sessions.delete(sessionId);
     if (result) {
-      this.notifyResourceChange();
+      await this.notifyResourceChange();
     }
     return result;
   }
@@ -104,7 +109,7 @@ class SessionManager {
     return Array.from(this.sessions.keys());
   }
 
-  private notifyResourceChange(): void {
+  private async notifyResourceChange(): Promise<void> {
     try {
       // Use the standard MCP notification method
       this.server.server.notification({
@@ -112,7 +117,9 @@ class SessionManager {
         params: {}
       });
     } catch (error) {
-      this.logger?.error('Failed to notify resource change', { error });
+      await this.logger?.error('Failed to notify resource change', { 
+        error: error instanceof Error ? error.message : String(error) 
+      });
     }
   }
 }
@@ -129,20 +136,23 @@ export async function initializeResources(server: DeeboMcpServer): Promise<void>
   
   try {
     // Initialize and validate path resolver
-    const { getPathResolver } = await import('../util/path-resolver-helper.js');
-    const pathResolver = await getPathResolver();
+    const { PathResolver } = await import('../util/path-resolver.js');
+    const pathResolver = await PathResolver.getInstance();
+    if (!pathResolver.isInitialized()) {
+      await pathResolver.initialize(process.env.DEEBO_ROOT || process.cwd());
+    }
 
     // Now safe to use regular logger
     const { createLogger } = await import("../util/logger.js");
-    logger = createLogger('server', 'resources');
+    logger = await createLogger('server', 'resources');
     
-    logger.info('Initializing resource handlers');
+    await logger.info('Initializing resource handlers');
 
     // Initialize session manager with proper setup
     sessionManager = new SessionManager(server);
     await sessionManager.initialize();
     
-    logger.info('Session manager initialized successfully');
+    await logger.info('Session manager initialized successfully');
 
     // System status resource
     server.resource(
@@ -289,9 +299,11 @@ export async function initializeResources(server: DeeboMcpServer): Promise<void>
       }
     );
 
-    logger.info('Resource handlers initialized');
-  } catch (error) {
-    logger.error('Failed to initialize resources', { error });
+    await logger.info('Resource handlers initialized');
+  } catch (error: unknown) {
+    await logger.error('Failed to initialize resources', { 
+      error: error instanceof Error ? error.message : String(error) 
+    });
     throw error;
   }
 }

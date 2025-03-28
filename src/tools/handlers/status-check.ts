@@ -22,24 +22,29 @@ export async function handleCheckDebugStatus(
 ): Promise<ToolResponse> {
   // Get safe loggers
   const logger = await getLogger();
-  logger.info(`Executing check_debug_status tool`, { session_id });
+  await logger.info(`Executing check_debug_status tool`, { session_id });
   
   let sessionLogger;
   try {
     // Get path resolver for validation
-    const { getPathResolver } = await import('../../util/path-resolver-helper.js');
-    const pathResolver = await getPathResolver();
+    const { PathResolver } = await import('../../util/path-resolver.js');
+    const pathResolver = await PathResolver.getInstance();
+    if (!pathResolver.isInitialized()) {
+      await pathResolver.initialize(process.env.DEEBO_ROOT || process.cwd());
+    }
     
     // Create session-specific logger after validation
     const { createLogger } = await import("../../util/logger.js");
-    sessionLogger = createLogger(session_id, 'mcp-status-check');
-  } catch (error) {
+    sessionLogger = await createLogger(session_id, 'mcp-status-check');
+  } catch (error: unknown) {
     // Fallback to main logger if session logger creation fails
-    logger.warn('Failed to create session logger, using main logger', { error });
+    await logger.warn('Failed to create session logger, using main logger', { 
+      error: error instanceof Error ? error.message : String(error) 
+    });
     sessionLogger = logger;
   }
   
-  sessionLogger.info('Checking session status');
+  await sessionLogger.info('Checking session status');
 
   try {
     // Get session and agent status
@@ -84,7 +89,7 @@ export async function handleCheckDebugStatus(
     }
 
     session.lastChecked = Date.now();
-    sessionLogger.debug('Status retrieved', {
+    await sessionLogger.debug('Status retrieved', {
       sessionStatus: session.status,
       agentStatus: motherAgent.status,
       numLogs: session.logs.length
@@ -99,8 +104,8 @@ export async function handleCheckDebugStatus(
       timestamp: new Date().toISOString()
     });
 
-    sessionLogger.info('Status check complete');
-    sessionLogger.close();
+    await sessionLogger.info('Status check complete');
+    await sessionLogger.close();
     
     return {
       content: [{ 
@@ -108,14 +113,16 @@ export async function handleCheckDebugStatus(
         text: JSON.stringify(response)
       }]
     };
-  } catch (error: any) {
-    sessionLogger.error('Failed to check session status', { error: error.message });
-    sessionLogger.close();
+  } catch (error: unknown) {
+    await sessionLogger.error('Failed to check session status', { 
+      error: error instanceof Error ? error.message : String(error) 
+    });
+    await sessionLogger.close();
     
     const errorResponse = debugSessionResponseSchema.parse({
       session_id,
       status: "error",
-      message: `Failed to check session status: ${error.message}`,
+      message: `Failed to check session status: ${error instanceof Error ? error.message : String(error)}`,
       result: null,
       timestamp: new Date().toISOString()
     });

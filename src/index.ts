@@ -29,9 +29,9 @@ async function startServer() {
     // Now create logger after directories are initialized
     const { createLogger } = await import('./util/logger.js');
     
-    const logger = createLogger('server', 'mcp-server');
+    const logger = await createLogger('server', 'mcp-server');
     
-    logger.info('Starting MCP server initialization');
+    await logger.info('Starting MCP server initialization');
     
     // Initialize server
     const server = new McpServer({
@@ -45,13 +45,13 @@ async function startServer() {
     const { initializeAgents } = await import('./agents/index.js');
 
     // Set up all components BEFORE connecting transport
-    logger.info('Initializing server components');
+    await logger.info('Initializing server components');
     await initializeResources(server as DeeboMcpServer);
     await initializeTools(server as DeeboMcpServer);
     await initializeAgents(server as DeeboMcpServer);
     
     // Create and connect transport after all capabilities are registered
-    logger.info('Creating transport');
+    await logger.info('Creating transport');
     const transport = await createTransport('stdio', server, {
       reconnect: {
         maxAttempts: 5,
@@ -60,28 +60,34 @@ async function startServer() {
       }
     });
 
-    logger.info('Connecting transport');
+    await logger.info('Connecting transport');
     await server.connect(transport);
 
     // Set up process handlers
     process.on('uncaughtException', (error: Error) => {
-      logger.error('Uncaught exception', { 
-        error: error.message, 
-        stack: error.stack 
+      // Use Promise.resolve().then() since we can't await directly in event handlers
+      Promise.resolve().then(async () => {
+        await logger.error('Uncaught exception', { 
+          error: error.message, 
+          stack: error.stack 
+        });
+        process.exit(1);
       });
-      process.exit(1);
     });
 
-    process.on('SIGINT', async () => {
-      logger.info('Server shutting down');
-      await server.close();
-      process.exit(0);
+    process.on('SIGINT', () => {
+      // Use Promise.resolve().then() since we can't await directly in event handlers
+      Promise.resolve().then(async () => {
+        await logger.info('Server shutting down');
+        await server.close();
+        process.exit(0);
+      });
     });
 
     // Log server initialization
-    logger.info('Deebo MCP server initialized successfully');
+    await logger.info('Deebo MCP server initialized successfully');
 
-    logger.info('Server started successfully', {
+    await logger.info('Server started successfully', {
       name: CONFIG.serverName,
       version: CONFIG.serverVersion
     });
@@ -90,7 +96,7 @@ async function startServer() {
     const errorMessage = error instanceof Error ? error.message : String(error);
     const errorStack = error instanceof Error ? error.stack : undefined;
 
-    initLogger.error('Fatal error during server startup', {
+    await initLogger.error('Fatal error during server startup', {
       error: errorMessage,
       stack: errorStack
     });

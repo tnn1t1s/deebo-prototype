@@ -2,13 +2,26 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { LoggerLike } from "../types/logger.js";
 import type { ToolResponse } from "../types/mcp.d.js";
-import path from "path";
+import { PathResolver } from "./path-resolver.js";
+
+/**
+ * Convert ProcessEnv to Record<string, string> safely
+ */
+function sanitizeEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+  return Object.entries(env).reduce<Record<string, string>>((acc, [key, val]) => {
+    if (typeof val === 'string') {
+      acc[key] = val;
+    }
+    return acc;
+  }, {});
+}
 
 // Configuration for client initialization
 interface ClientConfig {
   command: string;
   args: string[];
   capabilities: string[];
+  env?: Record<string, string>;
 }
 
 // Client type definition
@@ -49,14 +62,50 @@ async function initializeClient(
   const log = await getLogger();
   
   try {
+    // Load tool configuration using path resolver
+    const { readFile } = await import('fs/promises');
+    const pathResolver = await PathResolver.getInstance();
+    if (!pathResolver.isInitialized()) {
+      await pathResolver.initialize(process.env.DEEBO_ROOT || process.cwd());
+    }
+    const toolsConfigPath = pathResolver.resolvePath('config/tools.json');
+    const toolsConfig = JSON.parse(
+      await readFile(toolsConfigPath, 'utf-8')
+    );
+
     const client = new Client({
       name: `deebo-${clientKey}-client`,
       version: "0.1.0"
     }) as McpClient;
     
+    // Get environment from tools config
+    const env = toolsConfig.tools[`${clientKey}-mcp`]?.env || {};
+    
+    // Import homedir for infrastructure root path
+    const { homedir } = await import('os');
+    const { join } = await import('path');
+
+    // Create environment with proper PATH and PYTHONPATH handling
+    const baseEnv: Record<string, string> = {
+      DEEBO_ROOT: process.env.DEEBO_ROOT || process.cwd(),
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
+      NODE_ENV: process.env.NODE_ENV || '',
+      INFRASTRUCTURE_ROOT: process.env.DEEBO_ROOT || process.cwd(),
+      PATH: env.PATH || process.env.PATH || '',
+      PYTHONPATH: env.PYTHONPATH || process.env.PYTHONPATH || ''
+    };
+
+    // Add other environment variables using sanitizeEnv
+    const combinedEnv = {
+      ...baseEnv,
+      ...sanitizeEnv(process.env)
+    };
+
     const transport = new StdioClientTransport({
       command: config.command,
-      args: config.args
+      args: config.args,
+      env: combinedEnv,
+      cwd: process.env.DEEBO_ROOT || process.cwd()
     });
     
     await client.connect(transport);
@@ -82,32 +131,82 @@ export async function initMcpClients(): Promise<void> {
   }
 
   try {
-    // Initialize Git client using local implementation
-    if (!clients.git) {
-      const gitConfig: ClientConfig = {
-        command: 'node',
-        args: [
-          '--experimental-specifier-resolution=node',
-          path.join(process.cwd(), 'tools', 'git-mcp.js')
-        ],
-        capabilities: ['git', 'resources']
-      };
-      
-      await initializeClient('git', gitConfig);
+    const pathResolver = await PathResolver.getInstance();
+    if (!pathResolver.isInitialized()) {
+      await pathResolver.initialize(process.env.DEEBO_ROOT || process.cwd());
     }
 
-    // Initialize Filesystem client using local implementation
-    if (!clients.filesystem) {
-      const fsConfig: ClientConfig = {
-        command: 'node',
-        args: [
-          '--experimental-specifier-resolution=node',
-          path.join(process.cwd(), 'tools', 'filesystem.js')
-        ],
-        capabilities: ['filesystem', 'tools']
-      };
+    // Initialize Git client using Python with retries
+    if (!clients.git) {
+      const pathResolver = await PathResolver.getInstance();
+    if (!pathResolver.isInitialized()) {
+      await pathResolver.initialize(process.env.DEEBO_ROOT || process.cwd());
+    }
+      const maxRetries = 3;
+      const retryDelay = 1000; // 1 second
       
-      await initializeClient('filesystem', fsConfig);
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          // Validate Python setup
+          const pythonValid = await pathResolver.validatePythonSetup();
+          if (!pythonValid) {
+            throw new Error('Python setup validation failed. Please ensure Python and git-mcp are properly installed.');
+          }
+
+          const pythonPath = pathResolver.getPythonInterpreterPath();
+          if (!pythonPath) {
+            throw new Error('Python interpreter path not found');
+          }
+
+          await initializeClient('git', {
+            command: pythonPath,
+            args: ['-m', 'mcp_server_git'],
+            capabilities: ['git', 'resources'],
+            env: pathResolver.getPythonEnv()
+          });
+          
+          log.info('Git client initialized successfully');
+          break;
+        } catch (error) {
+          if (attempt === maxRetries) {
+            log.error('Failed to initialize Git client after multiple attempts', { error });
+            throw error;
+          }
+          log.warn(`Git client initialization attempt ${attempt} failed, retrying...`, { error });
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
+        }
+      }
+    }
+
+    // Initialize Filesystem client using official MCP server with retries
+    if (!clients.filesystem) {
+      const maxRetries = 3;
+      const retryDelay = 1000; // 1 second
+
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          const fsConfig: ClientConfig = {
+            command: 'npx',
+            args: [
+              '-y',
+              '@modelcontextprotocol/server-filesystem',
+              pathResolver.resolvePath('.')
+            ],
+            capabilities: ['filesystem', 'tools']
+          };
+          
+          await initializeClient('filesystem', fsConfig);
+          log.info('Filesystem client initialized successfully');
+          break;
+        } catch (error) {
+          if (attempt === maxRetries) {
+            log.error('Failed to initialize Filesystem client after multiple attempts', { error });
+            throw error;
+          }
+          log.warn(`Filesystem client initialization attempt ${attempt} failed, retrying...`, { error });
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
+        }
+      }
     }
 
     mcpInitialized = true;
@@ -275,19 +374,59 @@ export const filesystemOperations = {
 };
 
 /**
+ * Close all MCP client connections and clean up resources
+ */
+export async function disposeMcpClients(): Promise<void> {
+  const log = await getLogger();
+  try {
+    // Log before cleanup
+    await log.info('Disposing MCP clients');
+
+    // Use built-in client close()
+    await Promise.all(
+      Object.entries(clients)
+        .filter(([_, client]) => client !== null)
+        .map(async ([key, client]) => {
+          try {
+            await client?.close();
+            clients[key] = null;
+            await log.info(`${key} client closed successfully`);
+          } catch (error) {
+            await log.error(`Failed to close ${key} client`, { error });
+          }
+        })
+    );
+
+    // Reset initialization state
+    mcpInitialized = false;
+    
+    // Final log before finishing
+    await log.info('All MCP clients disposed');
+  } catch (error) {
+    // Log error before throwing
+    await log.error('Error during MCP cleanup', { error });
+    
+    // Reset initialization state even on error
+    mcpInitialized = false;
+    
+    throw error;
+  }
+}
+
+/**
  * Git branch operations using git-mcp tools
  */
 export const gitBranchOperations = {
-  async createBranch(repoPath: string, branchName: string): Promise<string> {
+  async createBranch(repoPath: string, branchName: string, startPoint?: string): Promise<string> {
     await initMcpClients();
     if (!clients.git) throw new Error("Git client not available");
     
     const result = await clients.git.callTool({
-      name: "git_branch",
+      name: "git_create_branch",
       arguments: {
         repo_path: repoPath,
-        operation: "create",
-        branch_name: branchName
+        branch_name: branchName,
+        ...(startPoint && { start_point: startPoint })
       }
     });
     
@@ -299,10 +438,9 @@ export const gitBranchOperations = {
     if (!clients.git) throw new Error("Git client not available");
     
     const result = await clients.git.callTool({
-      name: "git_branch",
+      name: "git_checkout",
       arguments: {
         repo_path: repoPath,
-        operation: "checkout",
         branch_name: branchName
       }
     });
@@ -325,31 +463,42 @@ export const gitBranchOperations = {
     return getTextContent(result);
   },
   
-  async deleteBranch(repoPath: string, branchName: string): Promise<string> {
+  async addFiles(repoPath: string, files: string[]): Promise<string> {
     await initMcpClients();
     if (!clients.git) throw new Error("Git client not available");
     
     const result = await clients.git.callTool({
-      name: "git_branch",
+      name: "git_add",
       arguments: {
         repo_path: repoPath,
-        operation: "delete",
-        branch_name: branchName
+        files
       }
     });
     
     return getTextContent(result);
   },
-  
-  async getCurrentBranch(repoPath: string): Promise<string> {
+  async resetChanges(repoPath: string): Promise<string> {
     await initMcpClients();
     if (!clients.git) throw new Error("Git client not available");
     
     const result = await clients.git.callTool({
-      name: "git_branch",
+      name: "git_reset",
       arguments: {
-        repo_path: repoPath,
-        operation: "current"
+        repo_path: repoPath
+      }
+    });
+    
+    return getTextContent(result);
+  },
+
+  async initRepo(repoPath: string): Promise<string> {
+    await initMcpClients();
+    if (!clients.git) throw new Error("Git client not available");
+    
+    const result = await clients.git.callTool({
+      name: "git_init",
+      arguments: {
+        repo_path: repoPath
       }
     });
     

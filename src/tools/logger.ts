@@ -14,8 +14,11 @@ export async function getLogger(): Promise<LoggerLike> {
     
     try {
       // Get PathResolver for safe initialization
-      const { getPathResolver } = await import('../util/path-resolver-helper.js');
-      const pathResolver = await getPathResolver();
+      const { PathResolver } = await import('../util/path-resolver.js');
+      const pathResolver = await PathResolver.getInstance();
+      if (!pathResolver.isInitialized()) {
+        await pathResolver.initialize(process.env.DEEBO_ROOT || process.cwd());
+      }
       
       // Validate root directory
       const rootDir = pathResolver.getRootDir();
@@ -25,11 +28,11 @@ export async function getLogger(): Promise<LoggerLike> {
       
       // Only switch to regular logger if paths are valid
       const { createLogger } = await import('../util/logger.js');
-      logger = createLogger('server', 'tools');
+      logger = await createLogger('server', 'tools');
       
-      logger.info('Tools logger initialized', { rootDir });
+      await logger.info('Tools logger initialized', { rootDir });
     } catch (error) {
-      initLogger.error('Failed to initialize regular logger, using initLogger', { error });
+      await initLogger.error('Failed to initialize regular logger, using initLogger', { error });
       logger = initLogger;
     }
   }

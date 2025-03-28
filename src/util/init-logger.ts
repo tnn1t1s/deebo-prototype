@@ -2,6 +2,7 @@ import { WriteStream, createWriteStream } from 'fs';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { mkdirSync, existsSync } from 'fs';
+import { PathResolver } from './path-resolver.js';
 
 class InitLogger {
   private stream: WriteStream | null = null;
@@ -28,8 +29,7 @@ class InitLogger {
 
     try {
       // Get path resolver instance for safe directory operations
-      const { getPathResolver } = await import('./path-resolver-helper.js');
-      const pathResolver = await getPathResolver();
+      const pathResolver = await PathResolver.getInstance();
       
       // Use path resolver to get safe log directory
       const absoluteLogDir = await pathResolver.ensureDirectory('logs');
@@ -64,21 +64,25 @@ class InitLogger {
       }
 
       this.logPath = join(this.fallbackDirectory, 'init.log');
-      this.stream = createWriteStream(this.logPath, { flags: 'a' });
+      
+      // Create stream with proper error handling
+      const stream = createWriteStream(this.logPath, { flags: 'a' });
+      
+      // Set up error handler before any operations
+      stream.on('error', () => {
+        this.initialized = false;
+        // Let Node handle stream cleanup
+      });
 
-      // Write buffered entries
+      // Write buffered entries after error handler is set up
       for (const entry of this.logEntries) {
-        this.stream.write(JSON.stringify(entry) + '\n');
+        stream.write(JSON.stringify(entry) + '\n');
       }
       this.logEntries = [];
 
+      // Only set stream and initialized after successful setup
+      this.stream = stream;
       this.initialized = true;
-
-      // Handle stream errors silently
-      this.stream.on('error', () => {
-        this.stream = null;
-        this.initialized = false;
-      });
     } catch {
       // Silent failure - operate in memory-only mode
       this.stream = null;
@@ -94,9 +98,6 @@ class InitLogger {
       ...(metadata ? { metadata } : {})
     };
 
-    // Always buffer in memory
-    this.logEntries.push(entry);
-
     // Try to initialize if needed
     if (!this.initialized) {
       await this.ensureInitialized();
@@ -104,16 +105,11 @@ class InitLogger {
 
     // Write to file if stream exists
     if (this.stream) {
-      try {
-        await new Promise<void>((resolve, reject) => {
-          this.stream!.write(JSON.stringify(entry) + '\n', err => {
-            if (err) reject(err);
-            else resolve();
-          });
-        });
-      } catch {
-        // Silent fail - we already have the entry in memory
-      }
+      // Let Node handle the write operation naturally
+      this.stream.write(JSON.stringify(entry) + '\n');
+    } else {
+      // Only buffer if no stream available
+      this.logEntries.push(entry);
     }
   }
 
@@ -134,32 +130,19 @@ class InitLogger {
   }
 
   async close() {
-    // Try one last time to write any buffered entries
-    if (!this.initialized && this.logEntries.length > 0) {
-      await this.ensureInitialized();
-    }
-
-    // Write any remaining entries
+    // Write any remaining entries without waiting
     if (this.stream && this.logEntries.length > 0) {
-      try {
-        for (const entry of this.logEntries) {
-          await new Promise<void>((resolve, reject) => {
-            this.stream!.write(JSON.stringify(entry) + '\n', err => {
-              if (err) reject(err);
-              else resolve();
-            });
-          });
-        }
-      } catch {
-        // Silent fail on final writes
+      for (const entry of this.logEntries) {
+        this.stream.write(JSON.stringify(entry) + '\n');
       }
     }
 
-    // Clean up
+    // Let Node handle stream cleanup naturally
     if (this.stream) {
       this.stream.end();
-      this.stream = null;
+      // Don't null out the stream - let Node's GC handle it
     }
+    
     this.initialized = false;
     this.logEntries = [];
   }

@@ -3,6 +3,7 @@ import {
   ErrorCode, 
   McpError
 } from "@modelcontextprotocol/sdk/types.js";
+import { createLogEntry } from "../../util/log-validator.js";
 import { sessionManager } from "../../resources/index.js";
 import { agentCoordinator } from "../../agents/coordinator.js";
 import { getLogger } from "../logger.js";
@@ -22,24 +23,29 @@ export async function handleCancelDebugSession(
 ): Promise<ToolResponse> {
   // Get safe loggers
   const logger = await getLogger();
-  logger.info(`Executing cancel_debug_session tool`, { session_id });
+  await logger.info(`Executing cancel_debug_session tool`, { session_id });
   
   let sessionLogger;
   try {
     // Get path resolver for validation
-    const { getPathResolver } = await import('../../util/path-resolver-helper.js');
-    const pathResolver = await getPathResolver();
+    const { PathResolver } = await import('../../util/path-resolver.js');
+    const pathResolver = await PathResolver.getInstance();
+    if (!pathResolver.isInitialized()) {
+      await pathResolver.initialize(process.env.DEEBO_ROOT || process.cwd());
+    }
     
     // Create session-specific logger after validation
     const { createLogger } = await import("../../util/logger.js");
-    sessionLogger = createLogger(session_id, 'mcp-cancel');
-  } catch (error) {
+    sessionLogger = await createLogger(session_id, 'mcp-cancel');
+  } catch (error: unknown) {
     // Fallback to main logger if session logger creation fails
-    logger.warn('Failed to create session logger, using main logger', { error });
+    await logger.warn('Failed to create session logger, using main logger', { 
+      error: error instanceof Error ? error.message : String(error) 
+    });
     sessionLogger = logger;
   }
   
-  sessionLogger.info('Cancelling debug session');
+  await sessionLogger.info('Cancelling debug session');
 
   try {
     // Get session and agents
@@ -100,16 +106,13 @@ export async function handleCancelDebugSession(
       };
     }
 
-    // Mark session and agents as cancelled
-    session.status = "error";
-    session.error = "Session cancelled by user";
-    session.logs.push("Debug session cancelled by user");
-
-    // Clean up agents
+    // Clean up all session resources
+    await sessionLogger.info('Starting session cleanup');
     await agentCoordinator.cleanupSession(session_id);
+    await sessionLogger.info('Session cleanup complete');
     
-    sessionLogger.info('Session cancelled successfully');
-    sessionLogger.close();
+    await sessionLogger.info('Session cancelled successfully');
+    await sessionLogger.close();
     
     const response = debugSessionResponseSchema.parse({
       session_id,
@@ -125,14 +128,16 @@ export async function handleCancelDebugSession(
         text: JSON.stringify(response)
       }]
     };
-  } catch (error: any) {
-    sessionLogger.error('Failed to cancel session', { error: error.message });
-    sessionLogger.close();
+  } catch (error: unknown) {
+    await sessionLogger.error('Failed to cancel session', { 
+      error: error instanceof Error ? error.message : String(error) 
+    });
+    await sessionLogger.close();
     
     const errorResponse = debugSessionResponseSchema.parse({
       session_id,
       status: "error",
-      message: `Failed to cancel session: ${error.message}`,
+      message: `Failed to cancel session: ${error instanceof Error ? error.message : String(error)}`,
       result: null,
       timestamp: new Date().toISOString()
     });

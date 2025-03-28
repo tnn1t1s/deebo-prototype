@@ -1,16 +1,26 @@
 import { z } from 'zod';
 import { promises as fs } from 'fs';
+import { FSWatcher, watch } from 'fs';
 import { resolve } from 'path';
 import { createLogger } from './logger.js';
+import { PathResolver } from './path-resolver.js';
 
 // Tool configuration schema using Zod
+const PythonToolConfigSchema = z.object({
+  usePythonResolver: z.boolean().default(false),
+  pythonEnvVars: z.record(z.string()).optional()
+});
+
 const ToolConfigSchema = z.object({
   tools: z.record(z.object({
-    path: z.string(),
+    command: z.string(),
+    args: z.array(z.string()),
     timeout: z.number().min(1000).default(10000),
     retries: z.number().min(0).default(3),
     baseDelay: z.number().min(100).default(1000),
-    allowedActions: z.array(z.string()).optional()
+    allowedActions: z.array(z.string()).optional(),
+    env: z.record(z.string()).optional(),
+    python: PythonToolConfigSchema.optional()
   }))
 });
 
@@ -21,7 +31,7 @@ export class ToolConfigManager {
   private config: ToolConfig | null = null;
   private configPath: string;
   private logger: any;
-  private watcher: fs.FileHandle | null = null;
+  private watcher: FSWatcher | null = null;
 
   private constructor(configPath: string) {
     this.configPath = configPath;
@@ -36,22 +46,17 @@ export class ToolConfigManager {
   }
 
   private async initialize() {
-    // Start with initLogger
-    const { initLogger } = await import('./init-logger.js');
-    this.logger = initLogger;
-    
     try {
+      // Initialize logger first
+      const { createLogger } = await import('./logger.js');
+      this.logger = await createLogger('system', 'tool-config');
+      
       // Get path resolver and ensure config directory exists
-      const { getPathResolver } = await import('./path-resolver-helper.js');
-      const pathResolver = await getPathResolver();
+      const pathResolver = await PathResolver.getInstance();
       
       // Ensure config directory exists
       const configDir = await pathResolver.ensureDirectory('config');
-      this.logger.info('Config directory ensured', { path: configDir });
-      
-      // Now safe to switch to regular logger
-      const { createLogger } = await import('./logger.js');
-      this.logger = createLogger('system', 'tool-config');
+      await this.logger.info('Config directory ensured', { path: configDir });
       
       await this.loadConfig();
       await this.watchConfig();
@@ -63,7 +68,11 @@ export class ToolConfigManager {
 
   private async loadConfig() {
     try {
-      const fullPath = resolve(process.cwd(), this.configPath);
+      // Get resolver for safe path handling
+      const resolver = await PathResolver.getInstance();
+      
+      // Use resolver to get safe config path
+      const fullPath = resolver.resolvePath(this.configPath);
       const content = await fs.readFile(fullPath, 'utf-8');
       const json = JSON.parse(content);
       
@@ -90,18 +99,26 @@ export class ToolConfigManager {
 
   private async watchConfig() {
     try {
+      // Clean up existing watcher if any
+      if (this.watcher) {
+        await this.watcher.close();
+        this.watcher = null;
+      }
+
       const fullPath = resolve(process.cwd(), this.configPath);
       const dir = resolve(fullPath, '..');
       
-      // Watch the directory for changes to the config file
-      const watcher = fs.watch(dir);
-      
-      for await (const event of watcher) {
-        if (event.filename === 'tools.json') {
+      // Store watcher reference for cleanup
+      const watcher = watch(dir, (eventType: string, filename: string | null) => {
+        if (filename && filename === 'tools.json') {
           this.logger.info('Tool configuration file changed, reloading');
-          await this.loadConfig();
+          this.loadConfig().catch(error => {
+            this.logger.error('Failed to reload config', { error });
+          });
         }
-      }
+      });
+      
+      this.watcher = watcher;
     } catch (error: any) {
       this.logger.error('Failed to watch tool configuration', { 
         error: error.message 
@@ -109,7 +126,39 @@ export class ToolConfigManager {
     }
   }
 
-  getToolConfig(toolName: string) {
+  public async dispose() {
+    try {
+      // Log before cleanup
+      await this.logger?.info('Disposing tool config manager');
+
+      // Clean up watcher
+      if (this.watcher) {
+        await this.watcher.close();
+        this.watcher = null;
+      }
+
+      // Reset singleton instance only if this is the current instance
+      if (ToolConfigManager.instance === this) {
+        ToolConfigManager.instance = null as unknown as ToolConfigManager;
+      }
+
+      // Clean up config state last
+      this.config = null;
+      this.logger = null;
+
+    } catch (error) {
+      // Log error before nulling logger
+      await this.logger?.error('Error during tool config manager disposal', { error });
+      
+      // Clean up even on error
+      this.config = null;
+      this.logger = null;
+      
+      throw error;
+    }
+  }
+
+  async getToolConfig(toolName: string) {
     if (!this.config) {
       throw new Error('Tool configuration not loaded');
     }
@@ -119,12 +168,28 @@ export class ToolConfigManager {
       throw new Error(`Tool not found in configuration: ${toolName}`);
     }
 
+    // If tool uses Python resolver, merge Python environment
+    if (toolConfig.python?.usePythonResolver) {
+      const { PythonPathResolver } = await import('./python-path-resolver.js');
+      const pythonResolver = await PythonPathResolver.getInstance();
+      
+      // Update command to use resolved Python interpreter
+      toolConfig.command = pythonResolver.getInterpreterPath();
+      
+      // Merge Python environment variables
+      toolConfig.env = {
+        ...toolConfig.env,
+        ...pythonResolver.getEnv(),
+        ...toolConfig.python.pythonEnvVars
+      };
+    }
+
     return toolConfig;
   }
 
-  isActionAllowed(toolName: string, action: string): boolean {
+  async isActionAllowed(toolName: string, action: string): Promise<boolean> {
     try {
-      const config = this.getToolConfig(toolName);
+      const config = await this.getToolConfig(toolName);
       if (!config.allowedActions) {
         return true; // If no allowed actions specified, allow all
       }
@@ -136,17 +201,16 @@ export class ToolConfigManager {
 
   async validateToolPath(toolName: string): Promise<boolean> {
     try {
-      const config = this.getToolConfig(toolName);
-      const fullPath = resolve(process.cwd(), config.path);
-      await fs.access(fullPath);
-      return true;
+      const config = await this.getToolConfig(toolName);
+      // Just check if the command exists, since we're using external tools
+      return config.command !== undefined && config.args !== undefined;
     } catch {
       return false;
     }
   }
 
-  getRetryConfig(toolName: string) {
-    const config = this.getToolConfig(toolName);
+  async getRetryConfig(toolName: string) {
+    const config = await this.getToolConfig(toolName);
     return {
       timeout: config.timeout,
       retries: config.retries,

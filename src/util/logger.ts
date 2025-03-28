@@ -1,7 +1,6 @@
 import { createWriteStream, WriteStream } from 'fs';
-import { join, dirname } from 'path';
 import { tmpdir } from 'os';
-import { ensureDirectory } from './init.js';
+import { PathResolver } from './path-resolver.js';
 
 export interface LogEntry {
   timestamp: string;
@@ -12,62 +11,63 @@ export interface LogEntry {
 }
 
 export class Logger {
-  private stream!: WriteStream; // Using definite assignment assertion
+  private stream: WriteStream | null = null;
   private component: string;
   private logPath: string;
+  private initPromise: Promise<void>;
 
   constructor(logPath: string, component: string) {
     this.component = component;
     this.logPath = logPath;
-    
-    // Initialize with a temporary stream that will be replaced
-    this.stream = createWriteStream('/dev/null');
-    
-    // Use IIFE to handle async initialization
-    (async () => {
-      try {
-        // Ensure the directory exists before creating the write stream
-        const dir = dirname(logPath);
-        await ensureDirectory(dir);
-        
-        // Create write stream after directory exists
-        this.stream = createWriteStream(logPath, { flags: 'a' });
-
-        // Handle stream errors
-        this.stream.on('error', (error) => {
-          this.fallbackToTemp();
-        });
-      } catch (error) {
-        this.fallbackToTemp();
-      }
-    })();
+    this.initPromise = this.initialize();
   }
 
-  private fallbackToTemp() {
+  private async initialize(): Promise<void> {
     try {
-      // Try to use the tmp directory in DEEBO_ROOT first
-      if (process.env.DEEBO_ROOT) {
-        const tmpPath = join(process.env.DEEBO_ROOT, 'tmp', `${this.component}.log`);
-        this.stream = createWriteStream(tmpPath, { flags: 'a' });
-        this.logPath = tmpPath;
-        return;
+      const resolver = await PathResolver.getInstance();
+      if (!resolver.isInitialized()) {
+        await resolver.initialize(process.env.DEEBO_ROOT || process.cwd());
       }
-    } catch (error) {
-      // Silently fail and try next fallback
-    }
+      const resolvedPath = resolver.resolvePath(this.logPath);
+      
+      // Create write stream
+      this.stream = createWriteStream(resolvedPath, { flags: 'a' });
 
-    // Final fallback to system temp directory
+      // Handle stream errors
+      this.stream.on('error', async (error) => {
+        await this.fallbackToTemp();
+      });
+    } catch (error) {
+      await this.fallbackToTemp();
+    }
+  }
+
+  private async fallbackToTemp(): Promise<void> {
     try {
-      const systemTmpPath = join(tmpdir(), 'deebo-prototype', `${this.component}.log`);
-      ensureDirectory(dirname(systemTmpPath));
+      const resolver = await PathResolver.getInstance();
+    if (!resolver.isInitialized()) {
+      await resolver.initialize(process.env.DEEBO_ROOT || process.cwd());
+    }
+      const tmpPath = resolver.resolvePath(`tmp/${this.component}.log`);
+      this.stream?.end(); // Close existing stream if any
+      this.stream = createWriteStream(tmpPath, { flags: 'a' });
+      this.logPath = tmpPath;
+    } catch (error) {
+      // Final fallback to system temp directory
+      const systemTmpPath = `${tmpdir()}/deebo-prototype/${this.component}.log`;
+      this.stream?.end(); // Close existing stream if any
       this.stream = createWriteStream(systemTmpPath, { flags: 'a' });
       this.logPath = systemTmpPath;
-    } catch (error) {
-      throw new Error(`Could not create logger in any location: ${error}`);
     }
   }
 
-  private writeEntry(entry: LogEntry) {
+  private async writeEntry(entry: LogEntry): Promise<void> {
+    await this.initPromise; // Ensure initialization is complete
+
+    if (!this.stream) {
+      throw new Error('Logger stream not initialized');
+    }
+
     try {
       // Write as properly formatted NDJSON with explicit formatting
       const jsonEntry = {
@@ -82,22 +82,27 @@ export class Logger {
       // Format with proper line endings and ensure complete JSON objects
       const formattedEntry = JSON.stringify(jsonEntry) + '\n';
       
-      // Try to write to stream
-      const writeSuccess = this.stream.write(formattedEntry);
-      
-      // Handle backpressure
-      if (!writeSuccess) {
-        this.stream.once('drain', () => {
-          this.stream.write(formattedEntry);
-        });
-      }
+      // Write to stream with Promise wrapper for proper async handling
+      await new Promise<void>((resolve, reject) => {
+        if (!this.stream) {
+          reject(new Error('Logger stream not initialized'));
+          return;
+        }
 
-      // Skip console logging for clean stdio transport
-      
+        const writeSuccess = this.stream.write(formattedEntry, (error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+        
+        // Handle backpressure
+        if (!writeSuccess) {
+          this.stream.once('drain', resolve);
+        }
+      });
     } catch (error) {
       // Try to recover by switching to temp file
       try {
-        this.fallbackToTemp();
+        await this.fallbackToTemp();
         
         // Write simplified error entry to new location
         const timestamp = new Date().toISOString();
@@ -110,14 +115,21 @@ export class Logger {
           original_path: this.logPath
         };
         
-        this.stream.write(JSON.stringify(errorEntry) + '\n');
+        if (this.stream) {
+          await new Promise<void>((resolve, reject) => {
+            this.stream!.write(JSON.stringify(errorEntry) + '\n', (error) => {
+              if (error) reject(error);
+              else resolve();
+            });
+          });
+        }
       } catch {
         // Silent fail - we can't log if logging itself fails
       }
     }
   }
 
-  private log(level: LogEntry['level'], message: string, metadata?: Record<string, any>) {
+  private async log(level: LogEntry['level'], message: string, metadata?: Record<string, any>): Promise<void> {
     const entry: LogEntry = {
       timestamp: new Date().toISOString(),
       level,
@@ -125,71 +137,57 @@ export class Logger {
       message,
       metadata
     };
-    this.writeEntry(entry);
+    await this.writeEntry(entry);
   }
 
-  info(message: string, metadata?: Record<string, any>) {
-    this.log('info', message, metadata);
+  async info(message: string, metadata?: Record<string, any>): Promise<void> {
+    await this.log('info', message, metadata);
   }
 
-  error(message: string, metadata?: Record<string, any>) {
-    this.log('error', message, metadata);
+  async error(message: string, metadata?: Record<string, any>): Promise<void> {
+    await this.log('error', message, metadata);
   }
 
-  debug(message: string, metadata?: Record<string, any>) {
-    this.log('debug', message, metadata);
+  async debug(message: string, metadata?: Record<string, any>): Promise<void> {
+    await this.log('debug', message, metadata);
   }
 
-  warn(message: string, metadata?: Record<string, any>) {
-    this.log('warn', message, metadata);
+  async warn(message: string, metadata?: Record<string, any>): Promise<void> {
+    await this.log('warn', message, metadata);
   }
 
-  close() {
-    this.stream.end();
+  async close(): Promise<void> {
+    await this.initPromise;
+    if (this.stream) {
+      await new Promise<void>((resolve) => {
+        this.stream!.end(() => resolve());
+      });
+    }
   }
 }
 
-// Cache for loggers to prevent duplicate creation
-const loggerCache = new Map<string, Logger>();
-
 // Factory function to create loggers with consistent paths
-export function createLogger(sessionId: string, component: string): Logger {
-  const cacheKey = `${sessionId}:${component}`;
-  
-  // Return cached logger if it exists
-  if (loggerCache.has(cacheKey)) {
-    return loggerCache.get(cacheKey)!;
-  }
-  
-  // Use the base directory from environment
-  const baseDir = process.env.DEEBO_ROOT;
-  if (!baseDir) {
-    throw new Error('DEEBO_ROOT not set - directories not properly initialized');
-  }
-  
-  // Determine log path
-  const logPath = sessionId === 'server' 
-    ? join(baseDir, 'sessions', 'server', `${component}.log`)
-    : join(baseDir, 'sessions', sessionId, 'logs', `${component}.log`);
-
+export async function createLogger(sessionId: string, component: string): Promise<Logger> {
   try {
+    const resolver = await PathResolver.getInstance();
+    if (!resolver.isInitialized()) {
+      await resolver.initialize(process.env.DEEBO_ROOT || process.cwd());
+    }
+    
+    // Determine log path
+    const logPath = sessionId === 'server' 
+      ? `sessions/server/${component}.log`
+      : `sessions/${sessionId}/logs/${component}.log`;
+
     // Create logger with original path
-    const logger = new Logger(logPath, component);
-    loggerCache.set(cacheKey, logger);
-    return logger;
+    return new Logger(logPath, component);
   } catch (error) {
     // Try fallback to tmp directory
-    try {
-      const tmpPath = join(baseDir, 'tmp', `${sessionId}-${component}.log`);
-      const logger = new Logger(tmpPath, component);
-      loggerCache.set(cacheKey, logger);
-      return logger;
-    } catch (tmpError) {
-      // Final fallback to system temp directory
-      const systemTmpPath = join(tmpdir(), 'deebo-prototype', `${sessionId}-${component}.log`);
-      const logger = new Logger(systemTmpPath, component);
-      loggerCache.set(cacheKey, logger);
-      return logger;
+    const resolver = await PathResolver.getInstance();
+    if (!resolver.isInitialized()) {
+      await resolver.initialize(process.env.DEEBO_ROOT || process.cwd());
     }
+    const tmpPath = `tmp/${sessionId}-${component}.log`;
+    return new Logger(tmpPath, component);
   }
 }
