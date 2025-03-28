@@ -27,12 +27,12 @@ server.tool(
   "start",
   {
     error: z.string(),
+    repoPath: z.string(), // Required
     context: z.string().optional(),
     language: z.string().optional(),
-    filePath: z.string().optional(),
-    repoPath: z.string().optional()
+    filePath: z.string().optional()
   },
-  async ({ error, context, language, filePath, repoPath }) => {
+  async ({ error, repoPath, context, language, filePath }) => {
     const sessionId = `session-${Date.now()}`;
     
     // Run mother agent directly in same process
@@ -42,7 +42,7 @@ server.tool(
       context ?? "",
       language ?? "typescript",
       filePath ?? "",
-      repoPath ?? ""
+      repoPath // No longer optional
     ).catch(err => console.error('Debug session failed:', err));
 
     // Return session ID immediately

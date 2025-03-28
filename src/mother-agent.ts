@@ -43,7 +43,7 @@ export async function runMotherAgent(
 
     // Get initial context
     const observations = {
-      git: repoPath ? {
+      git: {
         status: await gitClient.callTool({
           name: 'git_status',
           arguments: { repo_path: repoPath }
@@ -52,7 +52,7 @@ export async function runMotherAgent(
           name: 'git_diff',
           arguments: { repo_path: repoPath }
         })
-      } : null,
+      },
       files: filePath ? await filesystemClient.callTool({
         name: 'read_file',
         arguments: { path: filePath }
@@ -60,7 +60,7 @@ export async function runMotherAgent(
       context: await filesystemClient.callTool({
         name: 'search_files',
         arguments: { 
-            path: repoPath || DEEBO_ROOT,
+          path: repoPath,  // No fallback - repoPath is required
           pattern: '*.{js,ts,json}'
         }
       })
@@ -135,18 +135,22 @@ export async function runMotherAgent(
         });
 
         const searchText = getTextContent(searchResponse);
-        if (!searchText) {
+        if (!searchText || searchText === 'No matches found') {
           await new Promise(r => setTimeout(r, 100));
           continue;
         }
 
-        const matches = JSON.parse(searchText) as string[];
-        if (matches.length > 0) {
-          // Get latest report
-          const latestReport = matches
-            .sort((a: string, b: string) => b.localeCompare(a))[0];
-          const report = JSON.parse(await readFile(latestReport, 'utf8'));
-          return { id: scenarioId, ...report };
+        try {
+          const matches = JSON.parse(searchText) as string[];
+          if (matches.length > 0) {
+            // Get latest report
+            const latestReport = matches
+              .sort((a: string, b: string) => b.localeCompare(a))[0];
+            const report = JSON.parse(await readFile(latestReport, 'utf8'));
+            return { id: scenarioId, ...report };
+          }
+        } catch (err) {
+          await log(sessionId, 'mother', 'error', 'Failed to parse search results', { error: err });
         }
 
         await new Promise(r => setTimeout(r, 100));

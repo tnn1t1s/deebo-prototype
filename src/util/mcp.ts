@@ -26,9 +26,9 @@ export async function connectMcpTool(name: string, tool: string): Promise<McpCli
   // Trust the tools but handle errors properly
   try {
     const transport = new StdioClientTransport({
-      command: tool === 'git-mcp' ? join(DEEBO_ROOT, '.venv/mcp/bin/python3') : 'npx',
+      command: tool === 'git-mcp' ? '/Users/sriram/.local/share/deebo-prototype/venv/bin/python' : 'npx',
       args: tool === 'git-mcp' 
-        ? ['-m', 'mcp_server_git', '-r', DEEBO_ROOT, '--verbose']
+        ? ['-m', 'mcp_server_git', '--verbose']
         : ['-y', '@modelcontextprotocol/server-filesystem', '.']
     });
 
