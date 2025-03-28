@@ -1,46 +1,28 @@
-import { appendFile } from 'fs/promises';
+import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
-import { DIRS } from './config.js';
+import { DEEBO_ROOT } from '../index.js';
 
-export interface LoggerLike {
-  debug: (message: string, data?: any) => Promise<void>;
-  info: (message: string, data?: any) => Promise<void>;
-  warn: (message: string, data?: any) => Promise<void>;
-  error: (message: string, data?: any) => Promise<void>;
+// Just write to files - one log per session
+export async function log(sessionId: string, name: string, level: string, message: string, data?: any) {
+  const logsDir = join(DEEBO_ROOT, 'logs');
+  await mkdir(logsDir, { recursive: true });
+
+  const entry = JSON.stringify({
+    timestamp: new Date().toISOString(),
+    agent: name,
+    level,
+    message,
+    data
+  }) + '\n';
+
+  await writeFile(
+    join(logsDir, `${sessionId}.log`),
+    entry,
+    { flag: 'a' }
+  );
 }
 
-/**
- * Create a simple logger that writes to a file
- */
-export async function createLogger(type: string, name: string): Promise<LoggerLike> {
-  const logFile = join(DIRS.logs, `${type}-${name}.log`);
-
-  const log = async (level: string, message: string, data?: any) => {
-    const timestamp = new Date().toISOString();
-    const entry = JSON.stringify({
-      timestamp,
-      level,
-      message,
-      data
-    }) + '\n';
-
-    await appendFile(logFile, entry);
-  };
-
-  return {
-    debug: (message: string, data?: any) => log('debug', message, data),
-    info: (message: string, data?: any) => log('info', message, data),
-    warn: (message: string, data?: any) => log('warn', message, data),
-    error: (message: string, data?: any) => log('error', message, data)
-  };
+// Simple console logging
+export function consoleLog(level: string, message: string, data?: any) {
+  console.log(`[${level}] ${message}`, data || '');
 }
-
-/**
- * Simple console logger for initialization
- */
-export const initLogger: LoggerLike = {
-  debug: async (message: string, data?: any) => console.debug(message, data),
-  info: async (message: string, data?: any) => console.info(message, data),
-  warn: async (message: string, data?: any) => console.warn(message, data),
-  error: async (message: string, data?: any) => console.error(message, data)
-};

@@ -1,16 +1,10 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { mkdir } from 'fs/promises';
 import { join } from 'path';
-import { DIRS } from './util/config.js';
-import { createLogger } from './util/logger.js';
-import { loadPythonConfig, getPythonEnv } from './util/config.js';
+import { log } from './util/logger.js';
+import { connectMcpTool } from './util/mcp.js';
+import { DEEBO_ROOT } from './index.js';
 
 type MicroOodaState = 'investigate' | 'analyze' | 'validate' | 'report';
-
-interface McpClient {
-  callTool: (request: { name: string; arguments: Record<string, unknown> }) => Promise<unknown>;
-}
 
 interface ScenarioArgs {
   id: string;
@@ -48,41 +42,6 @@ function parseArgs(args: string[]): ScenarioArgs {
   };
 }
 
-/**
- * Connect to MCP tool - trust the tool to handle its own setup
- */
-async function connectMcpTool(tool: string): Promise<McpClient> {
-  const client = new Client({
-    name: `scenario-${tool}`,
-    version: '1.0.0'
-  });
-
-  let transport;
-  if (tool === 'git-mcp') {
-    // Git needs Python setup
-    const config = await loadPythonConfig();
-    transport = new StdioClientTransport({
-      command: config.interpreter_path,
-      args: ['-m', 'mcp_server_git'],
-      env: getPythonEnv(config)
-    });
-  } else {
-    // Filesystem just uses NPX
-    transport = new StdioClientTransport({
-      command: 'npx',
-      args: ['-y', '@modelcontextprotocol/server-filesystem', '.'],
-      env: Object.entries(process.env).reduce<Record<string, string>>((acc, [key, val]) => {
-        if (val !== undefined) {
-          acc[key] = val;
-        }
-        return acc;
-      }, {})
-    });
-  }
-
-  await client.connect(transport);
-  return client;
-}
 
 /**
  * Main scenario agent function
@@ -91,14 +50,13 @@ async function connectMcpTool(tool: string): Promise<McpClient> {
  * - Follows micro-OODA naturally
  */
 export async function runScenarioAgent(args: ScenarioArgs) {
-  const logger = await createLogger(args.session, `scenario-${args.id}`);
-  await logger.info('Scenario agent started', { hypothesis: args.hypothesis });
+  await log(args.session, `scenario-${args.id}`, 'info', 'Scenario agent started', { hypothesis: args.hypothesis });
 
   try {
     // INVESTIGATE: Connect to tools
-    await logger.info('Micro OODA cycle', { state: 'investigate' as MicroOodaState });
-    const gitClient = await connectMcpTool('git-mcp');
-    const filesystemClient = await connectMcpTool('filesystem-mcp');
+    await log(args.session, `scenario-${args.id}`, 'info', 'Micro OODA cycle', { state: 'investigate' as MicroOodaState });
+    const gitClient = await connectMcpTool('scenario-git', 'git-mcp');
+    const filesystemClient = await connectMcpTool('scenario-filesystem', 'filesystem-mcp');
 
     // Create investigation branch if we have a repo
     if (args.repoPath) {
@@ -116,7 +74,7 @@ export async function runScenarioAgent(args: ScenarioArgs) {
     let complete = false;
     while (!complete) {
       // INVESTIGATE: Gather current state
-      await logger.info('Micro OODA cycle', { state: 'investigate' as MicroOodaState });
+      await log(args.session, `scenario-${args.id}`, 'info', 'Micro OODA cycle', { state: 'investigate' as MicroOodaState });
       const observations = {
         git: args.repoPath ? {
           status: await gitClient.callTool({
@@ -135,17 +93,16 @@ export async function runScenarioAgent(args: ScenarioArgs) {
         context: await filesystemClient.callTool({
           name: 'search_files',
           arguments: { 
-            path: args.repoPath || process.cwd(),
+            path: args.repoPath || DEEBO_ROOT,
             pattern: '*.{js,ts,json}'
           }
         })
       };
 
       // ANALYZE: Let Claude determine next actions
-      await logger.info('Micro OODA cycle', { state: 'analyze' as MicroOodaState });
-      const anthropic = new (await import('@anthropic-ai/sdk')).default({
-        apiKey: process.env.ANTHROPIC_API_KEY
-      });
+      await log(args.session, `scenario-${args.id}`, 'info', 'Micro OODA cycle', { state: 'analyze' as MicroOodaState });
+      // Trust process environment - no need to handle API key
+      const anthropic = new (await import('@anthropic-ai/sdk')).default();
 
       const analysis = await anthropic.messages.create({
         model: 'claude-3-5-sonnet-20241022',
@@ -176,7 +133,7 @@ Return JSON with:
       const { actions, complete: shouldComplete, success, explanation } = JSON.parse(content.text);
 
       // VALIDATE: Execute suggested actions
-      await logger.info('Micro OODA cycle', { state: 'validate' as MicroOodaState });
+      await log(args.session, `scenario-${args.id}`, 'info', 'Micro OODA cycle', { state: 'validate' as MicroOodaState });
       if (actions?.length) {
         for (const action of actions) {
           const client = action.tool === 'git-mcp' ? gitClient : filesystemClient;
@@ -193,10 +150,12 @@ Return JSON with:
       if (shouldComplete) {
         complete = true;
         // REPORT: Write findings
-        await logger.info('Micro OODA cycle', { state: 'report' as MicroOodaState });
-        await mkdir(DIRS.reports, { recursive: true });
-        const reportPath = join(DIRS.reports, `${args.id}-report-${Date.now()}.json`);
+        await log(args.session, `scenario-${args.id}`, 'info', 'Micro OODA cycle', { state: 'report' as MicroOodaState });
+        // Create reports directory
+        const reportsDir = join(DEEBO_ROOT, 'reports');
+        await mkdir(reportsDir, { recursive: true });
         
+        const reportPath = join(DEEBO_ROOT, 'reports', `${args.id}-report-${Date.now()}.json`);
         const report = {
           success,
           explanation,
@@ -216,7 +175,7 @@ Return JSON with:
       }
     }
   } catch (error) {
-    logger.error('Scenario agent failed', { error });
+    await log(args.session, `scenario-${args.id}`, 'error', 'Scenario agent failed', { error });
     throw error;
   }
 }
