@@ -1,9 +1,6 @@
-import { mkdir } from 'fs/promises';
 import { join } from 'path';
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { log } from './util/logger.js';
 import { connectMcpTool } from './util/mcp.js';
-import { DEEBO_ROOT } from './index.js';
 
 type MicroOodaState = 'investigate' | 'analyze' | 'validate' | 'report';
 

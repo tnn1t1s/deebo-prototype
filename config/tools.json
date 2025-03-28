@@ -13,9 +13,8 @@
       "command": "uvx",
       "args": [
         "mcp-server-git",
-        "-r",
-        "/Users/sriram/Documents/task-manager",
-        "-v"
+        "--repository",
+        "/Users/sriram/Documents/task-manager"
       ]
     }
   }

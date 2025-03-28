@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import { join } from 'path';
 import { log } from './util/logger.js';
-import { connectMcpTool, getTextContent } from './util/mcp.js';
+import { connectMcpTool } from './util/mcp.js';
 import { DEEBO_ROOT } from './index.js';
 
 type OodaState = 'observe' | 'orient' | 'decide' | 'act';
@@ -13,15 +13,19 @@ type OodaState = 'observe' | 'orient' | 'decide' | 'act';
  * - Trusts Claude for strategy
  * - One-way OODA state logging
  */
+const MAX_RETRIES = 3; // Maximum number of retry attempts
+
 export async function runMotherAgent(
   sessionId: string,
   error: string,
   context: string,
   language: string,
   filePath: string,
-  repoPath: string
+  repoPath: string,
+  retryCount: number = 0,
+  previousResults: any[] = []
 ): Promise<any> {
-  await log(sessionId, 'mother', 'info', 'Mother agent started', { error, language });
+  await log(sessionId, 'mother', 'info', 'Mother agent started', { error, language, retryCount });
 
   try {
     // OBSERVE: Connect to tools and analyze error
@@ -184,8 +188,18 @@ export async function runMotherAgent(
       return result;
     }
 
-    await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'act' as OodaState, action: 'fail' });
-    throw new Error('No solution found');
+    await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'act' as OodaState, action: 'retry' });
+    
+    if (retryCount >= MAX_RETRIES) {
+      await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'act' as OodaState, action: 'fail', reason: 'max_retries' });
+      throw new Error(`No solution found after ${MAX_RETRIES} attempts`);
+    }
+
+    // Add results to context so Claude knows what was tried
+    const newContext = `${context}\nPrevious attempts (${retryCount + 1}): ${JSON.stringify([...previousResults, ...results])}`;
+    
+    // Recursive call with updated context and retry count
+    return runMotherAgent(sessionId, error, newContext, language, filePath, repoPath, retryCount + 1, [...previousResults, ...results]);
   } catch (error) {
     // Log the actual error details
     await log(sessionId, 'mother', 'error', 'Mother agent failed', {
