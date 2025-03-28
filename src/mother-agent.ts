@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { join } from 'path';
 import { mkdir, readFile } from 'fs/promises';
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { log } from './util/logger.js';
 import { connectMcpTool, getTextContent } from './util/mcp.js';
 import { DEEBO_ROOT } from './index.js';
@@ -22,17 +23,6 @@ export async function runMotherAgent(
   filePath: string,
   repoPath: string
 ): Promise<any> {
-  // Each agent handles its own directories
-  const sessionDir = join(DEEBO_ROOT, 'sessions', sessionId);
-  const logsDir = join(DEEBO_ROOT, 'logs');
-  const reportsDir = join(DEEBO_ROOT, 'reports');
-  
-  await Promise.all([
-    mkdir(sessionDir, { recursive: true }),
-    mkdir(logsDir, { recursive: true }),
-    mkdir(reportsDir, { recursive: true })
-  ]);
-  
   await log(sessionId, 'mother', 'info', 'Mother agent started', { error, language });
 
   try {
@@ -40,6 +30,13 @@ export async function runMotherAgent(
     await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'observe' as OodaState });
     const gitClient = await connectMcpTool('mother-git', 'git-mcp');
     const filesystemClient = await connectMcpTool('mother-filesystem', 'filesystem-mcp');
+
+    // Create mother's workspace
+    const motherWorkspace = join('sessions', sessionId, 'mother');
+    await filesystemClient.callTool({
+      name: 'create_directory',
+      arguments: { path: motherWorkspace }
+    });
 
     // Get initial context
     const observations = {
@@ -60,7 +57,7 @@ export async function runMotherAgent(
       context: await filesystemClient.callTool({
         name: 'search_files',
         arguments: { 
-          path: repoPath,  // No fallback - repoPath is required
+          path: repoPath,
           pattern: '*.{js,ts,json}'
         }
       })
@@ -68,7 +65,6 @@ export async function runMotherAgent(
 
     // ORIENT: Let Claude analyze and suggest hypotheses
     await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'orient' as OodaState });
-    // Trust process environment - no need to handle API key
     const anthropic = new (await import('@anthropic-ai/sdk')).default();
 
     const analysis = await anthropic.messages.create({
@@ -107,7 +103,7 @@ export async function runMotherAgent(
       const scenarioId = `scenario-${sessionId}-${hypothesis.type}`;
       const scenarioPath = join(DEEBO_ROOT, 'build/scenario-agent.js');
 
-      // Spawn and forget
+      // Simple one-way communication: spawn, collect output, wait for exit
       const childProcess = spawn('node', [
         scenarioPath,
         '--id', scenarioId,
@@ -118,43 +114,36 @@ export async function runMotherAgent(
         '--language', language,
         '--file', filePath,
         '--repo', repoPath
-      ], {
-        stdio: 'pipe',
-        detached: true
-      });
-      childProcess.unref();
+      ]);
 
-      // Wait for report file using filesystem-mcp
-      while (true) {
-        const searchResponse = await filesystemClient.callTool({
-          name: 'search_files',
-          arguments: {
-            path: join(DEEBO_ROOT, 'reports'),
-            pattern: `${scenarioId}-report-*.json`
+      // Collect stdout/stderr
+      let stdout = '';
+      let stderr = '';
+      childProcess.stdout.on('data', data => stdout += data);
+      childProcess.stderr.on('data', data => stderr += data);
+
+      // One-way communication: just wait for exit
+      return new Promise((resolve, reject) => {
+        childProcess.on('exit', code => {
+          if (code === 0 && stdout) {
+            try {
+              const report = JSON.parse(stdout);
+              resolve({ id: scenarioId, ...report });
+            } catch (err) {
+              reject(new Error(`Invalid report format: ${err instanceof Error ? err.message : String(err)}`));
+            }
+          } else if (stderr) {
+            try {
+              const error = JSON.parse(stderr);
+              resolve({ id: scenarioId, ...error });
+            } catch (err) {
+              reject(new Error(`Scenario failed: ${err instanceof Error ? err.message : String(err)}`));
+            }
+          } else {
+            reject(new Error(`Scenario exited with code ${code}`));
           }
         });
-
-        const searchText = getTextContent(searchResponse);
-        if (!searchText || searchText === 'No matches found') {
-          await new Promise(r => setTimeout(r, 100));
-          continue;
-        }
-
-        try {
-          const matches = JSON.parse(searchText) as string[];
-          if (matches.length > 0) {
-            // Get latest report
-            const latestReport = matches
-              .sort((a: string, b: string) => b.localeCompare(a))[0];
-            const report = JSON.parse(await readFile(latestReport, 'utf8'));
-            return { id: scenarioId, ...report };
-          }
-        } catch (err) {
-          await log(sessionId, 'mother', 'error', 'Failed to parse search results', { error: err });
-        }
-
-        await new Promise(r => setTimeout(r, 100));
-      }
+      });
     }));
 
     // OBSERVE results
@@ -200,7 +189,10 @@ export async function runMotherAgent(
     await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'act' as OodaState, action: 'fail' });
     throw new Error('No solution found');
   } catch (error) {
-    await log(sessionId, 'mother', 'error', 'Mother agent failed', { error });
+    // Log the actual error details
+    await log(sessionId, 'mother', 'error', 'Mother agent failed', {
+      error: error instanceof Error ? error.message : String(error)
+    });
     throw error;
   }
 }

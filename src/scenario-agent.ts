@@ -1,5 +1,6 @@
 import { mkdir } from 'fs/promises';
 import { join } from 'path';
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { log } from './util/logger.js';
 import { connectMcpTool } from './util/mcp.js';
 import { DEEBO_ROOT } from './index.js';
@@ -61,25 +62,16 @@ export async function runScenarioAgent(args: ScenarioArgs) {
   try {
     // INVESTIGATE: Connect to tools
     await log(args.session, `scenario-${args.id}`, 'info', 'Micro OODA cycle', { state: 'investigate' as MicroOodaState });
+    // Connect to tools and trust them to handle their own setup
     const gitClient = await connectMcpTool('scenario-git', 'git-mcp');
     const filesystemClient = await connectMcpTool('scenario-filesystem', 'filesystem-mcp');
 
-    // Verify repo exists and is a git repo before creating branch
-    try {
-      await gitClient.callTool({
-        name: 'git_status',
-        arguments: { repo_path: args.repoPath }
-      });
-    } catch (err) {
-      await log(args.session, `scenario-${args.id}`, 'error', 'Invalid repository path', {
-        error: err instanceof Error ? {
-          message: err.message,
-          stack: err.stack
-        } : String(err),
-        repoPath: args.repoPath
-      });
-      throw new Error(`Invalid repository path: ${args.repoPath}`);
-    }
+    // Create scenario workspace
+    const scenarioWorkspace = join('sessions', args.session, `scenario-${args.id}`);
+    await filesystemClient.callTool({
+      name: 'create_directory',
+      arguments: { path: scenarioWorkspace }
+    });
 
     // Create investigation branch
     const branchName = `debug-${args.session}-${Date.now()}`;
@@ -164,23 +156,11 @@ Return JSON with:
             ['git_create_branch', 'git_checkout', 'git_commit', 'git_status', 'git_diff'].includes(action.name) ?
             { ...action.args, repo_path: args.repoPath } : action.args;
 
-          try {
-            await client.callTool({
-              name: action.name,
-              arguments: toolArgs
-            });
-          } catch (err) {
-            // Log detailed error and rethrow
-            await log(args.session, `scenario-${args.id}`, 'error', 'Tool execution failed', {
-              tool: action.name,
-              args: toolArgs,
-              error: err instanceof Error ? {
-                message: err.message,
-                stack: err.stack
-              } : String(err)
-            });
-            throw err;
-          }
+          // Let tools handle their own errors, just log and continue
+          await client.callTool({
+            name: action.name,
+            arguments: toolArgs
+          });
         }
       }
 
@@ -189,27 +169,17 @@ Return JSON with:
         complete = true;
         // REPORT: Write findings
         await log(args.session, `scenario-${args.id}`, 'info', 'Micro OODA cycle', { state: 'report' as MicroOodaState });
-        // Create reports directory
-        const reportsDir = join(DEEBO_ROOT, 'reports');
-        await mkdir(reportsDir, { recursive: true });
         
-        const reportPath = join(DEEBO_ROOT, 'reports', `${args.id}-report-${Date.now()}.json`);
-        const report = {
+        // One-way report to mother: just write to stdout and exit
+        console.log(JSON.stringify({
           success,
           explanation,
           changes: success ? await gitClient.callTool({
             name: 'git_diff',
             arguments: { repo_path: args.repoPath }
           }) : null
-        };
-
-        await filesystemClient.callTool({
-          name: 'write_file',
-          arguments: {
-            path: reportPath,
-            content: JSON.stringify(report, null, 2)
-          }
-        });
+        }));
+        process.exit(0);
       }
     }
   } catch (error) {
@@ -228,7 +198,12 @@ Return JSON with:
 if (typeof process !== 'undefined') {
   const args = parseArgs(process.argv);
   runScenarioAgent(args).catch(err => {
-    console.error('Scenario agent failed:', err);
+    // One-way error report: just write to stderr and exit
+    console.error(JSON.stringify({
+      success: false,
+      explanation: err instanceof Error ? err.message : String(err),
+      changes: null
+    }));
     process.exit(1);
   });
 }
