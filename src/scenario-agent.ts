@@ -2,8 +2,6 @@ import { join } from 'path';
 import { log } from './util/logger.js';
 import { connectMcpTool } from './util/mcp.js';
 
-type MicroOodaState = 'investigate' | 'analyze' | 'validate' | 'report';
-
 interface ScenarioArgs {
   id: string;
   session: string;
@@ -11,13 +9,10 @@ interface ScenarioArgs {
   context: string;
   hypothesis: string;
   language: string;
-  repoPath: string;  // Required
+  repoPath: string;
   filePath?: string;
 }
 
-/**
- * Parse command line arguments
- */
 function parseArgs(args: string[]): ScenarioArgs {
   const result: Record<string, string> = {};
   for (let i = 0; i < args.length; i++) {
@@ -46,29 +41,13 @@ function parseArgs(args: string[]): ScenarioArgs {
   };
 }
 
-
-/**
- * Main scenario agent function
- * - Free to explore its hypothesis
- * - Has both git-mcp and filesystem-mcp
- * - Follows micro-OODA naturally
- */
 export async function runScenarioAgent(args: ScenarioArgs) {
   await log(args.session, `scenario-${args.id}`, 'info', 'Scenario agent started', { hypothesis: args.hypothesis });
 
   try {
-    // INVESTIGATE: Connect to tools
-    await log(args.session, `scenario-${args.id}`, 'info', 'Micro OODA cycle', { state: 'investigate' as MicroOodaState });
-    // Connect to tools and trust them to handle their own setup
+    // Set up tools
     const gitClient = await connectMcpTool('scenario-git', 'git-mcp');
     const filesystemClient = await connectMcpTool('scenario-filesystem', 'filesystem-mcp');
-
-    // Create scenario workspace
-    const scenarioWorkspace = join('sessions', args.session, `scenario-${args.id}`);
-    await filesystemClient.callTool({
-      name: 'create_directory',
-      arguments: { path: scenarioWorkspace }
-    });
 
     // Create investigation branch
     const branchName = `debug-${args.session}-${Date.now()}`;
@@ -81,10 +60,7 @@ export async function runScenarioAgent(args: ScenarioArgs) {
       arguments: { repo_path: args.repoPath, branch_name: branchName }
     });
 
-    let complete = false;
-    while (!complete) {
-      // INVESTIGATE: Gather current state
-      await log(args.session, `scenario-${args.id}`, 'info', 'Micro OODA cycle', { state: 'investigate' as MicroOodaState });
+    while (true) { // Let Claude decide when to stop
       const observations = {
         git: {
           status: await gitClient.callTool({
@@ -99,40 +75,29 @@ export async function runScenarioAgent(args: ScenarioArgs) {
         files: args.filePath ? await filesystemClient.callTool({
           name: 'read_file',
           arguments: { path: args.filePath }
-        }) : null,
-        context: await filesystemClient.callTool({
-          name: 'search_files',
-          arguments: { 
-            path: args.repoPath,  // No fallback
-            pattern: '*.{js,ts,json}'
-          }
-        })
+        }) : null
       };
 
-      // ANALYZE: Let Claude determine next actions
-      await log(args.session, `scenario-${args.id}`, 'info', 'Micro OODA cycle', { state: 'analyze' as MicroOodaState });
-      // Trust process environment - no need to handle API key
       const anthropic = new (await import('@anthropic-ai/sdk')).default();
-
       const analysis = await anthropic.messages.create({
         model: 'claude-3-5-sonnet-20241022',
         max_tokens: 1024,
         system: `You are investigating this error: ${args.error}
 Based on hypothesis: ${args.hypothesis}
-Return JSON with:
-{
-  "actions": [{
-    "tool": "git-mcp" | "filesystem-mcp",
-    "name": string,
-    "args": object
-  }],
-  "complete": boolean,
-  "success": boolean,
-  "explanation": string
-}`,
+
+You can think and explain naturally while using tools. Tools are available via XML:
+<function_calls>
+<invoke name="git_status|git_diff|etc">
+<parameter name="repo_path">${args.repoPath}</parameter>
+</invoke>
+</function_calls>
+
+When you want to report success, wrap the explanation in <debug_success> tags.
+When you want to report failure, wrap the explanation in <debug_failure> tags.
+Only use these tags when you're ready to conclude the investigation.`,
         messages: [{
-          role: 'user',
-          content: `Current observations:\n${JSON.stringify(observations, null, 2)}\n\nWhat actions should I take next?`
+          role: 'user', 
+          content: `Current state: ${JSON.stringify(observations, null, 2)}\n\nContinue investigating based on your hypothesis.`
         }]
       });
 
@@ -140,54 +105,58 @@ Return JSON with:
       if (!('text' in content)) {
         throw new Error('Expected text response from Claude');
       }
-      const { actions, complete: shouldComplete, success, explanation } = JSON.parse(content.text);
 
-      // VALIDATE: Execute suggested actions
-      await log(args.session, `scenario-${args.id}`, 'info', 'Micro OODA cycle', { state: 'validate' as MicroOodaState });
-      if (actions?.length) {
-        for (const action of actions) {
-          const client = action.tool === 'git-mcp' ? gitClient : filesystemClient;
-          
-          // Let Claude's analysis determine which operations need repo_path
-          const toolArgs = action.tool === 'git-mcp' && 
-            ['git_create_branch', 'git_checkout', 'git_commit', 'git_status', 'git_diff'].includes(action.name) ?
-            { ...action.args, repo_path: args.repoPath } : action.args;
+      // Log Claude's thinking
+      await log(args.session, `scenario-${args.id}`, 'info', 'Investigation progress', {
+        thinking: content.text
+      });
 
-          // Let tools handle their own errors, just log and continue
-          await client.callTool({
-            name: action.name,
-            arguments: toolArgs
-          });
-        }
-      }
+      // Check for conclusion
+      const successMatch = content.text.match(/<debug_success>(.*?)<\/debug_success>/);
+      const failureMatch = content.text.match(/<debug_failure>(.*?)<\/debug_failure>/);
 
-      // Should we continue exploring?
-      if (shouldComplete) {
-        complete = true;
-        // REPORT: Write findings
-        await log(args.session, `scenario-${args.id}`, 'info', 'Micro OODA cycle', { state: 'report' as MicroOodaState });
-        
-        // One-way report to mother: just write to stdout and exit
+      if (successMatch) {
+        const solution = successMatch[1].trim();
+        // Get final git diff for the changes made
+        const changes = await gitClient.callTool({
+          name: 'git_diff',
+          arguments: { repo_path: args.repoPath }
+        });
+
+        // Write conclusion to stdout and exit
         console.log(JSON.stringify({
-          success,
-          explanation,
-          changes: success ? await gitClient.callTool({
-            name: 'git_diff',
-            arguments: { repo_path: args.repoPath }
-          }) : null
+          success: true,
+          explanation: solution,
+          changes
         }));
         process.exit(0);
       }
+
+      if (failureMatch) {
+        const reason = failureMatch[1].trim();
+        console.log(JSON.stringify({
+          success: false,
+          explanation: reason,
+          changes: null
+        }));
+        process.exit(0);
+      }
+
+      // If no conclusion, continue investigation
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Small delay between iterations
     }
   } catch (error) {
-    // Preserve error details in log
     await log(args.session, `scenario-${args.id}`, 'error', 'Scenario agent failed', {
-      error: error instanceof Error ? {
-        message: error.message,
-        stack: error.stack
-      } : String(error)
+      error: error instanceof Error ? error.message : String(error)
     });
-    throw error;
+
+    // Report error through stdout
+    console.log(JSON.stringify({
+      success: false,
+      explanation: error instanceof Error ? error.message : String(error),
+      changes: null
+    }));
+    process.exit(1);
   }
 }
 
@@ -195,7 +164,6 @@ Return JSON with:
 if (typeof process !== 'undefined') {
   const args = parseArgs(process.argv);
   runScenarioAgent(args).catch(err => {
-    // One-way error report: just write to stderr and exit
     console.error(JSON.stringify({
       success: false,
       explanation: err instanceof Error ? err.message : String(err),

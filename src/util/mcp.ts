@@ -12,7 +12,9 @@ export async function connectMcpTool(name: string, toolName: string): Promise<Cl
     name,
     version: '1.0.0'
   }, {
-    capabilities: { tools: {} }
+    capabilities: { 
+      tools: true  // Enable tool discovery
+    }
   });
 
   await client.connect(new StdioClientTransport({
@@ -21,11 +23,4 @@ export async function connectMcpTool(name: string, toolName: string): Promise<Cl
   }));
 
   return client;
-}
-
-export function getTextContent(result: unknown): string {
-  const response = result as { content?: Array<{ type: string; text?: string }> };
-  if (!response?.content?.length) return '';
-  const content = response.content[0];
-  return (content?.type === 'text' && content.text) ? content.text : '';
 }

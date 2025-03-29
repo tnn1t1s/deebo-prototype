@@ -27,7 +27,7 @@ server.tool(
   "start",
   {
     error: z.string(),
-    repoPath: z.string(), // Required
+    repoPath: z.string(),
     context: z.string().optional(),
     language: z.string().optional(),
     filePath: z.string().optional()
@@ -35,23 +35,40 @@ server.tool(
   async ({ error, repoPath, context, language, filePath }) => {
     const sessionId = `session-${Date.now()}`;
     
-    // Run mother agent directly in same process
-    runMotherAgent(
-      sessionId,
-      error,
-      context ?? "",
-      language ?? "typescript",
-      filePath ?? "",
-      repoPath // No longer optional
-    ).catch(err => console.error('Debug session failed:', err));
+    try {
+      // Run mother agent and wait for result
+      const result = await runMotherAgent(
+        sessionId,
+        error,
+        context ?? "",
+        language ?? "typescript",
+        filePath ?? "",
+        repoPath
+      );
 
-    // Return session ID immediately
-    return {
-      content: [{ 
-        type: "text",
-        text: sessionId // Just return the session ID as per SDK format
-      }]
-    };
+      return {
+        content: [{ 
+          type: "text",
+          text: JSON.stringify({
+            sessionId,
+            status: "complete",
+            solution: result?.solution
+          })
+        }]
+      };
+    } catch (err) {
+      // More informative error response
+      return {
+        content: [{ 
+          type: "text",
+          text: JSON.stringify({
+            sessionId,
+            status: "failed",
+            error: err instanceof Error ? err.message : String(err)
+          })
+        }]
+      };
+    }
   }
 );
 
@@ -63,21 +80,20 @@ server.tool(
   },
   async ({ sessionId }) => {
     try {
-      // Just read the single session log file
       const logPath = join(DEEBO_ROOT, 'logs', `${sessionId}.log`);
-      const log = await readFile(logPath, 'utf8');
+      const logContent = await readFile(logPath, 'utf8');
+      // Split into lines and return directly - no parsing needed
       return {
         content: [{ 
           type: "text",
-          text: log
+          text: logContent  // Just return the raw logs
         }]
       };
     } catch (err) {
-      const error = err as Error;
       return {
         content: [{ 
           type: "text",
-          text: `Session not found or still initializing`
+          text: `Session initializing`
         }]
       };
     }
