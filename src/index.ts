@@ -2,9 +2,18 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { readFile, mkdir } from 'fs/promises';
-import { runMotherAgent } from './mother-agent.js';
-import { fileURLToPath } from 'url';
+import { config } from 'dotenv';
 import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
+import { runMotherAgent } from './mother-agent.js';
+
+// Load environment variables from .env file
+config();
+
+// Validate required environment variables
+if (!process.env.ANTHROPIC_API_KEY) {
+  throw new Error('ANTHROPIC_API_KEY environment variable is required');
+}
 
 // Set up basic directories
 const __filename = fileURLToPath(import.meta.url);
@@ -34,41 +43,24 @@ server.tool(
   },
   async ({ error, repoPath, context, language, filePath }) => {
     const sessionId = `session-${Date.now()}`;
-    
-    try {
-      // Run mother agent and wait for result
-      const result = await runMotherAgent(
-        sessionId,
-        error,
-        context ?? "",
-        language ?? "typescript",
-        filePath ?? "",
-        repoPath
-      );
 
-      return {
-        content: [{ 
-          type: "text",
-          text: JSON.stringify({
-            sessionId,
-            status: "complete",
-            solution: result?.solution
-          })
-        }]
-      };
-    } catch (err) {
-      // More informative error response
-      return {
-        content: [{ 
-          type: "text",
-          text: JSON.stringify({
-            sessionId,
-            status: "failed",
-            error: err instanceof Error ? err.message : String(err)
-          })
-        }]
-      };
-    }
+    // Run mother agent in background
+    runMotherAgent(
+      sessionId,
+      error,
+      context ?? "",
+      language ?? "typescript",
+      filePath ?? "",
+      repoPath
+    ).catch(err => console.error('Debug session failed:', err));
+
+    // Return session ID immediately
+    return {
+      content: [{
+        type: "text",
+        text: sessionId
+      }]
+    };
   }
 );
 
@@ -82,11 +74,18 @@ server.tool(
     try {
       const logPath = join(DEEBO_ROOT, 'logs', `${sessionId}.log`);
       const logContent = await readFile(logPath, 'utf8');
-      // Split into lines and return directly - no parsing needed
+      const lines = logContent.split('\n').filter(Boolean);
+      const events = lines.map(line => JSON.parse(line));
+      const lastEvent = events[events.length - 1];
+      
       return {
         content: [{ 
           type: "text",
-          text: logContent  // Just return the raw logs
+          text: JSON.stringify({
+            sessionId,
+            status: lastEvent.level === 'error' ? 'failed' : 'in_progress',
+            events
+          })
         }]
       };
     } catch (err) {

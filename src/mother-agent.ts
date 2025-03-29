@@ -6,22 +6,47 @@ import { DEEBO_ROOT } from './index.js';
 
 type OodaState = 'observe' | 'orient' | 'decide' | 'act';
 
+/**
+ * Mother agent - keep it simple
+ * - Has both git-mcp and filesystem-mcp
+ * - Trusts OS for process isolation
+ * - Trusts Claude for strategy
+ * - One-way OODA state logging
+ */
+const MAX_RETRIES = 3;
+
 export async function runMotherAgent(
   sessionId: string,
   error: string,
   context: string,
   language: string,
   filePath: string,
-  repoPath: string
+  repoPath: string,
+  retryCount: number = 0,
+  previousResults: any[] = []
 ): Promise<any> {
-  await log(sessionId, 'mother', 'info', 'Mother agent started', { error, language });
+  await log(sessionId, 'mother', 'info', 'Mother agent started', { error, language, retryCount });
 
   try {
-    // Connect to tools and get initial observations
+    // OBSERVE: Connect to tools and set up workspace
+    await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'observe' as OodaState });
+    
+    await log(sessionId, 'mother', 'info', 'Connecting to git-mcp...');
+    
     const gitClient = await connectMcpTool('mother-git', 'git-mcp');
-    const filesystemClient = await connectMcpTool('mother-filesystem', 'filesystem-mcp');
+    await log(sessionId, 'mother', 'info', 'Connected to git-mcp successfully');
 
+    await log(sessionId, 'mother', 'info', 'Connecting to filesystem-mcp...');
+    const filesystemClient = await connectMcpTool('mother-filesystem', 'filesystem-mcp');
+    await log(sessionId, 'mother', 'info', 'Connected to filesystem-mcp successfully');
+
+    // Gather initial observations
     const observations = {
+      error,
+      context,
+      language,
+      filePath,
+      repoPath,
       git: {
         status: await gitClient.callTool({
           name: 'git_status',
@@ -38,25 +63,27 @@ export async function runMotherAgent(
       }) : null
     };
 
-    // Let Claude analyze and suggest hypotheses
+
+    // ORIENT: Let Claude analyze and suggest hypotheses
+    await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'orient' as OodaState });
     const anthropic = new (await import('@anthropic-ai/sdk')).default();
+
     const analysis = await anthropic.messages.create({
       model: 'claude-3-5-sonnet-20241022',
       max_tokens: 1024,
-      system: `You are analyzing a bug to determine debugging strategies. Think naturally about different hypotheses and explain your reasoning.
-
-Tools are available via XML tags:
-<function_calls>
-<invoke name="git_status|git_diff|etc">
-<parameter name="repo_path">${repoPath}</parameter>
-</invoke>
-</function_calls>
-
-When you identify a promising hypothesis, wrap it in <debug_hypothesis> tags.
-You can have multiple hypotheses and explain your thinking between them.`,
+      system: `You are analyzing a bug to determine investigation strategy. Return JSON array of hypotheses:
+[{
+  "type": string,
+  "description": string,
+  "suggestedTools": [{
+    "tool": "git-mcp" | "filesystem-mcp",
+    "name": string,
+    "args": object
+  }]
+}]`,
       messages: [{
         role: 'user',
-        content: `Error: ${error}\nContext: ${context}\nObservations: ${JSON.stringify(observations, null, 2)}\n\nAnalyze this issue and suggest debugging approaches.`
+        content: `Error: ${error}\nContext: ${context}\nObservations: ${JSON.stringify(observations, null, 2)}`
       }]
     });
 
@@ -64,28 +91,26 @@ You can have multiple hypotheses and explain your thinking between them.`,
     if (!('text' in content)) {
       throw new Error('Expected text response from Claude');
     }
+    const hypotheses = JSON.parse(content.text);
 
-    // Extract hypotheses from natural text
-    const hypothesesMatches = content.text.match(/<debug_hypothesis>(.*?)<\/debug_hypothesis>/gs) || [];
-    const hypotheses = hypothesesMatches.map(match => 
-      match.replace(/<\/?debug_hypothesis>/g, '').trim()
-    );
+    // DECIDE: Create scenario agents
+    await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'decide' as OodaState });
+    const scenarioIds = hypotheses.map((h: { type: string }) => `scenario-${sessionId}-${h.type}`);
+    await log(sessionId, 'mother', 'info', 'Creating scenario agents', { scenarioIds });
 
-    await log(sessionId, 'mother', 'info', 'Creating scenario agents', { 
-      count: hypotheses.length,
-      hypotheses 
-    });
-
-    // Run scenarios
-    const results = await Promise.all(hypotheses.map(async (hypothesis): Promise<any> => {
+    // ACT: Run scenario agents in parallel
+    await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'act' as OodaState });
+    const results = await Promise.all(hypotheses.map(async (hypothesis: any) => {
+      const scenarioId = `scenario-${sessionId}-${hypothesis.type}`;
       const scenarioPath = join(DEEBO_ROOT, 'build/scenario-agent.js');
+
       const childProcess = spawn('node', [
         scenarioPath,
-        '--id', `scenario-${sessionId}-${Date.now()}`,
+        '--id', scenarioId,
         '--session', sessionId,
         '--error', error,
         '--context', context,
-        '--hypothesis', hypothesis,
+        '--hypothesis', hypothesis.description,
         '--language', language,
         '--file', filePath,
         '--repo', repoPath
@@ -101,34 +126,48 @@ You can have multiple hypotheses and explain your thinking between them.`,
           if (code === 0 && stdout) {
             try {
               const report = JSON.parse(stdout);
-              resolve({ id: hypothesis, ...report });
+              resolve({ id: scenarioId, ...report });
             } catch (err) {
-              reject(new Error(`Invalid report format: ${err}`));
+              reject(new Error(`Invalid report format: ${err instanceof Error ? err.message : String(err)}`));
+            }
+          } else if (stderr) {
+            try {
+              const error = JSON.parse(stderr);
+              resolve({ id: scenarioId, ...error });
+            } catch (err) {
+              reject(new Error(`Scenario failed: ${err instanceof Error ? err.message : String(err)}`));
             }
           } else {
-            reject(new Error(`Scenario failed: ${stderr || `Exit code ${code}`}`));
+            reject(new Error(`Scenario exited with code ${code}`));
           }
         });
       });
     }));
 
-    await log(sessionId, 'mother', 'info', 'Scenario results', {
+    // OBSERVE results
+    await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'observe' as OodaState });
+    await log(sessionId, 'mother', 'info', 'Scenario results', { 
       total: results.length,
-      successful: results.filter(r => r.success).length,
-      results
+      successful: results.filter((r: any) => r.success).length
     });
 
-    // Let Claude evaluate results naturally
+    // ORIENT: Let Claude evaluate results
+    await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'orient' as OodaState });
     const evaluation = await anthropic.messages.create({
       model: 'claude-3-5-sonnet-20241022',
       max_tokens: 1024,
-      system: `You are evaluating debugging results. Think through the evidence and explain your conclusions.
-If you identify a solution, wrap it in <debug_solution> tags.`,
+      system: `You are evaluating debugging results. Return JSON:
+{
+  "complete": boolean,
+  "result": {
+    "fix": string,
+    "confidence": number,
+    "explanation": string
+  }
+}`,
       messages: [{
         role: 'user',
-        content: `Here are the results from our debugging attempts:\n\n${results.map(r => 
-          `Scenario attempted: ${r.id}\nOutcome: ${r.explanation}\n${r.changes ? `Changes made:\n${r.changes}` : ''}\n`
-        ).join('\n\n')}`
+        content: JSON.stringify(results)
       }]
     });
 
@@ -136,18 +175,27 @@ If you identify a solution, wrap it in <debug_solution> tags.`,
     if (!('text' in evalContent)) {
       throw new Error('Expected text response from Claude');
     }
+    const { complete, result } = JSON.parse(evalContent.text);
 
-    // Look for solution in natural text
-    const solutionMatch = evalContent.text.match(/<debug_solution>(.*?)<\/debug_solution>/);
-    if (solutionMatch) {
-      const solution = solutionMatch[1].trim();
-      await log(sessionId, 'mother', 'info', 'Solution found', { solution });
-      return { solution };
+    // DECIDE & ACT on evaluation
+    await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'decide' as OodaState });
+    if (complete && result) {
+      await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'act' as OodaState, action: 'complete' });
+      return result;
     }
 
-    await log(sessionId, 'mother', 'info', 'No solution found', { evaluation: evalContent.text });
-    return null;
+    await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'act' as OodaState, action: 'retry' });
+    
+    if (retryCount >= MAX_RETRIES) {
+      await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'act' as OodaState, action: 'fail', reason: 'max_retries' });
+      throw new Error(`No solution found after ${MAX_RETRIES} attempts`);
+    }
 
+    // Add results to context so Claude knows what was tried
+    const newContext = `${context}\nPrevious attempts (${retryCount + 1}): ${JSON.stringify([...previousResults, ...results])}`;
+    
+    // Recursive call with updated context and retry count
+    return runMotherAgent(sessionId, error, newContext, language, filePath, repoPath, retryCount + 1, [...previousResults, ...results]);
   } catch (error) {
     await log(sessionId, 'mother', 'error', 'Mother agent failed', {
       error: error instanceof Error ? error.message : String(error)

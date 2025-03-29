@@ -1,6 +1,35 @@
 import { join } from 'path';
 import { log } from './util/logger.js';
 import { connectMcpTool } from './util/mcp.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+
+interface ToolCall {
+  serverName: string;
+  toolName: string;
+  arguments: Record<string, any>;
+}
+
+function parseToolCalls(text: string): ToolCall[] {
+  const toolCalls: ToolCall[] = [];
+  const regex = /<use_mcp_tool>\s*<server_name>(.*?)<\/server_name>\s*<tool_name>(.*?)<\/tool_name>\s*<arguments>(.*?)<\/arguments>\s*<\/use_mcp_tool>/gs;
+  
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    try {
+      const [_, serverName, toolName, argsStr] = match;
+      const args = JSON.parse(argsStr);
+      toolCalls.push({
+        serverName: serverName.trim(),
+        toolName: toolName.trim(),
+        arguments: args
+      });
+    } catch (err) {
+      console.error('Failed to parse tool call:', err);
+    }
+  }
+  
+  return toolCalls;
+}
 
 interface ScenarioArgs {
   id: string;
@@ -46,8 +75,19 @@ export async function runScenarioAgent(args: ScenarioArgs) {
 
   try {
     // Set up tools
+    await log(args.session, `scenario-${args.id}`, 'info', 'Connecting to git-mcp...');
     const gitClient = await connectMcpTool('scenario-git', 'git-mcp');
+    await log(args.session, `scenario-${args.id}`, 'info', 'Connected to git-mcp successfully');
+
+    await log(args.session, `scenario-${args.id}`, 'info', 'Connecting to filesystem-mcp...');
     const filesystemClient = await connectMcpTool('scenario-filesystem', 'filesystem-mcp');
+    await log(args.session, `scenario-${args.id}`, 'info', 'Connected to filesystem-mcp successfully');
+
+    // Map of MCP clients
+    const clients: Record<string, Client<any, any, any>> = {
+      'git-mcp': gitClient,
+      'filesystem-mcp': filesystemClient
+    };
 
     // Create investigation branch
     const branchName = `debug-${args.session}-${Date.now()}`;
@@ -60,7 +100,13 @@ export async function runScenarioAgent(args: ScenarioArgs) {
       arguments: { repo_path: args.repoPath, branch_name: branchName }
     });
 
-    while (true) { // Let Claude decide when to stop
+    // Initialize cumulative report to carry context over iterations
+    let cumulativeReport = "";
+
+    const maxIterations = 10;
+    let iteration = 0;
+    while (iteration < maxIterations) { // Let Claude decide when to stop
+      iteration++;
       const observations = {
         git: {
           status: await gitClient.callTool({
@@ -78,6 +124,14 @@ export async function runScenarioAgent(args: ScenarioArgs) {
         }) : null
       };
 
+      // Inject cumulative context into the prompt along with current observations
+      const promptContent = `Previous attempts:
+${cumulativeReport}
+
+Current state: ${JSON.stringify(observations, null, 2)}
+
+Continue investigating based on your hypothesis.`;
+
       const anthropic = new (await import('@anthropic-ai/sdk')).default();
       const analysis = await anthropic.messages.create({
         model: 'claude-3-5-sonnet-20241022',
@@ -85,19 +139,40 @@ export async function runScenarioAgent(args: ScenarioArgs) {
         system: `You are investigating this error: ${args.error}
 Based on hypothesis: ${args.hypothesis}
 
-You can think and explain naturally while using tools. Tools are available via XML:
-<function_calls>
-<invoke name="git_status|git_diff|etc">
-<parameter name="repo_path">${args.repoPath}</parameter>
-</invoke>
-</function_calls>
+You have access to the following MCP tools:
+
+git-mcp:
+- git_status: Show working tree status
+- git_diff: Show changes in working directory
+- git_create_branch: Create a new branch
+- git_checkout: Switch branches
+
+filesystem-mcp:
+- read_file: Read file contents
+- create_directory: Create directory
+- search_files: Search for files
+
+To use a tool, wrap your request in XML tags like this:
+
+<use_mcp_tool>
+  <server_name>git-mcp</server_name>
+  <tool_name>git_status</tool_name>
+  <arguments>
+    {
+      "repo_path": "/path/to/repo"
+    }
+  </arguments>
+</use_mcp_tool>
+
+Replace the server_name, tool_name, and arguments with the appropriate values.
+The arguments must be valid JSON.
 
 When you want to report success, wrap the explanation in <debug_success> tags.
 When you want to report failure, wrap the explanation in <debug_failure> tags.
 Only use these tags when you're ready to conclude the investigation.`,
         messages: [{
           role: 'user', 
-          content: `Current state: ${JSON.stringify(observations, null, 2)}\n\nContinue investigating based on your hypothesis.`
+          content: promptContent
         }]
       });
 
@@ -106,14 +181,40 @@ Only use these tags when you're ready to conclude the investigation.`,
         throw new Error('Expected text response from Claude');
       }
 
-      // Log Claude's thinking
+      const responseText = content.text;
+
+      // Log Claude's thinking for this iteration
       await log(args.session, `scenario-${args.id}`, 'info', 'Investigation progress', {
-        thinking: content.text
+        thinking: responseText
       });
 
-      // Check for conclusion
-      const successMatch = content.text.match(/<debug_success>(.*?)<\/debug_success>/);
-      const failureMatch = content.text.match(/<debug_failure>(.*?)<\/debug_failure>/);
+      // Append Claude's raw output to the cumulative report
+      cumulativeReport += "\n" + responseText;
+
+      // Execute any tool calls Claude suggested and capture outcomes
+      const toolCalls = parseToolCalls(responseText);
+      for (const call of toolCalls) {
+        const client = clients[call.serverName];
+        if (!client) {
+          cumulativeReport += `\nUnknown MCP server: ${call.serverName}`;
+          continue;
+        }
+        try {
+          const result = await client.callTool({
+            name: call.toolName,
+            arguments: call.arguments
+          });
+          // Append the raw outcome of the successful tool call
+          cumulativeReport += `\nTool call SUCCESS for ${call.serverName}.${call.toolName}: ${JSON.stringify(result)}`;
+        } catch (err) {
+          // Append the error details if the tool call fails
+          cumulativeReport += `\nTool call ERROR for ${call.serverName}.${call.toolName}: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      }
+
+      // Check for conclusion tags
+      const successMatch = responseText.match(/<debug_success>(.*?)<\/debug_success>/);
+      const failureMatch = responseText.match(/<debug_failure>(.*?)<\/debug_failure>/);
 
       if (successMatch) {
         const solution = successMatch[1].trim();
@@ -141,16 +242,22 @@ Only use these tags when you're ready to conclude the investigation.`,
         }));
         process.exit(0);
       }
-
-      // If no conclusion, continue investigation
-      await new Promise(resolve => setTimeout(resolve, 1000)); // Small delay between iterations
+      if (iteration === maxIterations) {
+        console.log(JSON.stringify({
+          success: false,
+          explanation: `Terminated after ${maxIterations} iterations.`,
+          changes: null
+        }));
+        process.exit(1);
+      }
+      // Delay between iterations
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
   } catch (error) {
     await log(args.session, `scenario-${args.id}`, 'error', 'Scenario agent failed', {
       error: error instanceof Error ? error.message : String(error)
     });
 
-    // Report error through stdout
     console.log(JSON.stringify({
       success: false,
       explanation: error instanceof Error ? error.message : String(error),

@@ -10,7 +10,7 @@
       ]
     },
     "git-mcp": {
-      "command": "uvx",
+      "command": "/Users/sriram/.local/bin/uvx",
       "args": [
         "mcp-server-git",
         "--repository",
