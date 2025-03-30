@@ -71,16 +71,16 @@ export async function runMotherAgent(
     const analysis = await anthropic.messages.create({
       model: 'claude-3-5-sonnet-20241022',
       max_tokens: 1024,
-      system: `You are analyzing a bug to determine investigation strategy. Return JSON array of hypotheses:
-[{
-  "type": string,
-  "description": string,
-  "suggestedTools": [{
-    "tool": "git-mcp" | "filesystem-mcp",
-    "name": string,
-    "args": object
-  }]
-}]`,
+      system: `You are the mother agent responsible for designing debugging investigations. Given an error, repo context, and git/file observations, generate hypotheses using natural language.
+    
+    Each hypothesis should be wrapped in XML like this:
+    
+    <hypothesis>
+      <type>...</type>
+      <description>...</description>
+    </hypothesis>
+    
+    Only use these tags to mark hypotheses. Return multiple if needed.`,
       messages: [{
         role: 'user',
         content: `Error: ${error}\nContext: ${context}\nObservations: ${JSON.stringify(observations, null, 2)}`
@@ -91,7 +91,7 @@ export async function runMotherAgent(
     if (!('text' in content)) {
       throw new Error('Expected text response from Claude');
     }
-    const hypotheses = JSON.parse(content.text);
+    const hypotheses = parseHypothesesFromXml(content.text);
 
     // DECIDE: Create scenario agents
     await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'decide' as OodaState });
@@ -202,4 +202,17 @@ export async function runMotherAgent(
     });
     throw error;
   }
+}
+
+function parseHypothesesFromXml(text: string): { type: string, description: string }[] {
+  const regex = /<hypothesis>\s*<type>(.*?)<\/type>\s*<description>(.*?)<\/description>\s*<\/hypothesis>/gs;
+  const result = [];
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    result.push({
+      type: match[1].trim(),
+      description: match[2].trim()
+    });
+  }
+  return result;
 }
