@@ -1,7 +1,7 @@
-import { join } from 'path';
 import { log } from './util/logger.js';
 import { connectMcpTool } from './util/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { writeReport } from './util/reports.js';
 
 interface ToolCall {
   serverName: string;
@@ -225,22 +225,27 @@ Only use these tags when you're ready to conclude the investigation.`,
         });
 
         // Write conclusion to stdout and exit
-        console.log(JSON.stringify({
-          success: true,
-          explanation: solution,
-          changes
-        }));
-        process.exit(0);
+        const finalReport = {
+                   success: true,
+                 explanation: solution,
+                changes
+             };
+          // Write report to memory bank under memory-bank/<projectId>/sessions/<sessionId>/reports/
+          await writeReport(args.repoPath, args.session, args.id, finalReport);
+          console.log(JSON.stringify(finalReport));
+          process.exit(0);
       }
 
       if (failureMatch) {
         const reason = failureMatch[1].trim();
-        console.log(JSON.stringify({
+        const finalReport = {
           success: false,
-          explanation: reason,
-          changes: null
-        }));
-        process.exit(0);
+           explanation: reason,
+           changes: null
+          };
+          await writeReport(args.repoPath, args.session, args.id, finalReport);
+          console.log(JSON.stringify(finalReport));
+          process.exit(0);
       }
       if (iteration === maxIterations) {
         console.log(JSON.stringify({

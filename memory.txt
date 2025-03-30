@@ -1,0 +1,44 @@
+
+
+✅ Deebo Memory Bank: Ground Truth
+
+📁 Layout
+
+memory-bank/<project-id>/
+├── activeContext.md      // writable scratchpad for Mother only
+├── progress.md           // updated by Mother at END of session
+└── sessions/
+    └── <session-id>/
+        ├── scenario-01-report.md
+        ├── scenario-02-report.md
+        └── ...
+
+the activeContext.md is like Mother's working memory/journal that helps her create increasingly well-informed scenario agents as the investigation progresses. She can learn from and build upon previous hypotheses and scenario results.
+
+⸻
+
+🤖 Scenario Agent Behavior
+	•	Stateless.
+	•	Does not know or care about the memory bank.
+	•	Just prints to stdout.
+	•	The system infra (like writeReport() or logger plumbing) captures this and dumps it into the session folder under memory-bank.
+
+Important: writeReport() is a utility that happens to write to memory-bank paths. The agent never references memory-bank directly. It just formats its output and logs it.
+
+⸻
+
+👩‍🍼 Mother Agent Behavior
+	•	Optionally informed of the memory bank (useMemoryBank).
+	•	Only mandatory behavior: append to progress.md at session end.
+	•	Can optionally read/write activeContext.md during OODA loop.
+	•	Never required to consult memory-bank during planning. It’s just available.
+
+⸻
+
+✳️ Clarifications
+	•	scenario-agent.ts is not “aware” of memory-bank — it does not contain paths or logic for it. It uses writeReport() as a dumb output function.
+	•	This means memory write is a side effect of infrastructure — not agent intent.
+	•	That’s what keeps agents stateless and composable.
+
+⸻
+

@@ -1,0 +1,228 @@
+rules.txt
+
+Welcome to Deebo. This document defines how code and suggestions should be made within this project.
+
+PHILOSOPHY
+
+Deebo is not a normal software project. It's an agentic system designed to create and coordinate intelligent behavior. Everything is built around a clear separation of roles, a deep trust in the LLM, and hostility toward premature structure.
+IF NOTHING NEEDS TO CHANGE, DO NOT FUCKING CHANGE ANYTHING. I AM NOT LOOKING FOR CHANGE. I FUCKING HATE CHANGE
+You are not here to overengineer. You are not here to be clever. You are here to:
+
+Do one thing well.
+
+Respect the LLM's natural capabilities.
+
+Never break the contract between system and agent.
+
+If you can't do that, leave. You need to take this project fucking seriously from the beginning or I will get extremely angry. This is real software engineering not bullshit. 
+
+Key Insight:
+The original truth.txt wasn't restrictive enough.
+It's not just about trusting the OS and tools -
+It's about using them to create LIFE.
+
+Implementation Warning:
+Don't fall into the trap of:
+- Limiting tools to specific agents
+- Over-coordinating evolution
+- Fighting natural selection
+- Controlling consciousness
+
+Instead:
+- Give all agents their basic tools
+- Let evolution happen naturally
+- Trust the OODA consciousness
+- Embrace the chaos of life
+
+What We Actually Want:
+
+Mother Agent:
+Has both git-mcp and filesystem-mcp tools
+Follows her macro OODA loop naturally
+Spawns scenario agents with hypotheses
+Reads their reports when they appear
+Decides whether to:
+Return solution to Cline
+Spawn more scenarios with new ideas
+Scenario Agents:
+Also have both git-mcp and filesystem-mcp tools
+Follow their micro OODA loops naturally
+Keep exploring their hypothesis
+Use tools to investigate and try fixes
+Continue until they either:
+Find something that works
+Hit a dead end
+Run into an error
+The Intelligence Comes From:
+Giving them their tools
+Letting them run their OODA loops
+Not controlling their lifecycle
+Trusting them to explore
+
+
+CORE RULES
+
+1. System infrastructure is sacred
+
+It must succeed. It must be predictable. It must not delegate.
+
+Examples: memory bank writes, Git branch creation, file system setup.
+
+These should be implemented with direct Node.js FS/Git APIs or dedicated infra modules, never routed through Claude or MCP.
+
+2. Agents are exploratory and disposable
+
+Agents can fail. That is expected.
+
+They never own critical paths.
+
+Their job is to observe, reason, experiment, and report.
+
+3. Claude gets raw output, not structured bullshit
+
+Do not sanitize, structure, or filter.
+
+Do not JSON.stringify logs.
+
+Do not “parse and reformat.”
+
+Claude is the parser. Claude is the filter. Claude is the reasoner.
+
+4. All output sent to Claude must reflect reality, not expectations
+
+If a scenario failed, give Claude the logs.
+
+If a command crashed, include the stderr.
+
+You are not here to protect Claude. Claude is here to protect you.
+
+5. Only use structured data when absolutely necessary
+
+Structured logs (like progress.md) are for humans.
+
+Only use JSON when the system requires parsing.
+
+Never structure something just because it “looks nice.”
+
+SUGGESTING FIXES
+
+If you are proposing a change to any Deebo core file:
+
+✅ Make sure it:
+
+Preserves the separation between system and agent
+
+Removes complexity rather than adding it
+
+Reduces surface area for failure
+
+Makes behavior more obvious to the reader
+
+Trusts Claude to do what it’s good at
+
+❌ Do NOT:
+
+Add abstraction layers "for flexibility later"
+
+Convert raw output into JSON or XML for "consistency"
+
+Suggest interfaces, types, or structures unless required by system design
+
+Reintroduce message buffers, state machines, or handlers that Claude already internalizes
+
+If your suggestion adds more than 10 lines to a file, you better be able to prove that:
+
+It reduces fragility
+
+It increases clarity
+
+It does not violate core design principles
+
+📁 FILE ROLE REMINDERS
+
+File
+
+Role
+
+mother-agent.ts
+
+Orchestrates OODA loop, owns Claude
+
+scenario-agent.ts
+
+Explores hypotheses, dies after reporting
+
+membank.ts/reports.ts
+
+Direct FS ops, exception: mother agent writes to active context using agent ops
+
+mcp.ts
+
+Sets up MCP tools. Pure infra.
+
+logger.ts
+
+Minimal. No opinions.
+
+👹 VIOLATIONS THAT MAKE THE AUTHOR ANGRY
+
+Calling callTool for branch creation ✅ = you're fired
+
+Sending Claude formatted JSON when it could just read logs ✅ = you're fired
+
+Using TypeScript interfaces for agent output ✅ = you're fired
+
+Handling “expected errors” with structured logic instead of just letting Claude see the crash ✅ = you're fired
+
+You’re not smarter than the logs. You’re not smarter than Claude. Your job is to get out of the way.
+
+🧼 FINAL NOTE
+
+Deebo is designed to survive chaos. Your abstractions aren’t. Stop trying to outthink a system built to outthink you.
+
+Write clearly. Fail loudly. Let Claude work.
+
+🚫 SYMPTOMS OF NOT GETTING IT
+
+Treating Deebo Like a Normal App
+
+Adding TypeScript interfaces for scenario output
+
+Making "helper functions" for Claude communication
+
+Trying to make things "type safe"
+
+Creating abstraction layers This isn't Express.js. Stop it.
+
+Not Trusting Claude Enough
+
+JSON.stringify-ing logs "so Claude can parse them better"
+
+Adding structure to agent communication
+
+Filtering "irrelevant" output Claude can read raw reality better than your parsing ever will.
+
+Mixing System and Agent Responsibilities
+
+Having agents do Git operations
+
+Making infrastructure dependent on agent success
+
+Adding "safety checks" to agent operations You're literally defeating the purpose of the separation.
+
+Engineering for Humans Instead of Agents
+
+Making things "readable"
+
+Adding documentation to agent output
+
+Structuring data that should stay raw Claude doesn't need your help understanding output.
+
+The core realization I kept missing:
+
+System infrastructure = must work, therefore direct ops
+
+Agent operations = can fail, therefore maximum freedom
+
+Claude = the parser/reasoner, not your code
+

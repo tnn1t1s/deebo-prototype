@@ -1,218 +1,185 @@
+// src/mother-agent.ts
 import { spawn } from 'child_process';
 import { join } from 'path';
 import { log } from './util/logger.js';
-import { connectMcpTool } from './util/mcp.js';
+import { connectRequiredTools } from './util/mcp.js';
 import { DEEBO_ROOT } from './index.js';
+import { updateMemoryBank } from './util/membank.js';
+import { getProjectId } from './util/sanitize.js';
+import { Message } from '@anthropic-ai/sdk/resources/messages.js';
 
-type OodaState = 'observe' | 'orient' | 'decide' | 'act';
+const MAX_RUNTIME = 15 * 60 * 1000; // 15 minutes
+const startTime = Date.now();
+const useMemoryBank = process.env.USE_MEMORY_BANK === 'true';
 
-/**
- * Mother agent - keep it simple
- * - Has both git-mcp and filesystem-mcp
- * - Trusts OS for process isolation
- * - Trusts Claude for strategy
- * - One-way OODA state logging
- */
-const MAX_RETRIES = 3;
-
-export async function runMotherAgent(
-  sessionId: string,
-  error: string,
-  context: string,
-  language: string,
-  filePath: string,
-  repoPath: string,
-  retryCount: number = 0,
-  previousResults: any[] = []
-): Promise<any> {
-  await log(sessionId, 'mother', 'info', 'Mother agent started', { error, language, retryCount });
+// Helper for type narrowing Claude's responses
+function getMessageText(message: Message): string {
+  const content = message.content[0];
+  return 'text' in content ? content.text : '';
+}
+// Helper to connect to MCP tools
+export async function runMotherAgent(sessionId: string, error: string, context: string, language: string, filePath: string, repoPath: string) {
+  await log(sessionId, 'mother', 'info', 'Mother agent started');
+  const projectId = getProjectId(repoPath);
+  const activeScenarios = new Set<string>();
 
   try {
-    // OBSERVE: Connect to tools and set up workspace
-    await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'observe' as OodaState });
-    
-    await log(sessionId, 'mother', 'info', 'Connecting to git-mcp...');
-    
-    const gitClient = await connectMcpTool('mother-git', 'git-mcp');
-    await log(sessionId, 'mother', 'info', 'Connected to git-mcp successfully');
+    // OBSERVE: Environment setup
+    await log(sessionId, 'mother', 'info', 'OODA: observe');
+    const { gitClient, filesystemClient } = await connectRequiredTools('mother', sessionId);
 
-    await log(sessionId, 'mother', 'info', 'Connecting to filesystem-mcp...');
-    const filesystemClient = await connectMcpTool('mother-filesystem', 'filesystem-mcp');
-    await log(sessionId, 'mother', 'info', 'Connected to filesystem-mcp successfully');
-
-    // Gather initial observations
-    const observations = {
-      error,
-      context,
-      language,
-      filePath,
-      repoPath,
-      git: {
-        status: await gitClient.callTool({
-          name: 'git_status',
-          arguments: { repo_path: repoPath }
-        }),
-        diff: await gitClient.callTool({
-          name: 'git_diff',
-          arguments: { repo_path: repoPath }
-        })
-      },
-      files: filePath ? await filesystemClient.callTool({
-        name: 'read_file',
-        arguments: { path: filePath }
-      }) : null
-    };
-
-
-    // ORIENT: Let Claude analyze and suggest hypotheses
-    await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'orient' as OodaState });
     const anthropic = new (await import('@anthropic-ai/sdk')).default();
-
-    const analysis = await anthropic.messages.create({
+    let conversation = await anthropic.messages.create({
       model: 'claude-3-5-sonnet-20241022',
       max_tokens: 1024,
-      system: `You are the mother agent responsible for designing debugging investigations. Given an error, repo context, and git/file observations, generate hypotheses using natural language.
-    
-    Each hypothesis should be wrapped in XML like this:
-    
-    <hypothesis>
-      <type>...</type>
-      <description>...</description>
-    </hypothesis>
-    
-    Only use these tags to mark hypotheses. Return multiple if needed.`,
       messages: [{
+        role: 'assistant',  // Claude needs to be the assistant
+        content: `You are the mother agent in an OODA loop debugging investigation. 
+
+You have access to these tools:
+
+git-mcp:
+- git_status: Show working tree status
+- git_diff: Show changes in working directory
+- git_diff_staged: Show staged changes
+- git_log: Show commit history
+
+filesystem-mcp:
+- read_file: Read file contents
+- search_files: Search for files
+- write_file: Write file contents
+
+Use tools by wrapping requests in XML tags like:
+<use_mcp_tool>
+  <server_name>git-mcp</server_name>
+  <tool_name>git_status</tool_name>
+  <arguments>
+    {
+      "repo_path": "/path/to/repo"
+    }
+  </arguments>
+</use_mcp_tool>`
+      }, {
         role: 'user',
-        content: `Error: ${error}\nContext: ${context}\nObservations: ${JSON.stringify(observations, null, 2)}`
+        content: `Error: ${error}
+Context: ${context}
+Language: ${language}
+File: ${filePath}
+Repo: ${repoPath}
+Session: ${sessionId}
+Project: ${projectId}
+${useMemoryBank ? '\nPrevious debugging attempts and context are available in the memory-bank directory if needed.' : ''}`
       }]
     });
 
-    const content = analysis.content[0];
-    if (!('text' in content)) {
-      throw new Error('Expected text response from Claude');
-    }
-    const hypotheses = parseHypothesesFromXml(content.text);
+    // ORIENT: Watch for tools and hypotheses
+    await log(sessionId, 'mother', 'info', 'OODA: orient');
 
-    // DECIDE: Create scenario agents
-    await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'decide' as OodaState });
-    const scenarioIds = hypotheses.map((h: { type: string }) => `scenario-${sessionId}-${h.type}`);
-    await log(sessionId, 'mother', 'info', 'Creating scenario agents', { scenarioIds });
+    while (!getMessageText(conversation).includes('<solution>')) {
+      const response = getMessageText(conversation);
 
-    // ACT: Run scenario agents in parallel
-    await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'act' as OodaState });
-    const results = await Promise.all(hypotheses.map(async (hypothesis: any) => {
-      const scenarioId = `scenario-${sessionId}-${hypothesis.type}`;
-      const scenarioPath = join(DEEBO_ROOT, 'build/scenario-agent.js');
+      // Handle any tool requests
+      if (response.includes('<use_mcp_tool>')) {
+        const toolCall = response.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/)?.[0];
+        if (!toolCall) continue;
 
-      const childProcess = spawn('node', [
-        scenarioPath,
-        '--id', scenarioId,
-        '--session', sessionId,
-        '--error', error,
-        '--context', context,
-        '--hypothesis', hypothesis.description,
-        '--language', language,
-        '--file', filePath,
-        '--repo', repoPath
-      ]);
+        const server = toolCall.includes('git-mcp') ? gitClient : filesystemClient;
+        const tool = toolCall.match(/git_\w+|read_file|write_file|search_files/)?.[0];
+        const argsMatch = toolCall.match(/{[\s\S]*?}/)?.[0];
+        if (!tool || !argsMatch) continue;
 
-      let stdout = '';
-      let stderr = '';
-      childProcess.stdout.on('data', data => stdout += data);
-      childProcess.stderr.on('data', data => stderr += data);
-
-      return new Promise((resolve, reject) => {
-        childProcess.on('exit', code => {
-          if (code === 0 && stdout) {
-            try {
-              const report = JSON.parse(stdout);
-              resolve({ id: scenarioId, ...report });
-            } catch (err) {
-              reject(new Error(`Invalid report format: ${err instanceof Error ? err.message : String(err)}`));
-            }
-          } else if (stderr) {
-            try {
-              const error = JSON.parse(stderr);
-              resolve({ id: scenarioId, ...error });
-            } catch (err) {
-              reject(new Error(`Scenario failed: ${err instanceof Error ? err.message : String(err)}`));
-            }
-          } else {
-            reject(new Error(`Scenario exited with code ${code}`));
-          }
+        const result = await server.callTool({
+          name: tool,
+          arguments: JSON.parse(argsMatch)
         });
-      });
-    }));
 
-    // OBSERVE results
-    await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'observe' as OodaState });
-    await log(sessionId, 'mother', 'info', 'Scenario results', { 
-      total: results.length,
-      successful: results.filter((r: any) => r.success).length
-    });
+        // Give Claude raw tool output
+        conversation = await anthropic.messages.create({
+          model: 'claude-3-5-sonnet-20241022',
+          max_tokens: 1024,
+          messages: [{
+            role: 'user',
+            content: JSON.stringify(result)
+          }]
+        });
+      }
 
-    // ORIENT: Let Claude evaluate results
-    await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'orient' as OodaState });
-    const evaluation = await anthropic.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
-      max_tokens: 1024,
-      system: `You are evaluating debugging results. Return JSON:
-{
-  "complete": boolean,
-  "result": {
-    "fix": string,
-    "confidence": number,
-    "explanation": string
+// Handle any hypotheses
+if (response.includes('<hypothesis>')) {
+  const hypotheses = response.split('<hypothesis>').slice(1);
+  
+  if (useMemoryBank) {
+    await updateMemoryBank(projectId, response, 'activeContext');
   }
-}`,
-      messages: [{
-        role: 'user',
-        content: JSON.stringify(results)
-      }]
+  
+  // Spawn scenarios for new hypotheses
+  const results = await Promise.all(hypotheses.map(async (hypothesis: string) => {
+    const scenarioId = `${sessionId}-${activeScenarios.size}`;
+    if (activeScenarios.has(scenarioId)) return '';
+    activeScenarios.add(scenarioId);
+
+    const child = spawn('node', [
+      join(DEEBO_ROOT, 'build/scenario-agent.js'),
+      '--id', scenarioId,
+      '--session', sessionId,
+      '--error', error,
+      '--context', context,
+      '--hypothesis', hypothesis,
+      '--language', language,
+      '--file', filePath || '',
+      '--repo', repoPath
+    ]);
+
+    let output = '';
+    child.stdout.on('data', data => output += data);
+    child.stderr.on('data', data => output += data);
+
+    return new Promise<string>((resolve) => {
+      child.on('exit', () => resolve(output));
     });
+  }));
 
-    const evalContent = evaluation.content[0];
-    if (!('text' in evalContent)) {
-      throw new Error('Expected text response from Claude');
-    }
-    const { complete, result } = JSON.parse(evalContent.text);
-
-    // DECIDE & ACT on evaluation
-    await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'decide' as OodaState });
-    if (complete && result) {
-      await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'act' as OodaState, action: 'complete' });
-      return result;
-    }
-
-    await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'act' as OodaState, action: 'retry' });
-    
-    if (retryCount >= MAX_RETRIES) {
-      await log(sessionId, 'mother', 'info', 'OODA transition', { state: 'act' as OodaState, action: 'fail', reason: 'max_retries' });
-      throw new Error(`No solution found after ${MAX_RETRIES} attempts`);
-    }
-
-    // Add results to context so Claude knows what was tried
-    const newContext = `${context}\nPrevious attempts (${retryCount + 1}): ${JSON.stringify([...previousResults, ...results])}`;
-    
-    // Recursive call with updated context and retry count
-    return runMotherAgent(sessionId, error, newContext, language, filePath, repoPath, retryCount + 1, [...previousResults, ...results]);
-  } catch (error) {
-    await log(sessionId, 'mother', 'error', 'Mother agent failed', {
-      error: error instanceof Error ? error.message : String(error)
-    });
-    throw error;
-  }
+  // Give Claude raw output - no mapping/structuring needed
+  conversation = await anthropic.messages.create({
+    model: 'claude-3-5-sonnet-20241022',
+    max_tokens: 1024,
+    messages: [{
+      role: 'user',
+      content: results.join('\n')
+    }]
+  });
 }
 
-function parseHypothesesFromXml(text: string): { type: string, description: string }[] {
-  const regex = /<hypothesis>\s*<type>(.*?)<\/type>\s*<description>(.*?)<\/description>\s*<\/hypothesis>/gs;
-  const result = [];
-  let match;
-  while ((match = regex.exec(text)) !== null) {
-    result.push({
-      type: match[1].trim(),
-      description: match[2].trim()
-    });
+      if (Date.now() - startTime > MAX_RUNTIME) {
+        throw new Error('Investigation exceeded maximum runtime');
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    // Structured record for our logs
+    if (useMemoryBank) {
+      await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - ${new Date().toISOString()}
+${error ? `Error: ${error}` : ''}
+${getMessageText(conversation)}
+Scenarios Run: ${activeScenarios.size}
+Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress');
+    }
+
+    return getMessageText(conversation);
+
+  } catch (err) {
+    const error = err as Error;
+    await log(sessionId, 'mother', 'error', `Failed: ${error.message}`);
+
+    if (useMemoryBank) {
+      await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - ${new Date().toISOString()}
+${error ? `Error: ${error}` : ''}
+Failed: ${error.message}
+Scenarios Run: ${activeScenarios.size}
+Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress');
+    }
+
+    throw error;
   }
-  return result;
 }

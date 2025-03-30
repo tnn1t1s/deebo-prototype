@@ -1,12 +1,10 @@
 import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { DEEBO_ROOT } from '../index.js';
+import { getProjectId } from './sanitize.js';
 
-// Just write to files - one log per session
+// Write logs to memory bank structure
 export async function log(sessionId: string, name: string, level: string, message: string, data?: any) {
-  const logsDir = join(DEEBO_ROOT, 'logs');
-  await mkdir(logsDir, { recursive: true });
-
   const entry = JSON.stringify({
     timestamp: new Date().toISOString(),
     agent: name,
@@ -15,11 +13,12 @@ export async function log(sessionId: string, name: string, level: string, messag
     data
   }) + '\n';
 
-  await writeFile(
-    join(logsDir, `${sessionId}.log`),
-    entry,
-    { flag: 'a' }
-  );
+  // Data will be written to memory-bank/projectId/sessions/sessionId/logs/agentName.log
+  const projectId = getProjectId(data?.repoPath);
+  if (projectId) {
+    const logPath = join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'logs', `${name}.log`);
+    await writeFile(logPath, entry, { flag: 'a' });
+  }
 }
 
 // Simple console logging

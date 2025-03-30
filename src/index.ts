@@ -6,6 +6,8 @@ import { config } from 'dotenv';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { runMotherAgent } from './mother-agent.js';
+import { getProjectId } from './util/sanitize.js';
+import { get } from "http";
 
 // Load environment variables from .env file
 config();
@@ -21,9 +23,7 @@ const __dirname = dirname(__filename);
 export const DEEBO_ROOT = join(__dirname, '..');
 
 // Create required directories
-await mkdir(join(DEEBO_ROOT, 'sessions'), { recursive: true });
-await mkdir(join(DEEBO_ROOT, 'logs'), { recursive: true });
-await mkdir(join(DEEBO_ROOT, 'reports'), { recursive: true });
+await mkdir(join(DEEBO_ROOT, 'memory-bank'), { recursive: true });
 
 // Create MCP server
 const server = new McpServer({
@@ -42,8 +42,10 @@ server.tool(
     filePath: z.string().optional()
   },
   async ({ error, repoPath, context, language, filePath }) => {
+    const projectId = getProjectId(repoPath);
     const sessionId = `session-${Date.now()}`;
-
+    await mkdir(join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'logs'), { recursive: true });
+    await mkdir(join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'reports'), { recursive: true });
     // Run mother agent in background
     runMotherAgent(
       sessionId,
@@ -68,11 +70,13 @@ server.tool(
 server.tool(
   "check",
   {
-    sessionId: z.string()
+    sessionId: z.string(),
+    repoPath: z.string()  // Need repo path to find project directory
   },
-  async ({ sessionId }) => {
+  async ({ sessionId, repoPath }) => {
     try {
-      const logPath = join(DEEBO_ROOT, 'logs', `${sessionId}.log`);
+      const projectId = getProjectId(repoPath);
+      const logPath = join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'logs', 'mother.log');
       const logContent = await readFile(logPath, 'utf8');
       const lines = logContent.split('\n').filter(Boolean);
       const events = lines.map(line => JSON.parse(line));
@@ -83,6 +87,7 @@ server.tool(
           type: "text",
           text: JSON.stringify({
             sessionId,
+            projectId,
             status: lastEvent.level === 'error' ? 'failed' : 'in_progress',
             events
           })
