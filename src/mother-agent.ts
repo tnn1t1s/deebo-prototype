@@ -158,7 +158,11 @@ ${useMemoryBank ? '\nPrevious debugging attempts and context are available in th
       // Handle Hypotheses → Scenario agents
       if (response.includes('<hypothesis>')) {
         const hypotheses = response.split('<hypothesis>').slice(1);
-
+        /**
+         * - if the mother isnt really writing to active context lets at least 
+         * write down her responses that include hypotheses, 
+         * as those are really the only significant ones anyways.
+         */
         if (useMemoryBank) {
           await updateMemoryBank(projectId, response, 'activeContext');
         }
