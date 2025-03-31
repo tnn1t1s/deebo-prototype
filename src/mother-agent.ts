@@ -17,6 +17,7 @@ import { DEEBO_ROOT } from './index.js';
 import { updateMemoryBank } from './util/membank.js';
 import { getProjectId } from './util/sanitize.js';
 import { Message } from '@anthropic-ai/sdk/resources/messages.js';
+import { createScenarioBranch } from './util/branch-manager.js';
 
 const MAX_RUNTIME = 15 * 60 * 1000; // 15 minutes
 const useMemoryBank = process.env.USE_MEMORY_BANK === 'true';
@@ -172,6 +173,7 @@ ${useMemoryBank ? '\nPrevious debugging attempts and context are available in th
           if (activeScenarios.has(scenarioId)) return '';
           activeScenarios.add(scenarioId);
 
+          const branchName = await createScenarioBranch(repoPath, sessionId);
           const child = spawn('node', [
             join(DEEBO_ROOT, 'build/scenario-agent.js'),
             '--id', scenarioId,
@@ -181,7 +183,8 @@ ${useMemoryBank ? '\nPrevious debugging attempts and context are available in th
             '--hypothesis', hypothesis,
             '--language', language,
             '--file', filePath || '',
-            '--repo', repoPath
+            '--repo', repoPath,
+            '--branch', branchName // Add branch name to args
           ]);
 
           let output = '';

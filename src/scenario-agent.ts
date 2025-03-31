@@ -1,7 +1,6 @@
 import { log } from './util/logger.js';
 import { connectMcpTool } from './util/mcp.js';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { writeReport } from './util/reports.js';
+import { writeReport } from './util/reports.js';  // System infrastructure for capturing output
 import { Message } from '@anthropic-ai/sdk/resources/messages.js';
 
 const MAX_RUNTIME = 15 * 60 * 1000; // 15 minutes
@@ -20,6 +19,7 @@ interface ScenarioArgs {
   language: string;
   repoPath: string;
   filePath?: string;
+  branch: string;
 }
 
 function parseArgs(args: string[]): ScenarioArgs {
@@ -46,7 +46,8 @@ function parseArgs(args: string[]): ScenarioArgs {
     hypothesis: result.hypothesis || '',
     language: result.language || 'typescript',
     repoPath,
-    filePath: result.file || undefined
+    filePath: result.file || undefined,
+    branch: result.branch || '' 
   };
 }
 
@@ -63,24 +64,16 @@ export async function runScenarioAgent(args: ScenarioArgs) {
     const filesystemClient = await connectMcpTool('scenario-filesystem', 'filesystem-mcp');
     await log(args.session, `scenario-${args.id}`, 'info', 'Connected to filesystem-mcp successfully');
 
-
-    // Create investigation branch
-    const branchName = `debug-${args.session}-${Date.now()}`;
-    await gitClient.callTool({
-      name: 'git_create_branch',
-      arguments: { repo_path: args.repoPath, branch_name: branchName }
-    });
-    await gitClient.callTool({
-      name: 'git_checkout',
-      arguments: { repo_path: args.repoPath, branch_name: branchName }
-    });
+    // Branch creation is handled by system infrastructure before this agent is spawned.
 
     // Start Claude conversation with initial context
     const startTime = Date.now();
     const messages: { role: 'assistant' | 'user', content: string }[] = [{
       role: 'assistant',
       content: `You are a scenario agent investigating a bug based on a specific hypothesis.
-
+A dedicated Git branch '${args.branch}' has been created for your investigation.
+First, switch to your branch using git_checkout before making any changes.
+You are allowed to edit files, run tests, and make commits to this branch.
 You have access to these tools:
 
 git-mcp:
@@ -108,7 +101,10 @@ filesystem-mcp:
 - search_files: Recursively search files
 - get_file_info: Get file metadata
 - list_allowed_directories: View directories this agent can access
-
+Remember to:
+1. First checkout your dedicated branch '${args.branch}'
+2. Make all your changes in this branch
+3. Use git tools to investigate and make changes as needed
 Use tools by wrapping requests in XML tags like:
 <use_mcp_tool>
   <server_name>git-mcp</server_name>
@@ -208,18 +204,16 @@ Hypothesis: ${args.hypothesis}`
     }
   } catch (error) {
     const errorText = error instanceof Error ? error.message : String(error);
-    await writeReport(args.repoPath, args.session, args.id, errorText);
-    console.log(errorText);
+    await writeReport(args.repoPath, args.session, args.id, `SCENARIO ERROR: ${errorText}`);
+    console.log(`SCENARIO ERROR: ${errorText}`);
     process.exit(1);
   }
 }
 
 // Parse args and run
-if (typeof process !== 'undefined') {
-  const args = parseArgs(process.argv);
-  runScenarioAgent(args).catch(err => {
-    const errorText = err instanceof Error ? err.message : String(err);
-    console.log(errorText);
-    process.exit(1);
-  });
-}
+const args = parseArgs(process.argv);
+runScenarioAgent(args).catch(err => {
+  const errorText = err instanceof Error ? err.message : String(err);
+  console.log(`SCENARIO ERROR: ${errorText}`);
+  process.exit(1);
+});
