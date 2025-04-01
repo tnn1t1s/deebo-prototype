@@ -14,7 +14,7 @@ memory-bank/<project-id>/
         └── ...
 
 the activeContext.md is like Mother's working memory/journal that helps her create increasingly well-informed scenario agents as the investigation progresses. She can learn from and build upon previous hypotheses and scenario results.
-
+progress.md is like the long-term state of the repo. like a growing reference doc
 ⸻
 
 🤖 Scenario Agent Behavior

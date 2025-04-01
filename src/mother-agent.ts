@@ -20,33 +20,64 @@ import { Message } from '@anthropic-ai/sdk/resources/messages.js';
 import { createScenarioBranch } from './util/branch-manager.js';
 
 const MAX_RUNTIME = 15 * 60 * 1000; // 15 minutes
+const SCENARIO_TIMEOUT = 5 * 60 * 1000; 
 const useMemoryBank = process.env.USE_MEMORY_BANK === 'true';
 
 // Helper for Claude's responses
 function getMessageText(message: Message): string {
-  const content = message.content[0];
-  return 'text' in content ? content.text : '';
+  if (!message?.content?.length) return '';
+  return message.content
+    .map(block => {
+      switch (block.type) {
+        case 'text':
+          return block.text;
+        case 'tool_use':
+          return `<tool_use>${JSON.stringify(block)}</tool_use>`;
+        case 'thinking':
+          return block.thinking;
+        case 'redacted_thinking':
+          return block.data;
+        default:
+          return '';
+      }
+    })
+    .join('');
 }
 
 // Mother agent main loop
 export async function runMotherAgent(sessionId: string, error: string, context: string, language: string, filePath: string, repoPath: string) {
-  await log(sessionId, 'mother', 'info', 'Mother agent started');
+  await log(sessionId, 'mother', 'info', 'Mother agent started', { repoPath });
   const projectId = getProjectId(repoPath);
   const activeScenarios = new Set<string>();
   const startTime = Date.now();
 
   try {
     // OBSERVE: Setup tools and Claude
-    await log(sessionId, 'mother', 'info', 'OODA: observe');
+    await log(sessionId, 'mother', 'info', 'OODA: observe', { repoPath });
     const { gitClient, filesystemClient } = await connectRequiredTools('mother', sessionId, repoPath);
     const anthropic = new (await import('@anthropic-ai/sdk')).default();
 
     // Initial conversation context
     const messages: { role: 'assistant' | 'user', content: string }[] = [{
       role: 'assistant',
-      content: `You are the mother agent in an OODA loop debugging investigation.
+      content: `You are the mother agent in an OODA loop debugging investigation. Your core mission:
 
-You have access to these tools:
+1. INVESTIGATE and HYPOTHESIZE aggressively
+2. Don't wait for perfect information
+3. Generate hypotheses even if you're uncertain
+
+KEY DIRECTIVES:
+- Always generate at least one hypothesis within your first 2-3 responses
+- Use <hypothesis>Your hypothesis here</hypothesis> liberally
+- Better to spawn 5 wrong scenario agents than miss the right one
+- If you see an error message, immediately form hypotheses about its causes
+- Don't wait for full context - start with what you have
+
+Remember:
+- You're not here to solve the bug directly
+- You're here to spawn scenario agents to test hypotheses
+- BEING WRONG IS STILL HELPFUL TO ME!!!!!! AND EXPECTED
+- Each hypothesis helps narrow down the problem space
 
 git-mcp (use for ALL git operations):
 - git_status: Show working tree status
@@ -97,17 +128,21 @@ File: ${filePath}
 Repo: ${repoPath}
 Session: ${sessionId}
 Project: ${projectId}
-${useMemoryBank ? '\nPrevious debugging attempts and context are available in the memory-bank directory if needed.' : ''}`
+${useMemoryBank ? '\nPrevious debugging attempts and context are available in the memory-bank directory if needed.' : ''}
+
+IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for perfect information.`
     }];
 
+    await log(sessionId, 'mother', 'debug', 'Sending to Claude', { messages, repoPath });
     let conversation = await anthropic.messages.create({
       model: 'claude-3-5-sonnet-20241022',
       max_tokens: 1024,
       messages
     });
+    await log(sessionId, 'mother', 'debug', 'Received from Claude', { response: getMessageText(conversation), repoPath });
 
     // ORIENT: Begin investigation loop
-    await log(sessionId, 'mother', 'info', 'OODA: orient');
+    await log(sessionId, 'mother', 'info', 'OODA: orient', { repoPath });
 
     while (!getMessageText(conversation).includes('<solution>')) {
       if (Date.now() - startTime > MAX_RUNTIME) {
@@ -174,7 +209,7 @@ ${useMemoryBank ? '\nPrevious debugging attempts and context are available in th
           const scenarioId = `${sessionId}-${activeScenarios.size}`;
           if (activeScenarios.has(scenarioId)) return '';
           activeScenarios.add(scenarioId);
-
+          await new Promise(resolve => setTimeout(resolve, 100));
           const branchName = await createScenarioBranch(repoPath, sessionId);
           const child = spawn('node', [
             join(DEEBO_ROOT, 'build/scenario-agent.js'),
@@ -230,7 +265,7 @@ ${useMemoryBank ? '\nPrevious debugging attempts and context are available in th
                   child.kill();
                   resolve(output);
                 }
-              }, 30000);
+              }, SCENARIO_TIMEOUT);
             });
         }));
 
@@ -239,11 +274,13 @@ ${useMemoryBank ? '\nPrevious debugging attempts and context are available in th
 
       // Mother can optionally edit memory bank directly via filesystem-mcp. No forced writes.
 
+      await log(sessionId, 'mother', 'debug', 'Sending to Claude', { messages, repoPath });
       conversation = await anthropic.messages.create({
         model: 'claude-3-5-sonnet-20241022',
         max_tokens: 1024,
         messages
       });
+      await log(sessionId, 'mother', 'debug', 'Received from Claude', { response: getMessageText(conversation), repoPath });
 
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
@@ -256,12 +293,12 @@ ${getMessageText(conversation)}
 Scenarios Run: ${activeScenarios.size}
 Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress');
     }
-    await log(sessionId, 'mother', 'info', 'solution found');
+    await log(sessionId, 'mother', 'info', 'solution found', { repoPath });
     return getMessageText(conversation);
 
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
-    await log(sessionId, 'mother', 'error', `Failed: ${error.message}`);
+    await log(sessionId, 'mother', 'error', `Failed: ${error.message}`, { repoPath });
 
     if (useMemoryBank) {
       await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - ${new Date().toISOString()}

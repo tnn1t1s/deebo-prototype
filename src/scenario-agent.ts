@@ -6,8 +6,23 @@ import { Message } from '@anthropic-ai/sdk/resources/messages.js';
 const MAX_RUNTIME = 15 * 60 * 1000; // 15 minutes
 
 function getMessageText(message: Message): string {
-  const content = message.content[0];
-  return 'text' in content ? content.text : '';
+  if (!message?.content?.length) return '';
+  return message.content
+    .map(block => {
+      switch (block.type) {
+        case 'text':
+          return block.text;
+        case 'tool_use':
+          return `<tool_use>${JSON.stringify(block)}</tool_use>`;
+        case 'thinking':
+          return block.thinking;
+        case 'redacted_thinking':
+          return block.data;
+        default:
+          return '';
+      }
+    })
+    .join('');
 }
 
 interface ScenarioArgs {
@@ -52,17 +67,17 @@ function parseArgs(args: string[]): ScenarioArgs {
 }
 
 export async function runScenarioAgent(args: ScenarioArgs) {
-  await log(args.session, `scenario-${args.id}`, 'info', 'Scenario agent started', { hypothesis: args.hypothesis });
+  await log(args.session, `scenario-${args.id}`, 'info', 'Scenario agent started', { repoPath: args.repoPath, hypothesis: args.hypothesis });
 
   try {
     // Set up tools
-    await log(args.session, `scenario-${args.id}`, 'info', 'Connecting to tools...');
+    await log(args.session, `scenario-${args.id}`, 'info', 'Connecting to tools...', { repoPath: args.repoPath });
   const { gitClient, filesystemClient } = await connectRequiredTools(
     `scenario-${args.id}`, 
     args.session,
     args.repoPath
   );
-  await log(args.session, `scenario-${args.id}`, 'info', 'Connected to tools successfully');
+  await log(args.session, `scenario-${args.id}`, 'info', 'Connected to tools successfully', { repoPath: args.repoPath });
 
     // Branch creation is handled by system infrastructure before this agent is spawned.
 
@@ -128,11 +143,13 @@ Hypothesis: ${args.hypothesis}`
     }];
 
     const anthropic = new (await import('@anthropic-ai/sdk')).default();    
+    await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to Claude', { messages, repoPath: args.repoPath });
     let conversation = await anthropic.messages.create({
       model: 'claude-3-5-sonnet-20241022',
       max_tokens: 1024,
       messages
     });
+    await log(args.session, `scenario-${args.id}`, 'debug', 'Received from Claude', { response: getMessageText(conversation), repoPath: args.repoPath });
 
     while (!getMessageText(conversation).includes('<report>')) {
       if (Date.now() - startTime > MAX_RUNTIME) {
@@ -178,6 +195,14 @@ Hypothesis: ${args.hypothesis}`
 
       // Only now, execute each one
       for (const { server, tool, args } of validCalls) {
+        if (tool === 'git_create_branch') {
+          messages.push({
+            role: 'user',
+            content: 'git_create_branch is not allowed — the branch was already created by the mother agent.'
+          });
+          continue;
+        }
+      
         const result = await server.callTool({ name: tool, arguments: args });
         messages.push({
           role: 'user',
@@ -194,11 +219,13 @@ Hypothesis: ${args.hypothesis}`
       }
 
       // Continue the conversation
+      await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to Claude', { messages, repoPath: args.repoPath });
       conversation = await anthropic.messages.create({
         model: 'claude-3-5-sonnet-20241022',
         max_tokens: 1024,
         messages
       });
+      await log(args.session, `scenario-${args.id}`, 'debug', 'Received from Claude', { response: getMessageText(conversation), repoPath: args.repoPath });
 
       await new Promise(resolve => setTimeout(resolve, 1000));
     }

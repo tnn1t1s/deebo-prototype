@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { readFile, mkdir } from 'fs/promises';
+import { readFile, mkdir, readdir, access } from 'fs/promises';
 import { config } from 'dotenv';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -74,34 +74,52 @@ server.tool(
 server.tool(
   "check",
   {
-    sessionId: z.string(),
-    repoPath: z.string()  // Need repo path to find project directory
+    sessionId: z.string()
   },
-  async ({ sessionId, repoPath }) => {
+  async ({ sessionId }) => {
     try {
-      const projectId = getProjectId(repoPath);
-      const logPath = join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'logs', 'mother.log');
-      const logContent = await readFile(logPath, 'utf8');
-      const lines = logContent.split('\n').filter(Boolean);
-      const events: any[] = [];
-        for (const line of lines) {
-          try {
-            events.push(JSON.parse(line));
-          } catch {
-            console.error(`Skipping malformed log line: ${line}`);
-          }
+      const sessionDir = await findSessionDir(sessionId);
+      if (!sessionDir) {
+        return {
+          content: [{ 
+            type: "text",
+            text: `Session ${sessionId} not found`
+          }]
+        };
       }
-      const lastEvent = events[events.length - 1];
+
+      const logsDir = join(sessionDir, 'logs');
+      const logFiles = await readdir(logsDir);
+      const allLogs: Record<string, any[]> = {};
+      
+      // Read all log files in parallel
+      await Promise.all(logFiles.map(async (file) => {
+        const logPath = join(logsDir, file);
+        const logContent = await readFile(logPath, 'utf8');
+        const lines = logContent.split('\n').filter(Boolean);
+        const events = lines.map(line => {
+          try {
+            return JSON.parse(line);
+          } catch {
+            console.error(`Skipping malformed log line in ${file}: ${line}`);
+            return null;
+          }
+        }).filter(Boolean);
+        allLogs[file.replace('.log', '')] = events;
+      }));
+
+      // Get last event from mother's log for status
+      const motherEvents = allLogs['mother'] || [];
+      const lastMotherEvent = motherEvents[motherEvents.length - 1];
       
       return {
         content: [{ 
           type: "text",
           text: JSON.stringify({
             sessionId,
-            projectId,
-            status: lastEvent.level === 'error' ? 'failed' : 
-                    lastEvent.message?.includes('solution found') ? 'completed' : 'in_progress',            
-                    events
+            status: lastMotherEvent?.level === 'error' ? 'failed' : 
+                    lastMotherEvent?.message?.includes('solution found') ? 'completed' : 'in_progress',
+            logs: allLogs
           })
         }]
       };
@@ -115,6 +133,23 @@ server.tool(
     }
   }
 );
+
+// Helper to find session directory
+async function findSessionDir(sessionId: string): Promise<string | null> {
+  const memoryBank = join(DEEBO_ROOT, 'memory-bank');
+  const projects = await readdir(memoryBank);
+  
+  for (const project of projects) {
+    const sessionPath = join(memoryBank, project, 'sessions', sessionId);
+    try {
+      await access(sessionPath);
+      return sessionPath;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
 
 server.tool(
   "cancel",

@@ -23,12 +23,14 @@ export async function connectMcpTool(name: string, toolName: string, sessionId: 
     // Build paths
     const projectId = getProjectId(repoPath);
     const memoryPath = join(DEEBO_ROOT, 'memory-bank', projectId);
+    const memoryRoot = join(DEEBO_ROOT, 'memory-bank'); // Add root path
 
-    // Replace all occurrences of placeholders in args
+    // Replace all occurrences of placeholders
     toolConfig.args = toolConfig.args.map((arg: string | any) => 
       typeof arg === 'string' 
         ? arg.replace(/{repoPath}/g, repoPath)
            .replace(/{memoryPath}/g, memoryPath)
+           .replace(/{memoryRoot}/g, memoryRoot)
         : arg
     );
 
