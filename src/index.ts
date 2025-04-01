@@ -7,7 +7,11 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { runMotherAgent } from './mother-agent.js';
 import { getProjectId } from './util/sanitize.js';
-import { get } from "http";
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execPromise = promisify(exec);
+
 
 // Load environment variables from .env file
 config();
@@ -79,7 +83,14 @@ server.tool(
       const logPath = join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'logs', 'mother.log');
       const logContent = await readFile(logPath, 'utf8');
       const lines = logContent.split('\n').filter(Boolean);
-      const events = lines.map(line => JSON.parse(line));
+      const events: any[] = [];
+        for (const line of lines) {
+          try {
+            events.push(JSON.parse(line));
+          } catch {
+            console.error(`Skipping malformed log line: ${line}`);
+          }
+      }
       const lastEvent = events[events.length - 1];
       
       return {
@@ -88,8 +99,9 @@ server.tool(
           text: JSON.stringify({
             sessionId,
             projectId,
-            status: lastEvent.level === 'error' ? 'failed' : 'in_progress',
-            events
+            status: lastEvent.level === 'error' ? 'failed' : 
+                    lastEvent.message?.includes('solution found') ? 'completed' : 'in_progress',            
+                    events
           })
         }]
       };
@@ -101,6 +113,40 @@ server.tool(
         }]
       };
     }
+  }
+);
+
+server.tool(
+  "cancel",
+  {
+    sessionId: z.string()
+  },
+  async ({ sessionId }) => {
+    // Sanitize sessionId for shell
+    const sanitizedId = sessionId.replace(/[^a-zA-Z0-9-]/g, '');
+    
+    const { stdout } = await execPromise(`pgrep -f ${sanitizedId}`);
+    
+    const pids = stdout
+      .split('\n')
+      .filter(Boolean)
+      .map(Number)
+      .filter(pid => !isNaN(pid));
+
+    for (const pid of pids) {
+      try {
+        process.kill(pid, 'SIGTERM');
+      } catch (err) {
+        // Already dead is fine
+      }
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: `Terminated ${pids.length} processes for session ${sanitizedId}`
+      }]
+    };
   }
 );
 

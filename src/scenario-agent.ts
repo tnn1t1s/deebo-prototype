@@ -1,5 +1,5 @@
 import { log } from './util/logger.js';
-import { connectMcpTool } from './util/mcp.js';
+import { connectRequiredTools } from './util/mcp.js';
 import { writeReport } from './util/reports.js';  // System infrastructure for capturing output
 import { Message } from '@anthropic-ai/sdk/resources/messages.js';
 
@@ -56,13 +56,13 @@ export async function runScenarioAgent(args: ScenarioArgs) {
 
   try {
     // Set up tools
-    await log(args.session, `scenario-${args.id}`, 'info', 'Connecting to git-mcp...');
-    const gitClient = await connectMcpTool('scenario-git', 'git-mcp');
-    await log(args.session, `scenario-${args.id}`, 'info', 'Connected to git-mcp successfully');
-
-    await log(args.session, `scenario-${args.id}`, 'info', 'Connecting to filesystem-mcp...');
-    const filesystemClient = await connectMcpTool('scenario-filesystem', 'filesystem-mcp');
-    await log(args.session, `scenario-${args.id}`, 'info', 'Connected to filesystem-mcp successfully');
+    await log(args.session, `scenario-${args.id}`, 'info', 'Connecting to tools...');
+  const { gitClient, filesystemClient } = await connectRequiredTools(
+    `scenario-${args.id}`, 
+    args.session,
+    args.repoPath
+  );
+  await log(args.session, `scenario-${args.id}`, 'info', 'Connected to tools successfully');
 
     // Branch creation is handled by system infrastructure before this agent is spawned.
 
@@ -72,11 +72,10 @@ export async function runScenarioAgent(args: ScenarioArgs) {
       role: 'assistant',
       content: `You are a scenario agent investigating a bug based on a specific hypothesis.
 A dedicated Git branch '${args.branch}' has been created for your investigation.
-First, switch to your branch using git_checkout before making any changes.
-You are allowed to edit files, run tests, and make commits to this branch.
+
 You have access to these tools:
 
-git-mcp:
+git-mcp (use for ALL git operations):
 - git_status: Show working tree status
 - git_diff_unstaged: Show changes in working directory not yet staged
 - git_diff_staged: Show changes that are staged for commit
@@ -90,7 +89,7 @@ git-mcp:
 - git_show: Show contents of a specific commit
 - git_init: Initialize a Git repository
 
-filesystem-mcp:
+filesystem-mcp (use ONLY for non-git file operations):
 - read_file: Read file contents
 - read_multiple_files: Read multiple files at once
 - write_file: Write or overwrite a file
@@ -101,10 +100,11 @@ filesystem-mcp:
 - search_files: Recursively search files
 - get_file_info: Get file metadata
 - list_allowed_directories: View directories this agent can access
-Remember to:
-1. First checkout your dedicated branch '${args.branch}'
-2. Make all your changes in this branch
-3. Use git tools to investigate and make changes as needed
+
+IMPORTANT:
+1. First checkout your dedicated branch '${args.branch}' using git-mcp
+2. Always use git-mcp for any Git-related operations
+3. Never use filesystem-mcp to modify .git directory or Git-related files
 Use tools by wrapping requests in XML tags like:
 <use_mcp_tool>
   <server_name>git-mcp</server_name>

@@ -38,7 +38,7 @@ export async function runMotherAgent(sessionId: string, error: string, context: 
   try {
     // OBSERVE: Setup tools and Claude
     await log(sessionId, 'mother', 'info', 'OODA: observe');
-    const { gitClient, filesystemClient } = await connectRequiredTools('mother', sessionId);
+    const { gitClient, filesystemClient } = await connectRequiredTools('mother', sessionId, repoPath);
     const anthropic = new (await import('@anthropic-ai/sdk')).default();
 
     // Initial conversation context
@@ -48,7 +48,7 @@ export async function runMotherAgent(sessionId: string, error: string, context: 
 
 You have access to these tools:
 
-git-mcp:
+git-mcp (use for ALL git operations):
 - git_status: Show working tree status
 - git_diff_unstaged: Show changes in working directory not yet staged
 - git_diff_staged: Show changes that are staged for commit
@@ -62,10 +62,10 @@ git-mcp:
 - git_show: Show contents of a specific commit
 - git_init: Initialize a Git repository
 
-filesystem-mcp:
+filesystem-mcp (use ONLY for non-git file operations):
 - read_file: Read file contents
 - read_multiple_files: Read multiple files at once
-- write_file: Write or overwrite a file
+- write_file: Write or overwrite a file 
 - edit_file: Edit a file based on pattern matching
 - create_directory: Create a new directory
 - list_directory: List contents of a directory
@@ -73,6 +73,8 @@ filesystem-mcp:
 - search_files: Recursively search files
 - get_file_info: Get file metadata
 - list_allowed_directories: View directories this agent can access
+
+IMPORTANT: Always use git-mcp for any Git-related operations. Never use filesystem-mcp to modify .git directory or Git-related files like .gitignore.
 
 Use tools by wrapping requests in XML tags like:
 <use_mcp_tool>
@@ -158,7 +160,7 @@ ${useMemoryBank ? '\nPrevious debugging attempts and context are available in th
 
       // Handle Hypotheses → Scenario agents
       if (response.includes('<hypothesis>')) {
-        const hypotheses = response.split('<hypothesis>').slice(1);
+        const hypotheses = [...response.matchAll(/<hypothesis>([\s\S]*?)<\/hypothesis>/g)].map(match => match[1].trim());
         /**
          * - if the mother isnt really writing to active context lets at least 
          * write down her responses that include hypotheses, 
@@ -188,10 +190,48 @@ ${useMemoryBank ? '\nPrevious debugging attempts and context are available in th
           ]);
 
           let output = '';
-          child.stdout.on('data', data => output += data);
-          child.stderr.on('data', data => output += data);
+            child.stdout.on('data', data => output += data);
+            child.stderr.on('data', data => output += data);
 
-          return new Promise<string>(resolve => child.on('exit', () => resolve(output)));
+            return new Promise<string>((resolve) => {
+              let closed = 0;
+              const maybeResolve = () => {
+                if (closed === 2) resolve(output);
+              };
+
+              child.stdout.on('close', () => {
+                closed++;
+                maybeResolve();
+              });
+              
+              child.stderr.on('close', () => {
+                closed++;
+                maybeResolve();
+              });
+
+              // Capture process-level errors
+              child.on('error', err => {
+                output += `\nProcess error: ${err}`;
+                resolve(output);
+              });
+
+              // Capture stream-level errors
+              child.stdout.on('error', err => {
+                output += `\nStdout error: ${err}`;
+              });
+              child.stderr.on('error', err => {
+                output += `\nStderr error: ${err}`;
+              });
+
+              // Global safety timeout in case streams never close
+              setTimeout(() => {
+                if (closed < 2) {
+                  output += '\nScenario timeout';
+                  child.kill();
+                  resolve(output);
+                }
+              }, 30000);
+            });
         }));
 
         messages.push({ role: 'user', content: scenarioOutputs.join('\n') });
@@ -216,7 +256,7 @@ ${getMessageText(conversation)}
 Scenarios Run: ${activeScenarios.size}
 Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress');
     }
-
+    await log(sessionId, 'mother', 'info', 'solution found');
     return getMessageText(conversation);
 
   } catch (err) {

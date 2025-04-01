@@ -1,27 +1,36 @@
-// src/util/mcp.ts
-
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { DEEBO_ROOT } from '../index.js';
+import { getProjectId } from './sanitize.js';
 
 // Map to track active connections
 const activeConnections: Map<string, Promise<Client>> = new Map();
 
-export async function connectMcpTool(name: string, toolName: string): Promise<Client> {
-  const connectionKey = `${name}-${toolName}`;
+export async function connectMcpTool(name: string, toolName: string, sessionId: string, repoPath: string): Promise<Client> {
+  const connectionKey = `${name}-${toolName}-${sessionId}`;
   
-  // Check if we already have a connection promise
   const existingConnection = activeConnections.get(connectionKey);
   if (existingConnection) {
     return existingConnection;
   }
 
-  // Create new connection promise
   const connectionPromise = (async () => {
     const config = JSON.parse(await readFile(join(DEEBO_ROOT, 'config', 'tools.json'), 'utf-8'));
-    const toolConfig = config.tools[toolName];
+    const toolConfig = {...config.tools[toolName]};  // Clone to avoid modifying original
+
+    // Build paths
+    const projectId = getProjectId(repoPath);
+    const memoryPath = join(DEEBO_ROOT, 'memory-bank', projectId);
+
+    // Replace all occurrences of placeholders in args
+    toolConfig.args = toolConfig.args.map((arg: string | any) => 
+      typeof arg === 'string' 
+        ? arg.replace(/{repoPath}/g, repoPath)
+           .replace(/{memoryPath}/g, memoryPath)
+        : arg
+    );
 
     const transport = new StdioClientTransport({
       command: toolConfig.command,
@@ -41,10 +50,7 @@ export async function connectMcpTool(name: string, toolName: string): Promise<Cl
     return client;
   })();
 
-  // Store the promise
   activeConnections.set(connectionKey, connectionPromise);
-
-  // Remove from map if connection fails
   connectionPromise.catch(() => {
     activeConnections.delete(connectionKey);
   });
@@ -52,13 +58,13 @@ export async function connectMcpTool(name: string, toolName: string): Promise<Cl
   return connectionPromise;
 }
 
-export async function connectRequiredTools(agentName: string, sessionId: string): Promise<{
+export async function connectRequiredTools(agentName: string, sessionId: string, repoPath: string): Promise<{
   gitClient: Client;
   filesystemClient: Client;
 }> {
   const [gitClient, filesystemClient] = await Promise.all([
-    connectMcpTool(`${agentName}-git`, 'git-mcp'),
-    connectMcpTool(`${agentName}-filesystem`, 'filesystem-mcp')
+    connectMcpTool(`${agentName}-git`, 'git-mcp', sessionId, repoPath),
+    connectMcpTool(`${agentName}-filesystem`, 'filesystem-mcp', sessionId, repoPath)
   ]);
 
   return {

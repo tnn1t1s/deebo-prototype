@@ -5,8 +5,8 @@
       "args": [
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions",
-        "/Users/sriram/Documents/Cline/MCP/deebo-prototype/reports"
+        "{memoryPath}",  
+        "{repoPath}"    
       ]
     },
     "git-mcp": {
@@ -14,7 +14,7 @@
       "args": [
         "mcp-server-git",
         "--repository",
-        "/Users/sriram/Documents/task-manager"
+        "{repoPath}"
       ]
     }
   }

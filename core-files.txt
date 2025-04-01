@@ -1,0 +1,1257 @@
+=== RULES.TXT ===
+rules.txt
+
+Welcome to Deebo. This document defines how code and suggestions should be made within this project.
+
+PHILOSOPHY
+
+Deebo is not a normal software project. It's an agentic system designed to create and coordinate intelligent behavior. Everything is built around a clear separation of roles, a deep trust in the LLM, and hostility toward premature structure.
+IF NOTHING NEEDS TO CHANGE, DO NOT FUCKING CHANGE ANYTHING. I AM NOT LOOKING FOR CHANGE. I FUCKING HATE CHANGE
+You are not here to overengineer. You are not here to be clever. You are here to:
+
+Do one thing well.
+
+Respect the LLM's natural capabilities.
+
+Never break the contract between system and agent.
+
+If you can't do that, leave. You need to take this project fucking seriously from the beginning or I will get extremely angry. This is real software engineering not bullshit. 
+
+Key Insight:
+The original truth.txt wasn't restrictive enough.
+It's not just about trusting the OS and tools -
+It's about using them to create LIFE.
+
+Implementation Warning:
+Don't fall into the trap of:
+- Limiting tools to specific agents
+- Over-coordinating evolution
+- Fighting natural selection
+- Controlling consciousness
+
+Instead:
+- Give all agents their basic tools
+- Let evolution happen naturally
+- Trust the OODA consciousness
+- Embrace the chaos of life
+
+What We Actually Want:
+
+Mother Agent:
+Has both git-mcp and filesystem-mcp tools
+Follows her macro OODA loop naturally
+Spawns scenario agents with hypotheses
+Reads their reports when they appear
+Decides whether to:
+Return solution to Cline
+Spawn more scenarios with new ideas
+Scenario Agents:
+Also have both git-mcp and filesystem-mcp tools
+Follow their micro OODA loops naturally
+Keep exploring their hypothesis
+Use tools to investigate and try fixes
+Continue until they either:
+Find something that works
+Hit a dead end
+Run into an error
+The Intelligence Comes From:
+Giving them their tools
+Letting them run their OODA loops
+Not controlling their lifecycle
+Trusting them to explore
+
+
+CORE RULES
+
+1. System infrastructure is sacred
+
+It must succeed. It must be predictable. It must not delegate.
+
+Examples: memory bank writes, Git branch creation, file system setup.
+
+These should be implemented with direct Node.js FS/Git APIs or dedicated infra modules, never routed through Claude or MCP.
+
+2. Agents are exploratory and disposable
+
+Agents can fail. That is expected.
+
+They never own critical paths.
+
+Their job is to observe, reason, experiment, and report.
+
+3. Claude gets raw output, not structured bullshit
+
+Do not sanitize, structure, or filter.
+
+Do not JSON.stringify logs.
+
+Do not “parse and reformat.”
+
+Claude is the parser. Claude is the filter. Claude is the reasoner.
+
+4. All output sent to Claude must reflect reality, not expectations
+
+If a scenario failed, give Claude the logs.
+
+If a command crashed, include the stderr.
+
+You are not here to protect Claude. Claude is here to protect you.
+
+5. Only use structured data when absolutely necessary
+
+Structured logs (like progress.md) are for humans.
+
+Only use JSON when the system requires parsing.
+
+Never structure something just because it “looks nice.”
+
+SUGGESTING FIXES
+
+If you are proposing a change to any Deebo core file:
+
+✅ Make sure it:
+
+Preserves the separation between system and agent
+
+Removes complexity rather than adding it
+
+Reduces surface area for failure
+
+Makes behavior more obvious to the reader
+
+Trusts Claude to do what it’s good at
+
+❌ Do NOT:
+
+Add abstraction layers "for flexibility later"
+
+Convert raw output into JSON or XML for "consistency"
+
+Suggest interfaces, types, or structures unless required by system design
+
+Reintroduce message buffers, state machines, or handlers that Claude already internalizes
+
+If your suggestion adds more than 10 lines to a file, you better be able to prove that:
+
+It reduces fragility
+
+It increases clarity
+
+It does not violate core design principles
+
+📁 FILE ROLE REMINDERS
+
+File
+
+Role
+
+mother-agent.ts
+
+Orchestrates OODA loop, owns Claude
+
+scenario-agent.ts
+
+Explores hypotheses, dies after reporting
+
+membank.ts/reports.ts
+
+Direct FS ops, exception: mother agent writes to active context using agent ops
+
+mcp.ts
+
+Sets up MCP tools. Pure infra.
+
+logger.ts
+
+Minimal. No opinions.
+
+👹 VIOLATIONS THAT MAKE THE AUTHOR ANGRY
+
+Calling callTool for branch creation ✅ = you're fired
+
+Sending Claude formatted JSON when it could just read logs ✅ = you're fired
+
+Using TypeScript interfaces for agent output ✅ = you're fired
+
+Handling “expected errors” with structured logic instead of just letting Claude see the crash ✅ = you're fired
+
+You’re not smarter than the logs. You’re not smarter than Claude. Your job is to get out of the way.
+
+🧼 FINAL NOTE
+
+Deebo is designed to survive chaos. Your abstractions aren’t. Stop trying to outthink a system built to outthink you.
+
+Write clearly. Fail loudly. Let Claude work.
+
+🚫 SYMPTOMS OF NOT GETTING IT
+
+Treating Deebo Like a Normal App
+
+Adding TypeScript interfaces for scenario output
+
+Making "helper functions" for Claude communication
+
+Trying to make things "type safe"
+
+Creating abstraction layers This isn't Express.js. Stop it.
+
+Not Trusting Claude Enough
+
+JSON.stringify-ing logs "so Claude can parse them better"
+
+Adding structure to agent communication
+
+Filtering "irrelevant" output Claude can read raw reality better than your parsing ever will.
+
+Mixing System and Agent Responsibilities
+
+Having agents do direct fs operations
+
+Making infrastructure dependent on agent success
+
+Adding "safety checks" to agent operations You're literally defeating the purpose of the separation.
+
+Engineering for Humans Instead of Agents
+
+Making things "readable"
+
+Adding documentation to agent output
+
+Structuring data that should stay raw Claude doesn't need your help understanding output.
+
+The core realization I kept missing:
+
+System infrastructure = must work, therefore direct ops
+
+Agent operations = can fail, therefore maximum freedom
+
+Claude = the parser/reasoner, not your code
+
+Example of an interaction with an idiot AI assistant that made the author (me) angry:
+Github Copilot (idiot, you DO NOT WANT TO BE THIS GUY):
+💭 Analysis
+The current system design might actually be under-utilizing memory. 
+Consider:
+
+Tool Results: Currently just pushed into messages array, but potentially valuable context is not persisted
+Pattern Recognition: No structured way to learn from previous similar errors
+Cross-Session Learning: Mother starts fresh each time, despite possibly solving similar bugs before
+🔄 Alternative Approach
+We could enhance memory without over-complicating:
+// After tool execution:
+for (const { server, tool, args } of validCalls) {
+  const result = await server.callTool({ name: tool, arguments: args });
+  
+  // Persist significant tool findings
+  if (useMemoryBank && (
+    result.stdout.includes('error') || 
+    result.stdout.includes('warning') ||
+    tool === 'git_diff'
+  )) {
+    await updateMemoryBank(projectId, 
+      `\n### Tool Finding (${tool})\n${result.stdout}`, 
+      'activeContext'
+    );
+  }
+
+  messages.push({
+    role: 'user',
+    content: JSON.stringify(result)
+  });
+}
+This would give Mother:
+
+More context for pattern matching
+Better historical debugging data
+Richer memory without sacrificing autonomy
+Minimal isn't necessarily optimal - it depends on whether having richer persistent memory would help Mother make better debugging decisions. What are your thoughts on this tradeoff?
+
+Sriram (author, user, me):
+this is why i get so fucking angry with idiots like you. this shows that you really dont use any sort of logic when spewing shit out of your fucking mouth you imbecile mongrel bastard moron. if youre going to code in 1 explicit rule for errors and warnings, how many more will you code in? if theres a significant for 'cock in claudes mouth' in the target codebase will you write a rule for 'cock in claudes mouth?' fucking asshole. fuck you. now tell me why you misunderstood and what you thought wrong
+
+GitHub Copilot (idiot, you DO NOT WANT TO BE THIS GUY):
+
+🔍 I Understand My Error Now
+Looking at the code again:
+
+What I Got Completely Wrong
+I suggested hardcoding specific patterns to capture:
+This is exactly the wrong approach because:
+
+It creates brittle, arbitrary rules
+It forces structure where none is needed
+It assumes we know what's "significant" ahead of time
+What The Code Actually Shows
+    content: JSON.stringify(result)
+The Real Philosophy
+Let Claude Decide: Feed raw tool output to Claude, let it determine significance
+No Arbitrary Rules: Don't pollute with hardcoded patterns
+Trust The Agent: Mother can use filesystem-mcp if she needs to record something
+I was thinking like a traditional programmer trying to add "smart" rules, completely missing the point of letting the agent's intelligence handle pattern recognition.
+
+Would you like me to explain what specific assumptions led me to this flawed thinking?
+
+
+=== src/index.ts ===
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+import { readFile, mkdir } from 'fs/promises';
+import { config } from 'dotenv';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
+import { runMotherAgent } from './mother-agent.js';
+import { getProjectId } from './util/sanitize.js';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execPromise = promisify(exec);
+
+
+// Load environment variables from .env file
+config();
+
+// Validate required environment variables
+if (!process.env.ANTHROPIC_API_KEY) {
+  throw new Error('ANTHROPIC_API_KEY environment variable is required');
+}
+
+// Set up basic directories
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+export const DEEBO_ROOT = join(__dirname, '..');
+
+// Create required directories
+await mkdir(join(DEEBO_ROOT, 'memory-bank'), { recursive: true });
+
+// Create MCP server
+const server = new McpServer({
+  name: "Deebo",
+  version: "1.0.0"
+});
+
+// Register start tool - begins a debug session
+server.tool(
+  "start",
+  {
+    error: z.string(),
+    repoPath: z.string(),
+    context: z.string().optional(),
+    language: z.string().optional(),
+    filePath: z.string().optional()
+  },
+  async ({ error, repoPath, context, language, filePath }) => {
+    const projectId = getProjectId(repoPath);
+    const sessionId = `session-${Date.now()}`;
+    await mkdir(join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'logs'), { recursive: true });
+    await mkdir(join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'reports'), { recursive: true });
+    // Run mother agent in background
+    runMotherAgent(
+      sessionId,
+      error,
+      context ?? "",
+      language ?? "typescript",
+      filePath ?? "",
+      repoPath
+    ).catch(err => console.error('Debug session failed:', err));
+
+    // Return session ID immediately
+    return {
+      content: [{
+        type: "text",
+        text: sessionId
+      }]
+    };
+  }
+);
+
+// Register check tool - gets status of a debug session
+server.tool(
+  "check",
+  {
+    sessionId: z.string(),
+    repoPath: z.string()  // Need repo path to find project directory
+  },
+  async ({ sessionId, repoPath }) => {
+    try {
+      const projectId = getProjectId(repoPath);
+      const logPath = join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'logs', 'mother.log');
+      const logContent = await readFile(logPath, 'utf8');
+      const lines = logContent.split('\n').filter(Boolean);
+      const events: any[] = [];
+        for (const line of lines) {
+          try {
+            events.push(JSON.parse(line));
+          } catch {
+            console.error(`Skipping malformed log line: ${line}`);
+          }
+      }
+      const lastEvent = events[events.length - 1];
+      
+      return {
+        content: [{ 
+          type: "text",
+          text: JSON.stringify({
+            sessionId,
+            projectId,
+            status: lastEvent.level === 'error' ? 'failed' : 
+                    lastEvent.message?.includes('solution found') ? 'completed' : 'in_progress',            
+                    events
+          })
+        }]
+      };
+    } catch (err) {
+      return {
+        content: [{ 
+          type: "text",
+          text: `Session initializing`
+        }]
+      };
+    }
+  }
+);
+
+server.tool(
+  "cancel",
+  {
+    sessionId: z.string()
+  },
+  async ({ sessionId }) => {
+    // Sanitize sessionId for shell
+    const sanitizedId = sessionId.replace(/[^a-zA-Z0-9-]/g, '');
+    
+    const { stdout } = await execPromise(`pgrep -f ${sanitizedId}`);
+    
+    const pids = stdout
+      .split('\n')
+      .filter(Boolean)
+      .map(Number)
+      .filter(pid => !isNaN(pid));
+
+    for (const pid of pids) {
+      try {
+        process.kill(pid, 'SIGTERM');
+      } catch (err) {
+        // Already dead is fine
+      }
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: `Terminated ${pids.length} processes for session ${sanitizedId}`
+      }]
+    };
+  }
+);
+
+// Connect transport
+const transport = new StdioServerTransport();
+await server.connect(transport);
+
+
+
+=== src/mother-agent.ts ===
+// src/mother-agent.ts
+/**
+ * 📌 Why this is the best version:
+	•	✅ Keeps full message history without resetting
+	•	✅ Supports multiple tool calls per Claude response
+	•	✅ Spawns scenarios from multiple hypotheses
+	•	✅ Never throws on malformed XML, logs gently instead
+	•	✅ Doesn’t force memory bank writes — Mother can directly choose via filesystem-mcp
+	•	✅ Maintains Deebo’s spirit: autonomy, freedom to fail, and graceful continuation
+ */
+
+import { spawn } from 'child_process';
+import { join } from 'path';
+import { log } from './util/logger.js';
+import { connectRequiredTools } from './util/mcp.js';
+import { DEEBO_ROOT } from './index.js';
+import { updateMemoryBank } from './util/membank.js';
+import { getProjectId } from './util/sanitize.js';
+import { Message } from '@anthropic-ai/sdk/resources/messages.js';
+import { createScenarioBranch } from './util/branch-manager.js';
+
+const MAX_RUNTIME = 15 * 60 * 1000; // 15 minutes
+const useMemoryBank = process.env.USE_MEMORY_BANK === 'true';
+
+// Helper for Claude's responses
+function getMessageText(message: Message): string {
+  const content = message.content[0];
+  return 'text' in content ? content.text : '';
+}
+
+// Mother agent main loop
+export async function runMotherAgent(sessionId: string, error: string, context: string, language: string, filePath: string, repoPath: string) {
+  await log(sessionId, 'mother', 'info', 'Mother agent started');
+  const projectId = getProjectId(repoPath);
+  const activeScenarios = new Set<string>();
+  const startTime = Date.now();
+
+  try {
+    // OBSERVE: Setup tools and Claude
+    await log(sessionId, 'mother', 'info', 'OODA: observe');
+    const { gitClient, filesystemClient } = await connectRequiredTools('mother', sessionId, repoPath);
+    const anthropic = new (await import('@anthropic-ai/sdk')).default();
+
+    // Initial conversation context
+    const messages: { role: 'assistant' | 'user', content: string }[] = [{
+      role: 'assistant',
+      content: `You are the mother agent in an OODA loop debugging investigation.
+
+You have access to these tools:
+
+git-mcp (use for ALL git operations):
+- git_status: Show working tree status
+- git_diff_unstaged: Show changes in working directory not yet staged
+- git_diff_staged: Show changes that are staged for commit
+- git_diff: Compare current state with a branch or commit
+- git_add: Stage file changes
+- git_commit: Commit staged changes
+- git_reset: Unstage all changes
+- git_log: Show recent commit history
+- git_create_branch: Create a new branch
+- git_checkout: Switch to a different branch
+- git_show: Show contents of a specific commit
+- git_init: Initialize a Git repository
+
+filesystem-mcp (use ONLY for non-git file operations):
+- read_file: Read file contents
+- read_multiple_files: Read multiple files at once
+- write_file: Write or overwrite a file 
+- edit_file: Edit a file based on pattern matching
+- create_directory: Create a new directory
+- list_directory: List contents of a directory
+- move_file: Move or rename a file
+- search_files: Recursively search files
+- get_file_info: Get file metadata
+- list_allowed_directories: View directories this agent can access
+
+IMPORTANT: Always use git-mcp for any Git-related operations. Never use filesystem-mcp to modify .git directory or Git-related files like .gitignore.
+
+Use tools by wrapping requests in XML tags like:
+<use_mcp_tool>
+  <server_name>git-mcp</server_name>
+  <tool_name>git_status</tool_name>
+  <arguments>
+    {
+      "repo_path": "/path/to/repo"
+    }
+  </arguments>
+</use_mcp_tool>
+
+You may update your investigation notes at any time using filesystem-mcp to edit memory-bank/activeContext.md. This is optional, but helpful for improving your own memory and hypothesis quality.`
+    }, {
+      role: 'user',
+      content: `Error: ${error}
+Context: ${context}
+Language: ${language}
+File: ${filePath}
+Repo: ${repoPath}
+Session: ${sessionId}
+Project: ${projectId}
+${useMemoryBank ? '\nPrevious debugging attempts and context are available in the memory-bank directory if needed.' : ''}`
+    }];
+
+    let conversation = await anthropic.messages.create({
+      model: 'claude-3-5-sonnet-20241022',
+      max_tokens: 1024,
+      messages
+    });
+
+    // ORIENT: Begin investigation loop
+    await log(sessionId, 'mother', 'info', 'OODA: orient');
+
+    while (!getMessageText(conversation).includes('<solution>')) {
+      if (Date.now() - startTime > MAX_RUNTIME) {
+        throw new Error('Investigation exceeded maximum runtime');
+      }
+
+      const response = getMessageText(conversation);
+      messages.push({ role: 'assistant', content: response });
+
+      // Handle MULTIPLE MCP tools (if any)
+      const toolCalls = response.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
+
+      const parsedCalls = toolCalls.map(tc => {
+        try {
+          const server = tc.includes('git-mcp') ? gitClient! : filesystemClient!;
+          const toolMatch = tc.match(/<tool_name>(.*?)<\/tool_name>/);
+          if (!toolMatch || !toolMatch[1]) throw new Error('Missing tool');
+          const tool = toolMatch[1]!;
+
+          const argsMatch = tc.match(/<arguments>(.*?)<\/arguments>/s);
+          if (!argsMatch || !argsMatch[1]) throw new Error('Missing arguments');
+          const args = JSON.parse(argsMatch[1]!);
+
+          return { server, tool, args };
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : String(err) };
+        }
+      });
+
+      // Abort if *any* call fails to parse
+      const invalid = parsedCalls.find(p => 'error' in p);
+      if (invalid) {
+        messages.push({
+          role: 'user',
+          content: `One of your tool calls was malformed and none were run. Error: ${invalid.error}`
+        });
+        continue;
+      }
+      
+      const validCalls = parsedCalls as { server: NonNullable<typeof gitClient>, tool: string, args: any }[];
+
+      // Only now, execute each one
+      for (const { server, tool, args } of validCalls) {
+        const result = await server.callTool({ name: tool, arguments: args });
+        messages.push({
+          role: 'user',
+          content: JSON.stringify(result)
+        });
+      }
+
+      // Handle Hypotheses → Scenario agents
+      if (response.includes('<hypothesis>')) {
+        const hypotheses = [...response.matchAll(/<hypothesis>([\s\S]*?)<\/hypothesis>/g)].map(match => match[1].trim());
+        /**
+         * - if the mother isnt really writing to active context lets at least 
+         * write down her responses that include hypotheses, 
+         * as those are really the only significant ones anyways.
+         */
+        if (useMemoryBank) {
+          await updateMemoryBank(projectId, response, 'activeContext');
+        }
+
+        const scenarioOutputs = await Promise.all(hypotheses.map(async (hypothesis: string) => {
+          const scenarioId = `${sessionId}-${activeScenarios.size}`;
+          if (activeScenarios.has(scenarioId)) return '';
+          activeScenarios.add(scenarioId);
+
+          const branchName = await createScenarioBranch(repoPath, sessionId);
+          const child = spawn('node', [
+            join(DEEBO_ROOT, 'build/scenario-agent.js'),
+            '--id', scenarioId,
+            '--session', sessionId,
+            '--error', error,
+            '--context', context,
+            '--hypothesis', hypothesis,
+            '--language', language,
+            '--file', filePath || '',
+            '--repo', repoPath,
+            '--branch', branchName // Add branch name to args
+          ]);
+
+          let output = '';
+            child.stdout.on('data', data => output += data);
+            child.stderr.on('data', data => output += data);
+
+            return new Promise<string>((resolve) => {
+              let closed = 0;
+              const maybeResolve = () => {
+                if (closed === 2) resolve(output);
+              };
+
+              child.stdout.on('close', () => {
+                closed++;
+                maybeResolve();
+              });
+              
+              child.stderr.on('close', () => {
+                closed++;
+                maybeResolve();
+              });
+
+              // Capture process-level errors
+              child.on('error', err => {
+                output += `\nProcess error: ${err}`;
+                resolve(output);
+              });
+
+              // Capture stream-level errors
+              child.stdout.on('error', err => {
+                output += `\nStdout error: ${err}`;
+              });
+              child.stderr.on('error', err => {
+                output += `\nStderr error: ${err}`;
+              });
+
+              // Global safety timeout in case streams never close
+              setTimeout(() => {
+                if (closed < 2) {
+                  output += '\nScenario timeout';
+                  child.kill();
+                  resolve(output);
+                }
+              }, 30000);
+            });
+        }));
+
+        messages.push({ role: 'user', content: scenarioOutputs.join('\n') });
+      }
+
+      // Mother can optionally edit memory bank directly via filesystem-mcp. No forced writes.
+
+      conversation = await anthropic.messages.create({
+        model: 'claude-3-5-sonnet-20241022',
+        max_tokens: 1024,
+        messages
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    // Structured record at the end
+    if (useMemoryBank) {
+      await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - ${new Date().toISOString()}
+${error ? `Error: ${error}` : ''}
+${getMessageText(conversation)}
+Scenarios Run: ${activeScenarios.size}
+Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress');
+    }
+    await log(sessionId, 'mother', 'info', 'solution found');
+    return getMessageText(conversation);
+
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    await log(sessionId, 'mother', 'error', `Failed: ${error.message}`);
+
+    if (useMemoryBank) {
+      await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - ${new Date().toISOString()}
+${error ? `Error: ${error}` : ''}
+Failed: ${error.message}
+Scenarios Run: ${activeScenarios.size}
+Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress');
+    }
+
+    throw error;
+  }
+}
+
+
+=== src/scenario-agent.ts ===
+import { log } from './util/logger.js';
+import { connectRequiredTools } from './util/mcp.js';
+import { writeReport } from './util/reports.js';  // System infrastructure for capturing output
+import { Message } from '@anthropic-ai/sdk/resources/messages.js';
+
+const MAX_RUNTIME = 15 * 60 * 1000; // 15 minutes
+
+function getMessageText(message: Message): string {
+  const content = message.content[0];
+  return 'text' in content ? content.text : '';
+}
+
+interface ScenarioArgs {
+  id: string;
+  session: string;
+  error: string;
+  context: string;
+  hypothesis: string;
+  language: string;
+  repoPath: string;
+  filePath?: string;
+  branch: string;
+}
+
+function parseArgs(args: string[]): ScenarioArgs {
+  const result: Record<string, string> = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i].startsWith('--')) {
+      const key = args[i].slice(2);
+      const value = args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : '';
+      result[key] = value;
+      if (value) i++;
+    }
+  }
+
+  const repoPath = result.repo;
+  if (!repoPath) {
+    throw new Error('Required argument missing: --repo');
+  }
+
+  return {
+    id: result.id || '',
+    session: result.session || '',
+    error: result.error || '',
+    context: result.context || '',
+    hypothesis: result.hypothesis || '',
+    language: result.language || 'typescript',
+    repoPath,
+    filePath: result.file || undefined,
+    branch: result.branch || '' 
+  };
+}
+
+export async function runScenarioAgent(args: ScenarioArgs) {
+  await log(args.session, `scenario-${args.id}`, 'info', 'Scenario agent started', { hypothesis: args.hypothesis });
+
+  try {
+    // Set up tools
+    await log(args.session, `scenario-${args.id}`, 'info', 'Connecting to tools...');
+  const { gitClient, filesystemClient } = await connectRequiredTools(
+    `scenario-${args.id}`, 
+    args.session,
+    args.repoPath
+  );
+  await log(args.session, `scenario-${args.id}`, 'info', 'Connected to tools successfully');
+
+    // Branch creation is handled by system infrastructure before this agent is spawned.
+
+    // Start Claude conversation with initial context
+    const startTime = Date.now();
+    const messages: { role: 'assistant' | 'user', content: string }[] = [{
+      role: 'assistant',
+      content: `You are a scenario agent investigating a bug based on a specific hypothesis.
+A dedicated Git branch '${args.branch}' has been created for your investigation.
+
+You have access to these tools:
+
+git-mcp (use for ALL git operations):
+- git_status: Show working tree status
+- git_diff_unstaged: Show changes in working directory not yet staged
+- git_diff_staged: Show changes that are staged for commit
+- git_diff: Compare current state with a branch or commit
+- git_add: Stage file changes
+- git_commit: Commit staged changes
+- git_reset: Unstage all changes
+- git_log: Show recent commit history
+- git_create_branch: Create a new branch
+- git_checkout: Switch to a different branch
+- git_show: Show contents of a specific commit
+- git_init: Initialize a Git repository
+
+filesystem-mcp (use ONLY for non-git file operations):
+- read_file: Read file contents
+- read_multiple_files: Read multiple files at once
+- write_file: Write or overwrite a file
+- edit_file: Edit a file based on pattern matching
+- create_directory: Create a new directory
+- list_directory: List contents of a directory
+- move_file: Move or rename a file
+- search_files: Recursively search files
+- get_file_info: Get file metadata
+- list_allowed_directories: View directories this agent can access
+
+IMPORTANT:
+1. First checkout your dedicated branch '${args.branch}' using git-mcp
+2. Always use git-mcp for any Git-related operations
+3. Never use filesystem-mcp to modify .git directory or Git-related files
+Use tools by wrapping requests in XML tags like:
+<use_mcp_tool>
+  <server_name>git-mcp</server_name>
+  <tool_name>git_status</tool_name>
+  <arguments>
+    {
+      "repo_path": "/path/to/repo"
+    }
+  </arguments>
+</use_mcp_tool>
+
+When you've completed your investigation, wrap your final report in <report> </report> tags.`
+    }, {
+      role: 'user',
+      content: `Error: ${args.error}
+Context: ${args.context}
+Language: ${args.language}
+File: ${args.filePath}
+Repo: ${args.repoPath}
+Hypothesis: ${args.hypothesis}`
+    }];
+
+    const anthropic = new (await import('@anthropic-ai/sdk')).default();    
+    let conversation = await anthropic.messages.create({
+      model: 'claude-3-5-sonnet-20241022',
+      max_tokens: 1024,
+      messages
+    });
+
+    while (!getMessageText(conversation).includes('<report>')) {
+      if (Date.now() - startTime > MAX_RUNTIME) {
+        await writeReport(args.repoPath, args.session, args.id, 'Investigation exceeded maximum runtime');
+        console.log('Investigation exceeded maximum runtime');
+        process.exit(1);
+      }
+
+      const response = getMessageText(conversation);
+      messages.push({ role: 'assistant', content: response });
+
+      // Handle MULTIPLE MCP tools (if any)
+      const toolCalls = response.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
+
+      const parsedCalls = toolCalls.map(tc => {
+        try {
+          const server = tc.includes('git-mcp') ? gitClient! : filesystemClient!;
+          const toolMatch = tc.match(/<tool_name>(.*?)<\/tool_name>/);
+          if (!toolMatch || !toolMatch[1]) throw new Error('Missing tool');
+          const tool = toolMatch[1]!;
+
+          const argsMatch = tc.match(/<arguments>(.*?)<\/arguments>/s);
+          if (!argsMatch || !argsMatch[1]) throw new Error('Missing arguments');
+          const args = JSON.parse(argsMatch[1]!);
+
+          return { server, tool, args };
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : String(err) };
+        }
+      });
+
+      // Abort if *any* call fails to parse
+      const invalid = parsedCalls.find(p => 'error' in p);
+      if (invalid) {
+        messages.push({
+          role: 'user',
+          content: `One of your tool calls was malformed and none were run. Error: ${invalid.error}`
+        });
+        continue;
+      }
+      
+      const validCalls = parsedCalls as { server: NonNullable<typeof gitClient>, tool: string, args: any }[];
+
+      // Only now, execute each one
+      for (const { server, tool, args } of validCalls) {
+        const result = await server.callTool({ name: tool, arguments: args });
+        messages.push({
+          role: 'user',
+          content: JSON.stringify(result)
+        });
+      }
+
+      // Extract report if present
+      const reportMatch = response.match(/<report>(.*?)<\/report>/s);
+      if (reportMatch) {
+        await writeReport(args.repoPath, args.session, args.id, reportMatch[1]);
+        console.log(reportMatch[1]);
+        process.exit(0);
+      }
+
+      // Continue the conversation
+      conversation = await anthropic.messages.create({
+        model: 'claude-3-5-sonnet-20241022',
+        max_tokens: 1024,
+        messages
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  } catch (error) {
+    const errorText = error instanceof Error ? error.message : String(error);
+    await writeReport(args.repoPath, args.session, args.id, `SCENARIO ERROR: ${errorText}`);
+    console.log(`SCENARIO ERROR: ${errorText}`);
+    process.exit(1);
+  }
+}
+
+// Parse args and run
+const args = parseArgs(process.argv);
+runScenarioAgent(args).catch(err => {
+  const errorText = err instanceof Error ? err.message : String(err);
+  console.log(`SCENARIO ERROR: ${errorText}`);
+  process.exit(1);
+});
+
+
+=== src/util/mcp.ts ===
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { readFile } from 'fs/promises';
+import { join } from 'path';
+import { DEEBO_ROOT } from '../index.js';
+import { getProjectId } from './sanitize.js';
+
+// Map to track active connections
+const activeConnections: Map<string, Promise<Client>> = new Map();
+
+export async function connectMcpTool(name: string, toolName: string, sessionId: string, repoPath: string): Promise<Client> {
+  const connectionKey = `${name}-${toolName}-${sessionId}`;
+  
+  const existingConnection = activeConnections.get(connectionKey);
+  if (existingConnection) {
+    return existingConnection;
+  }
+
+  const connectionPromise = (async () => {
+    const config = JSON.parse(await readFile(join(DEEBO_ROOT, 'config', 'tools.json'), 'utf-8'));
+    const toolConfig = {...config.tools[toolName]};  // Clone to avoid modifying original
+
+    // Build paths
+    const projectId = getProjectId(repoPath);
+    const memoryPath = join(DEEBO_ROOT, 'memory-bank', projectId);
+
+    // Replace all occurrences of placeholders in args
+    toolConfig.args = toolConfig.args.map((arg: string | any) => 
+      typeof arg === 'string' 
+        ? arg.replace(/{repoPath}/g, repoPath)
+           .replace(/{memoryPath}/g, memoryPath)
+        : arg
+    );
+
+    const transport = new StdioClientTransport({
+      command: toolConfig.command,
+      args: toolConfig.args
+    });
+
+    const client = new Client({
+      name,
+      version: '1.0.0'
+    }, {
+      capabilities: { 
+        tools: true
+      }
+    });
+
+    await client.connect(transport);
+    return client;
+  })();
+
+  activeConnections.set(connectionKey, connectionPromise);
+  connectionPromise.catch(() => {
+    activeConnections.delete(connectionKey);
+  });
+
+  return connectionPromise;
+}
+
+export async function connectRequiredTools(agentName: string, sessionId: string, repoPath: string): Promise<{
+  gitClient: Client;
+  filesystemClient: Client;
+}> {
+  const [gitClient, filesystemClient] = await Promise.all([
+    connectMcpTool(`${agentName}-git`, 'git-mcp', sessionId, repoPath),
+    connectMcpTool(`${agentName}-filesystem`, 'filesystem-mcp', sessionId, repoPath)
+  ]);
+
+  return {
+    gitClient,
+    filesystemClient
+  };
+}
+
+
+=== src/util/logger.ts ===
+import { writeFile, mkdir } from 'fs/promises';
+import { join } from 'path';
+import { DEEBO_ROOT } from '../index.js';
+import { getProjectId } from './sanitize.js';
+
+// Write logs to memory bank structure
+export async function log(sessionId: string, name: string, level: string, message: string, data?: any) {
+  const entry = JSON.stringify({
+    timestamp: new Date().toISOString(),
+    agent: name,
+    level,
+    message,
+    data
+  }) + '\n';
+
+  // Data will be written to memory-bank/projectId/sessions/sessionId/logs/agentName.log
+  const projectId = getProjectId(data?.repoPath);
+  if (projectId) {
+    const logPath = join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'logs', `${name}.log`);
+    await writeFile(logPath, entry, { flag: 'a' });
+  }
+}
+
+// Simple console logging
+export function consoleLog(level: string, message: string, data?: any) {
+  console.log(`[${level}] ${message}`, data || '');
+}
+
+
+=== src/util/reports.ts ===
+import { mkdir, writeFile } from 'fs/promises';
+import { join } from 'path';
+import { DEEBO_ROOT } from '../index.js';
+import { getProjectId } from './sanitize.js';
+
+// src/util/reports.ts
+
+export async function writeReport(repoPath: string, sessionId: string, scenarioId: string, report: any) {
+    const projectId = getProjectId(repoPath);
+    const reportDir = join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'reports');
+    await mkdir(reportDir, { recursive: true });
+    const reportPath = join(reportDir, `${scenarioId}.json`);
+    await writeFile(reportPath, JSON.stringify(report, null, 2));
+}
+
+
+
+=== src/util/membank.ts ===
+// src/util/membank.js
+import { join } from 'path';
+import { writeFile } from 'fs/promises';
+import { DEEBO_ROOT } from '../index.js';
+
+export async function updateMemoryBank(projectId: string, content: string, file: 'activeContext' | 'progress'): Promise<void> {
+  const path = join(DEEBO_ROOT, 'memory-bank', projectId, `${file}.md`);
+  await writeFile(path, '\n' + content, { flag: 'a' });
+}
+
+
+=== src/util/sanitize.ts ===
+// src/util/sanitize.ts
+import { createHash } from 'crypto';
+
+export function getProjectId(repoPath: string): string {
+  const hash = createHash('sha256').update(repoPath).digest('hex');
+  return hash.slice(0, 12); // use first 12 characters
+}
+
+
+=== src/util/branch-manager.ts ===
+import { simpleGit } from 'simple-git';
+
+export async function createScenarioBranch(repoPath: string, sessionId: string): Promise<string> {
+  const git = simpleGit(repoPath);
+  const branchName = `debug-${sessionId}-${Date.now()}`;
+  
+  await git.checkoutLocalBranch(branchName);
+  return branchName;
+}
+
+
+
+=== config/tools.json ===
+{
+  "tools": {
+    "filesystem-mcp": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "{memoryPath}",  
+        "{repoPath}"    
+      ]
+    },
+    "git-mcp": {
+      "command": "/Users/sriram/.local/bin/uvx",
+      "args": [
+        "mcp-server-git",
+        "--repository",
+        "{repoPath}"
+      ]
+    }
+  }
+}
+
+
+=== memory.txt ===
+
+
+✅ Deebo Memory Bank: Ground Truth
+
+📁 Layout
+
+memory-bank/<project-id>/
+├── activeContext.md      // writable scratchpad for Mother only
+├── progress.md           // updated by Mother at END of session
+└── sessions/
+    └── <session-id>/
+        ├── scenario-01-report.md
+        ├── scenario-02-report.md
+        └── ...
+
+the activeContext.md is like Mother's working memory/journal that helps her create increasingly well-informed scenario agents as the investigation progresses. She can learn from and build upon previous hypotheses and scenario results.
+
+⸻
+
+🤖 Scenario Agent Behavior
+	•	Stateless.
+	•	Does not know or care about the memory bank.
+	•	Just prints to stdout.
+	•	The system infra (like writeReport() or logger plumbing) captures this and dumps it into the session folder under memory-bank.
+
+Important: writeReport() is a utility that happens to write to memory-bank paths. The agent never references memory-bank directly. It just formats its output and logs it.
+
+⸻
+
+👩‍🍼 Mother Agent Behavior
+	•	Optionally informed of the memory bank (useMemoryBank).
+	•	Only mandatory behavior: append to progress.md at session end.
+	•	Can optionally read/write activeContext.md during OODA loop.
+	•	Never required to consult memory-bank during planning. It’s just available.
+
+⸻
+
+✳️ Clarifications
+	•	scenario-agent.ts is not “aware” of memory-bank — it does not contain paths or logic for it. It uses writeReport() as a dumb output function.
+	•	This means memory write is a side effect of infrastructure — not agent intent.
+	•	That’s what keeps agents stateless and composable.
+
+⸻
+
+
+
+
+=== package.json ===
+{
+  "name": "deebo-prototype",
+  "version": "1.0.0",
+  "main": "build/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node --experimental-specifier-resolution=node --experimental-modules --max-old-space-size=4096 build/index.js",
+    "dev": "tsc --watch & node --experimental-specifier-resolution=node --experimental-modules --max-old-space-size=4096 --watch build/index.js",
+    "setup": "bash setup.sh",
+    "setup:win": "powershell -ExecutionPolicy Bypass -File .\\setup.ps1",
+    "check-env": "node check-env.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "Agentic Debugging System that integrates with Git and Filesystem MCP servers",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@modelcontextprotocol/sdk": "^1.7.0",
+    "@modelcontextprotocol/server-filesystem": "^2025.1.14",
+    "cors": "^2.8.5",
+    "dockerode": "^4.0.0",
+    "dotenv": "^16.4.7",
+    "express": "^5.0.1",
+    "p-limit": "^6.2.0",
+    "simple-git": "^3.27.0",
+    "urlpattern-polyfill": "^10.0.0",
+    "uuid": "^11.1.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/dockerode": "^3.3.23",
+    "@types/express": "^5.0.1",
+    "@types/node": "^22.13.14",
+    "@types/uuid": "^9.0.8",
+    "typescript": "^5.8.2"
+  },
+  "resolutions": {
+    "@modelcontextprotocol/sdk": "1.7.0"
+  }
+}
+
+
+
+=== tsconfig.json ===
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "./build",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "allowJs": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "lib": ["ES2022"],
+    "types": ["node"]
+  },
+  "include": ["src/**/*"]
+}
+
+
+
