@@ -88,46 +88,146 @@ server.tool(
         };
       }
 
+      // Get time metrics and mother status
       const logsDir = join(sessionDir, 'logs');
-      const logFiles = await readdir(logsDir);
-      const allLogs: Record<string, any[]> = {};
+      const motherLogPath = join(logsDir, 'mother.log');
+      const motherLog = await readFile(motherLogPath, 'utf8');
+      const motherLines = motherLog.split('\n').filter(Boolean);
       
-      // Read all log files in parallel
-      await Promise.all(logFiles.map(async (file) => {
-        const logPath = join(logsDir, file);
-        const logContent = await readFile(logPath, 'utf8');
-        const lines = logContent.split('\n').filter(Boolean);
-        const events = lines.map(line => {
-          try {
-            return JSON.parse(line);
-          } catch {
-            console.error(`Skipping malformed log line in ${file}: ${line}`);
-            return null;
-          }
-        }).filter(Boolean);
-        allLogs[file.replace('.log', '')] = events;
-      }));
+      if (!motherLines.length) return { content: [{ type: "text", text: 'Session initializing' }] };
 
-      // Get last event from mother's log for status
-      const motherEvents = allLogs['mother'] || [];
-      const lastMotherEvent = motherEvents[motherEvents.length - 1];
+      const firstEvent = JSON.parse(motherLines[0]);
+      const lastEvent = JSON.parse(motherLines[motherLines.length - 1]);
+      const durationMs = Date.now() - new Date(firstEvent.timestamp).getTime();
+      const status = lastEvent.level === 'error' ? 'failed' :
+                    lastEvent.message?.includes('solution found') ? 'completed' : 'in_progress';
+
+      // Count scenario statuses
+      const reportsDir = join(sessionDir, 'reports');
+      const scenarioLogs = await readdir(logsDir);
+      const reportFiles = await readdir(reportsDir);
       
+      const totalScenarios = scenarioLogs.filter(f => f.startsWith('scenario-')).length;
+      const reportedScenarios = reportFiles.length;
+
+      // Build the pulse using Gemini's format
+      let pulse = `=== Deebo Session Pulse: ${sessionId} ===\n`;
+      pulse += `Timestamp: ${new Date().toISOString()}\n`;
+      pulse += `Overall Status: ${status}\n`;
+      pulse += `Session Duration: ${Math.floor(durationMs / 1000)}s\n\n`;
+
+      pulse += `--- Mother Agent ---\n`;
+      pulse += `Status: ${status === 'in_progress' ? 'Working' : status}\n`;
+      pulse += `Last Activity: ${lastEvent.timestamp}\n`;
+      pulse += `Current Focus Snippet:\n`;
+      pulse += `<<<<<<< MOTHER FOCUS\n`;
+      // Get mother's last 20 lines but filter out noisy tool results
+      const focusLines = motherLines.slice(-20)
+        .map(l => {
+          try {
+            const event = JSON.parse(l);
+            // Only show significant events
+            if (event.level === 'debug' && 
+               (event.message.includes('Sending to Claude') || 
+                event.message.includes('Received from Claude'))) {
+              return null;
+            }
+            return `[${event.timestamp}] ${event.message}`;
+          } catch {
+            return l;
+          }
+        })
+        .filter(Boolean)
+        .join('\n');
+      pulse += focusLines;
+      pulse += '\n======= MOTHER FOCUS END >>>>>>>\n\n';
+
+      pulse += `--- Scenario Agents (${totalScenarios} Total: ${totalScenarios - reportedScenarios} Running, ${reportedScenarios} Reported) ---\n\n`;
+
+      // Show scenario statuses
+      for (const file of reportFiles.slice(-5)) { // Show last 5 scenarios
+        const scenarioId = file.replace('.txt', '');
+        const report = await readFile(join(reportsDir, file), 'utf8');
+        const scenarioLogPath = join(logsDir, `scenario-${scenarioId}.log`);
+        const scenarioLog = await readFile(scenarioLogPath, 'utf8');
+        const scenarioLines = scenarioLog.split('\n').filter(Boolean);
+        const startEvent = JSON.parse(scenarioLines[0]);
+
+        // Get hypothesis from scenario log
+        const hypothesisLine = scenarioLines.find(l => {
+          try {
+            const event = JSON.parse(l);
+            return event.data?.hypothesis;
+          } catch {
+            return false;
+          }
+        });
+        const hypothesis = hypothesisLine ? JSON.parse(hypothesisLine).data.hypothesis : 'Unknown hypothesis';
+
+        pulse += `* Scenario: ${scenarioId}\n`;
+        pulse += `  Status: Reported\n`;
+        pulse += `  Hypothesis: "${hypothesis}"\n`;
+        pulse += `  Outcome Snippet:\n`;
+        pulse += `  <<<<<<< OUTCOME ${scenarioId}\n`;
+        // Get first 5 and last 5 non-empty lines of report
+        const reportLines = report.split('\n').filter(Boolean);
+        const start = reportLines.slice(0, 5).join('\n');
+        const end = reportLines.slice(-5).join('\n');
+        pulse += `  ${start}\n  ...\n  ${end}\n`;
+        pulse += `  ======= OUTCOME ${scenarioId} END >>>>>>>\n`;
+        pulse += `  (Full report: ${join(reportsDir, file)})\n\n`;
+      }
+
+      // Show running scenarios
+      const runningScenarios = scenarioLogs
+        .filter(f => f.startsWith('scenario-'))
+        .filter(f => !reportFiles.includes(f.replace('scenario-', '').replace('.log', '.txt')));
+
+      for (const file of runningScenarios) {
+        const scenarioId = file.replace('scenario-', '').replace('.log', '');
+        const scenarioLog = await readFile(join(logsDir, file), 'utf8');
+        const scenarioLines = scenarioLog.split('\n').filter(Boolean);
+        if (!scenarioLines.length) continue;
+
+        const startEvent = JSON.parse(scenarioLines[0]);
+        const lastEvent = JSON.parse(scenarioLines[scenarioLines.length - 1]);
+        const runtime = Math.floor((Date.now() - new Date(startEvent.timestamp).getTime()) / 1000);
+
+        // Get hypothesis same as above
+        const hypothesisLine = scenarioLines.find(l => {
+          try {
+            const event = JSON.parse(l);
+            return event.data?.hypothesis;
+          } catch {
+            return false;
+          }
+        });
+        const hypothesis = hypothesisLine ? JSON.parse(hypothesisLine).data.hypothesis : 'Unknown hypothesis';
+
+        pulse += `* Scenario: ${scenarioId}\n`;
+        pulse += `  Status: Running (${runtime}s)\n`;
+        pulse += `  Hypothesis: "${hypothesis}"\n`;
+        pulse += `  Latest Activity:\n`;
+        pulse += `  <<<<<<< LATEST ${scenarioId}\n`;
+        pulse += `  ${lastEvent.message}\n`;
+        pulse += `  ======= LATEST ${scenarioId} END >>>>>>>\n`;
+        pulse += `  (Log: ${join(logsDir, file)})\n\n`;
+      }
+
+      pulse += `--- End Session Pulse ---`;
+
       return {
         content: [{ 
           type: "text",
-          text: JSON.stringify({
-            sessionId,
-            status: lastMotherEvent?.level === 'error' ? 'failed' : 
-                    lastMotherEvent?.message?.includes('solution found') ? 'completed' : 'in_progress',
-            logs: allLogs
-          })
+          text: pulse
         }]
       };
+
     } catch (err) {
       return {
         content: [{ 
           type: "text",
-          text: `Session initializing`
+          text: `Error generating pulse: ${err}`
         }]
       };
     }
