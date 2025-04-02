@@ -86,6 +86,7 @@ The memory bank at ${memoryBankPath} contains two key files to help your investi
 - Records important error patterns you've noticed
 - Use this to avoid repeating failed approaches
 - Read this to understand which parts of the code were already examined
+- To edit, use read_file to get the latest state, then write a targeted diff using edit_file instead of write_file to avoid overwriting
 
 2. progress.md - The full debugging history (access at ${memoryBankPath}/progress.md):
 - Contains complete records of all debug sessions
