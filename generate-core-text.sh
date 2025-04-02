@@ -14,11 +14,10 @@ FILES=(
   "src/util/reports.ts"
   "src/util/membank.ts"
   "src/util/sanitize.ts"
+  "src/util/validation.ts"
   "src/util/branch-manager.ts"
   "config/tools.json"
   "memory.txt"
-  "package.json"
-  "tsconfig.json"
 )
 
 # Clear the output file if it exists

@@ -4,6 +4,7 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { DEEBO_ROOT } from '../index.js';
 import { getProjectId } from './sanitize.js';
+import { validateMemoryBankAccess } from './validation.js';
 
 // Map to track active connections
 const activeConnections: Map<string, Promise<Client>> = new Map();
@@ -22,9 +23,10 @@ export async function connectMcpTool(name: string, toolName: string, sessionId: 
 
     // Build paths
     const projectId = getProjectId(repoPath);
-    const memoryPath = join(DEEBO_ROOT, 'memory-bank', projectId);
-    const memoryRoot = join(DEEBO_ROOT, 'memory-bank'); // Add root path
-
+    //validation blocks scenario agents from accessing memory bank files
+    const memoryPath = validateMemoryBankAccess(name, join(DEEBO_ROOT, 'memory-bank', projectId)); 
+    const memoryRoot = validateMemoryBankAccess(name, join(DEEBO_ROOT, 'memory-bank')); // Add root path
+    
     // Replace all occurrences of placeholders
     toolConfig.args = toolConfig.args.map((arg: string | any) => 
       typeof arg === 'string' 

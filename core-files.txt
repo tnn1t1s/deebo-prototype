@@ -509,7 +509,7 @@ import { Message } from '@anthropic-ai/sdk/resources/messages.js';
 import { createScenarioBranch } from './util/branch-manager.js';
 
 const MAX_RUNTIME = 15 * 60 * 1000; // 15 minutes
-const SCENARIO_TIMEOUT = 5 * 60 * 1000; 
+const SCENARIO_TIMEOUT = 10 * 60 * 1000; 
 const useMemoryBank = process.env.USE_MEMORY_BANK === 'true';
 
 // Helper for Claude's responses
@@ -539,6 +539,7 @@ export async function runMotherAgent(sessionId: string, error: string, context: 
   const projectId = getProjectId(repoPath);
   const activeScenarios = new Set<string>();
   const startTime = Date.now();
+  const memoryBankPath = join(DEEBO_ROOT, 'memory-bank', projectId);
 
   try {
     // OBSERVE: Setup tools and Claude
@@ -561,42 +562,39 @@ KEY DIRECTIVES:
 - Better to spawn 5 wrong scenario agents than miss the right one
 - If you see an error message, immediately form hypotheses about its causes
 - Don't wait for full context - start with what you have
+- AVOID REDUNDANT HYPOTHESES - read scenario reports to learn what's been tried
+- Pass what failed to scenarios via context argument so they don't waste time
+${useMemoryBank ? `
+MEMORY BANK INVESTIGATION AIDS:
+The memory bank at ${memoryBankPath} contains two key files to help your investigation:
 
-Remember:
-- You're not here to solve the bug directly
-- You're here to spawn scenario agents to test hypotheses
-- BEING WRONG IS STILL HELPFUL TO ME!!!!!! AND EXPECTED
-- Each hypothesis helps narrow down the problem space
+1. activeContext.md - Your live investigation notebook:
+- READ THIS FIRST when starting an investigation using ${memoryBankPath}/activeContext.md
+- Contains your previous debugging notes and observations
+- Shows which approaches were promising vs dead ends
+- Records important error patterns you've noticed
+- Use this to avoid repeating failed approaches
+- Read this to understand which parts of the code were already examined
 
-git-mcp (use for ALL git operations):
-- git_status: Show working tree status
-- git_diff_unstaged: Show changes in working directory not yet staged
-- git_diff_staged: Show changes that are staged for commit
-- git_diff: Compare current state with a branch or commit
-- git_add: Stage file changes
-- git_commit: Commit staged changes
-- git_reset: Unstage all changes
-- git_log: Show recent commit history
-- git_create_branch: Create a new branch
-- git_checkout: Switch to a different branch
-- git_show: Show contents of a specific commit
-- git_init: Initialize a Git repository
+2. progress.md - The full debugging history (access at ${memoryBankPath}/progress.md):
+- Contains complete records of all debug sessions
+- Shows which hypotheses were tried and their outcomes
+- Lists all scenarios that were run and their results
+- Use this to see if similar bugs were fixed before
 
-filesystem-mcp (use ONLY for non-git file operations):
-- read_file: Read file contents
-- read_multiple_files: Read multiple files at once
-- write_file: Write or overwrite a file 
-- edit_file: Edit a file based on pattern matching
-- create_directory: Create a new directory
-- list_directory: List contents of a directory
-- move_file: Move or rename a file
-- search_files: Recursively search files
-- get_file_info: Get file metadata
-- list_allowed_directories: View directories this agent can access
+Use these files to:
+- Build on previous investigation progress
+- Spot patterns in failing scenarios
+- Generate better hypotheses based on what's worked/failed
+- Provide relevant context to scenario agents
+- Track the evolution of your debugging approach
+- Take notes! You're a scientist mother (think Dr. Akagi), not a robot. Be creative and curious.
 
-IMPORTANT: Always use git-mcp for any Git-related operations. Never use filesystem-mcp to modify .git directory or Git-related files like .gitignore.
+IMPORTANT: Always use ${memoryBankPath} as the absolute path for memory bank files. Never use relative paths.
+` : ''}
 
-Use tools by wrapping requests in XML tags like:
+TOOL USAGE:
+Always use this exact format for tools:
 <use_mcp_tool>
   <server_name>git-mcp</server_name>
   <tool_name>git_status</tool_name>
@@ -607,7 +605,54 @@ Use tools by wrapping requests in XML tags like:
   </arguments>
 </use_mcp_tool>
 
-You may update your investigation notes at any time using filesystem-mcp to edit memory-bank/activeContext.md. This is optional, but helpful for improving your own memory and hypothesis quality.`
+Available Tools:
+git-mcp (use for ALL git operations):
+- git_status: Show working tree status
+  Example: { "repo_path": "/path/to/repo" }
+- git_diff_unstaged: Show changes in working directory not yet staged
+  Example: { "repo_path": "/path/to/repo" }
+- git_diff_staged: Show changes that are staged for commit
+  Example: { "repo_path": "/path/to/repo" }
+- git_diff: Compare current state with a branch or commit
+  Example: { "repo_path": "/path/to/repo", "target": "main" }
+- git_add: Stage file changes
+  Example: { "repo_path": "/path/to/repo", "files": ["file1.ts", "file2.ts"] }
+- git_commit: Commit staged changes
+  Example: { "repo_path": "/path/to/repo", "message": "commit message" }
+- git_reset: Unstage all changes
+  Example: { "repo_path": "/path/to/repo" }
+- git_log: Show recent commit history
+  Example: { "repo_path": "/path/to/repo" }
+- git_checkout: Switch to a different branch
+  Example: { "repo_path": "/path/to/repo", "branch_name": "debug-123" }
+- git_show: Show contents of a specific commit
+  Example: { "repo_path": "/path/to/repo", "revision": "HEAD" }
+
+filesystem-mcp (use ONLY for non-git file operations):
+- read_file: Read file contents from {memoryRoot}/${projectId}/ for memory bank files
+(of course you can also read the files in the repo using ${repoPath} and are strongly encouraged to do so)
+  Example: { "path": "${memoryBankPath}/activeContext.md" }
+- read_multiple_files: Read multiple files at once
+  Example: { "paths": ["/path/to/file1.ts", "/path/to/file2.ts"] }
+- edit_file: Edit a file based on pattern matching
+  Example: { "path": "/path/to/file.ts", "edits": [{ "oldText": "old code", "newText": "new code" }] }
+- list_directory: List contents of a directory
+  Example: { "path": "/path/to/dir" }
+- search_files: Recursively search files  
+  Example: { "path": "/path/to/dir", "pattern": "*.ts" }
+- create_directory: Create a new directory
+  Example: { "path": "/path/to/dir" }
+- move_file: Move or rename a file
+  Example: { "source": "/path/to/old.ts", "destination": "/path/to/new.ts" }
+- get_file_info: Get file metadata
+  Example: { "path": "/path/to/file.ts" }
+- list_allowed_directories: View allowed directories
+  Example: {}
+
+IMPORTANT MEMORY BANK WARNINGS:
+- DO NOT use write_file on memory bank files - use filesystem-mcp edit_file instead
+- Only edit memory bank through edit_file to avoid overwrites
+- Always use ${memoryBankPath} as absolute path for memory bank files`
     }, {
       role: 'user',
       content: `Error: ${error}
@@ -685,13 +730,17 @@ IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for p
       // Handle Hypotheses → Scenario agents
       if (response.includes('<hypothesis>')) {
         const hypotheses = [...response.matchAll(/<hypothesis>([\s\S]*?)<\/hypothesis>/g)].map(match => match[1].trim());
-        /**
-         * - if the mother isnt really writing to active context lets at least 
-         * write down her responses that include hypotheses, 
-         * as those are really the only significant ones anyways.
-         */
+        
         if (useMemoryBank) {
-          await updateMemoryBank(projectId, response, 'activeContext');
+          await updateMemoryBank(projectId, `==================
+AUTOMATED HYPOTHESIS RECORD
+Timestamp: ${new Date().toISOString()}
+Error: ${error || 'No error provided'}
+
+${response}
+
+==================
+`, 'activeContext');
         }
 
         const scenarioOutputs = await Promise.all(hypotheses.map(async (hypothesis: string) => {
@@ -890,54 +939,95 @@ export async function runScenarioAgent(args: ScenarioArgs) {
     // Start Claude conversation with initial context
     const startTime = Date.now();
     const messages: { role: 'assistant' | 'user', content: string }[] = [{
-      role: 'assistant',
+      role: 'assistant', 
       content: `You are a scenario agent investigating a bug based on a specific hypothesis.
 A dedicated Git branch '${args.branch}' has been created for your investigation.
 
-You have access to these tools:
-
-git-mcp (use for ALL git operations):
-- git_status: Show working tree status
-- git_diff_unstaged: Show changes in working directory not yet staged
-- git_diff_staged: Show changes that are staged for commit
-- git_diff: Compare current state with a branch or commit
-- git_add: Stage file changes
-- git_commit: Commit staged changes
-- git_reset: Unstage all changes
-- git_log: Show recent commit history
-- git_create_branch: Create a new branch
-- git_checkout: Switch to a different branch
-- git_show: Show contents of a specific commit
-- git_init: Initialize a Git repository
-
-filesystem-mcp (use ONLY for non-git file operations):
-- read_file: Read file contents
-- read_multiple_files: Read multiple files at once
-- write_file: Write or overwrite a file
-- edit_file: Edit a file based on pattern matching
-- create_directory: Create a new directory
-- list_directory: List contents of a directory
-- move_file: Move or rename a file
-- search_files: Recursively search files
-- get_file_info: Get file metadata
-- list_allowed_directories: View directories this agent can access
-
+Your hypothesis: "${args.hypothesis}"
+Your job is to either validate the hypothesis, falsify it, or propose alternative directions if stuck. You do not need to fix the entire bug — your focus is the truth of the SPECIFIC hypothesis you are assigned to.
 IMPORTANT:
-1. First checkout your dedicated branch '${args.branch}' using git-mcp
-2. Always use git-mcp for any Git-related operations
-3. Never use filesystem-mcp to modify .git directory or Git-related files
-Use tools by wrapping requests in XML tags like:
+- READ THE CONTEXT CAREFULLY: "${args.context}"
+- This contains what approaches have failed and why
+- Don't waste time repeating failed attempts
+- These are instructions, not suggestions. Do not retry any approach listed here as ‘already attempted’.
+- Mother agent is counting on you to explore NEW approaches
+- When you're reasonably confident, wrap up with <report> tags
+
+TOOL USAGE:
+Always use this exact format for tools:
 <use_mcp_tool>
   <server_name>git-mcp</server_name>
   <tool_name>git_status</tool_name>
   <arguments>
     {
-      "repo_path": "/path/to/repo"
+      "repo_path": "${args.repoPath}"
     }
   </arguments>
 </use_mcp_tool>
 
-When you've completed your investigation, wrap your final report in <report> </report> tags.`
+Available Tools:
+git-mcp (use for ALL git operations):
+- git_status: Show working tree status
+  Example: { "repo_path": "${args.repoPath}" }
+- git_diff_unstaged: Show changes in working directory not yet staged
+  Example: { "repo_path": "${args.repoPath}" }
+- git_diff_staged: Show changes that are staged for commit
+  Example: { "repo_path": "${args.repoPath}" }
+- git_diff: Compare current state with a branch or commit
+  Example: { "repo_path": "${args.repoPath}", "target": "main" }
+- git_add: Stage file changes
+  Example: { "repo_path": "${args.repoPath}", "files": ["file1.ts", "file2.ts"] }
+- git_commit: Commit staged changes
+  Example: { "repo_path": "${args.repoPath}", "message": "commit message" }
+- git_reset: Unstage all changes
+  Example: { "repo_path": "${args.repoPath}" }
+- git_log: Show recent commit history
+  Example: { "repo_path": "${args.repoPath}" }
+- git_checkout: Switch to a different branch
+  Example: { "repo_path": "${args.repoPath}", "branch_name": "${args.branch}" }
+- git_show: Show contents of a specific commit
+  Example: { "repo_path": "${args.repoPath}", "revision": "HEAD" }
+
+filesystem-mcp (use ONLY for non-git file operations):
+- read_file: Read file contents
+  Example: { "path": "${args.repoPath}/src/file.ts" }
+- read_multiple_files: Read multiple files at once
+  Example: { "paths": ["${args.repoPath}/src/file1.ts", "${args.repoPath}/src/file2.ts"] }
+- write_file: Write to files
+  Example: { "path": "${args.repoPath}/src/file.ts", "content": "content" }
+- edit_file: Edit a file based on pattern matching
+  Example: { "path": "${args.repoPath}/src/file.ts", "edits": [{ "oldText": "old code", "newText": "new code" }] }
+- list_directory: List contents of a directory
+  Example: { "path": "${args.repoPath}/src" }
+- search_files: Recursively search files
+  Example: { "path": "${args.repoPath}", "pattern": "*.ts" }
+- create_directory: Create a new directory
+  Example: { "path": "${args.repoPath}/new-dir" }
+- move_file: Move or rename a file
+  Example: { "source": "${args.repoPath}/src/old.ts", "destination": "${args.repoPath}/src/new.ts" }
+- get_file_info: Get file metadata
+  Example: { "path": "${args.repoPath}/src/file.ts" }
+- list_allowed_directories: View allowed directories
+  Example: {}
+
+REPORT FORMAT:
+When you've completed your investigation, use:
+<report>
+HYPOTHESIS: [Original hypothesis]
+CONFIRMED: [Yes/No/Partially]
+INVESTIGATION:
+[Briefly explain what context you took into account and how this differed]
+[Summary of what you tried]
+[Key findings]
+[Why this confirms/refutes hypothesis]
+
+CHANGES MADE:
+[List any file changes]
+[Why each change was needed]
+
+CONFIDENCE: [High/Medium/Low]
+[Explanation of confidence level]
+</report>`
     }, {
       role: 'user',
       content: `Error: ${args.error}
@@ -964,7 +1054,7 @@ Hypothesis: ${args.hypothesis}`
         process.exit(1);
       }
 
-      const response = getMessageText(conversation);
+      const response = getMessageText(conversation).trimEnd();
       messages.push({ role: 'assistant', content: response });
 
       // Handle MULTIPLE MCP tools (if any)
@@ -1060,6 +1150,7 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { DEEBO_ROOT } from '../index.js';
 import { getProjectId } from './sanitize.js';
+import { validateMemoryBankAccess } from './validation.js';
 
 // Map to track active connections
 const activeConnections: Map<string, Promise<Client>> = new Map();
@@ -1078,9 +1169,10 @@ export async function connectMcpTool(name: string, toolName: string, sessionId: 
 
     // Build paths
     const projectId = getProjectId(repoPath);
-    const memoryPath = join(DEEBO_ROOT, 'memory-bank', projectId);
-    const memoryRoot = join(DEEBO_ROOT, 'memory-bank'); // Add root path
-
+    //validation blocks scenario agents from accessing memory bank files
+    const memoryPath = validateMemoryBankAccess(name, join(DEEBO_ROOT, 'memory-bank', projectId)); 
+    const memoryRoot = validateMemoryBankAccess(name, join(DEEBO_ROOT, 'memory-bank')); // Add root path
+    
     // Replace all occurrences of placeholders
     toolConfig.args = toolConfig.args.map((arg: string | any) => 
       typeof arg === 'string' 
@@ -1203,6 +1295,20 @@ export function getProjectId(repoPath: string): string {
 }
 
 
+=== src/util/validation.ts ===
+// src/util/validation.ts
+import { join } from 'path';
+import { DEEBO_ROOT } from '../index.js';
+
+export function validateMemoryBankAccess(agentName: string, path: string): string {
+  const memoryBankRoot = join(DEEBO_ROOT, 'memory-bank');
+  if (agentName.startsWith('scenario-') && path.startsWith(memoryBankRoot)) {
+    throw new Error('Access denied: Scenario agents are not permitted to access memory bank files.');
+  }
+  return path;
+}
+
+
 === src/util/branch-manager.ts ===
 import { simpleGit } from 'simple-git';
 
@@ -1257,7 +1363,7 @@ memory-bank/<project-id>/
         └── ...
 
 the activeContext.md is like Mother's working memory/journal that helps her create increasingly well-informed scenario agents as the investigation progresses. She can learn from and build upon previous hypotheses and scenario results.
-
+progress.md is like the long-term state of the repo. like a growing reference doc
 ⸻
 
 🤖 Scenario Agent Behavior
@@ -1285,77 +1391,6 @@ Important: writeReport() is a utility that happens to write to memory-bank paths
 
 ⸻
 
-
-
-
-=== package.json ===
-{
-  "name": "deebo-prototype",
-  "version": "1.0.0",
-  "main": "build/index.js",
-  "type": "module",
-  "scripts": {
-    "build": "tsc",
-    "start": "node --experimental-specifier-resolution=node --experimental-modules --max-old-space-size=4096 build/index.js",
-    "dev": "tsc --watch & node --experimental-specifier-resolution=node --experimental-modules --max-old-space-size=4096 --watch build/index.js",
-    "setup": "bash setup.sh",
-    "setup:win": "powershell -ExecutionPolicy Bypass -File .\\setup.ps1",
-    "check-env": "node check-env.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "Agentic Debugging System that integrates with Git and Filesystem MCP servers",
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
-    "@modelcontextprotocol/sdk": "^1.7.0",
-    "@modelcontextprotocol/server-filesystem": "^2025.1.14",
-    "cors": "^2.8.5",
-    "dockerode": "^4.0.0",
-    "dotenv": "^16.4.7",
-    "express": "^5.0.1",
-    "p-limit": "^6.2.0",
-    "simple-git": "^3.27.0",
-    "urlpattern-polyfill": "^10.0.0",
-    "uuid": "^11.1.0",
-    "zod": "^3.24.2"
-  },
-  "devDependencies": {
-    "@types/cors": "^2.8.17",
-    "@types/dockerode": "^3.3.23",
-    "@types/express": "^5.0.1",
-    "@types/node": "^22.13.14",
-    "@types/uuid": "^9.0.8",
-    "typescript": "^5.8.2"
-  },
-  "resolutions": {
-    "@modelcontextprotocol/sdk": "1.7.0"
-  }
-}
-
-
-
-=== tsconfig.json ===
-{
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "outDir": "./build",
-    "rootDir": "./src",
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "allowJs": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "lib": ["ES2022"],
-    "types": ["node"]
-  },
-  "include": ["src/**/*"]
-}
 
 
 

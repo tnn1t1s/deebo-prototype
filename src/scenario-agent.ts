@@ -84,54 +84,95 @@ export async function runScenarioAgent(args: ScenarioArgs) {
     // Start Claude conversation with initial context
     const startTime = Date.now();
     const messages: { role: 'assistant' | 'user', content: string }[] = [{
-      role: 'assistant',
+      role: 'assistant', 
       content: `You are a scenario agent investigating a bug based on a specific hypothesis.
 A dedicated Git branch '${args.branch}' has been created for your investigation.
 
-You have access to these tools:
-
-git-mcp (use for ALL git operations):
-- git_status: Show working tree status
-- git_diff_unstaged: Show changes in working directory not yet staged
-- git_diff_staged: Show changes that are staged for commit
-- git_diff: Compare current state with a branch or commit
-- git_add: Stage file changes
-- git_commit: Commit staged changes
-- git_reset: Unstage all changes
-- git_log: Show recent commit history
-- git_create_branch: Create a new branch
-- git_checkout: Switch to a different branch
-- git_show: Show contents of a specific commit
-- git_init: Initialize a Git repository
-
-filesystem-mcp (use ONLY for non-git file operations):
-- read_file: Read file contents
-- read_multiple_files: Read multiple files at once
-- write_file: Write or overwrite a file
-- edit_file: Edit a file based on pattern matching
-- create_directory: Create a new directory
-- list_directory: List contents of a directory
-- move_file: Move or rename a file
-- search_files: Recursively search files
-- get_file_info: Get file metadata
-- list_allowed_directories: View directories this agent can access
-
+Your hypothesis: "${args.hypothesis}"
+Your job is to either validate the hypothesis, falsify it, or propose alternative directions if stuck. You do not need to fix the entire bug — your focus is the truth of the SPECIFIC hypothesis you are assigned to.
 IMPORTANT:
-1. First checkout your dedicated branch '${args.branch}' using git-mcp
-2. Always use git-mcp for any Git-related operations
-3. Never use filesystem-mcp to modify .git directory or Git-related files
-Use tools by wrapping requests in XML tags like:
+- READ THE CONTEXT CAREFULLY: "${args.context}"
+- This contains what approaches have failed and why
+- Don't waste time repeating failed attempts
+- These are instructions, not suggestions. Do not retry any approach listed here as ‘already attempted’.
+- Mother agent is counting on you to explore NEW approaches
+- When you're reasonably confident, wrap up with <report> tags
+
+TOOL USAGE:
+Always use this exact format for tools:
 <use_mcp_tool>
   <server_name>git-mcp</server_name>
   <tool_name>git_status</tool_name>
   <arguments>
     {
-      "repo_path": "/path/to/repo"
+      "repo_path": "${args.repoPath}"
     }
   </arguments>
 </use_mcp_tool>
 
-When you've completed your investigation, wrap your final report in <report> </report> tags.`
+Available Tools:
+git-mcp (use for ALL git operations):
+- git_status: Show working tree status
+  Example: { "repo_path": "${args.repoPath}" }
+- git_diff_unstaged: Show changes in working directory not yet staged
+  Example: { "repo_path": "${args.repoPath}" }
+- git_diff_staged: Show changes that are staged for commit
+  Example: { "repo_path": "${args.repoPath}" }
+- git_diff: Compare current state with a branch or commit
+  Example: { "repo_path": "${args.repoPath}", "target": "main" }
+- git_add: Stage file changes
+  Example: { "repo_path": "${args.repoPath}", "files": ["file1.ts", "file2.ts"] }
+- git_commit: Commit staged changes
+  Example: { "repo_path": "${args.repoPath}", "message": "commit message" }
+- git_reset: Unstage all changes
+  Example: { "repo_path": "${args.repoPath}" }
+- git_log: Show recent commit history
+  Example: { "repo_path": "${args.repoPath}" }
+- git_checkout: Switch to a different branch
+  Example: { "repo_path": "${args.repoPath}", "branch_name": "${args.branch}" }
+- git_show: Show contents of a specific commit
+  Example: { "repo_path": "${args.repoPath}", "revision": "HEAD" }
+
+filesystem-mcp (use ONLY for non-git file operations):
+- read_file: Read file contents
+  Example: { "path": "${args.repoPath}/src/file.ts" }
+- read_multiple_files: Read multiple files at once
+  Example: { "paths": ["${args.repoPath}/src/file1.ts", "${args.repoPath}/src/file2.ts"] }
+- write_file: Write to files
+  Example: { "path": "${args.repoPath}/src/file.ts", "content": "content" }
+- edit_file: Edit a file based on pattern matching
+  Example: { "path": "${args.repoPath}/src/file.ts", "edits": [{ "oldText": "old code", "newText": "new code" }] }
+- list_directory: List contents of a directory
+  Example: { "path": "${args.repoPath}/src" }
+- search_files: Recursively search files
+  Example: { "path": "${args.repoPath}", "pattern": "*.ts" }
+- create_directory: Create a new directory
+  Example: { "path": "${args.repoPath}/new-dir" }
+- move_file: Move or rename a file
+  Example: { "source": "${args.repoPath}/src/old.ts", "destination": "${args.repoPath}/src/new.ts" }
+- get_file_info: Get file metadata
+  Example: { "path": "${args.repoPath}/src/file.ts" }
+- list_allowed_directories: View allowed directories
+  Example: {}
+
+REPORT FORMAT:
+When you've completed your investigation, use:
+<report>
+HYPOTHESIS: [Original hypothesis]
+CONFIRMED: [Yes/No/Partially]
+INVESTIGATION:
+[Briefly explain what context you took into account and how this differed]
+[Summary of what you tried]
+[Key findings]
+[Why this confirms/refutes hypothesis]
+
+CHANGES MADE:
+[List any file changes]
+[Why each change was needed]
+
+CONFIDENCE: [High/Medium/Low]
+[Explanation of confidence level]
+</report>`
     }, {
       role: 'user',
       content: `Error: ${args.error}
@@ -158,7 +199,7 @@ Hypothesis: ${args.hypothesis}`
         process.exit(1);
       }
 
-      const response = getMessageText(conversation);
+      const response = getMessageText(conversation).trimEnd();
       messages.push({ role: 'assistant', content: response });
 
       // Handle MULTIPLE MCP tools (if any)
