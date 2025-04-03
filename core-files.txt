@@ -383,46 +383,146 @@ server.tool(
         };
       }
 
+      // Get time metrics and mother status
       const logsDir = join(sessionDir, 'logs');
-      const logFiles = await readdir(logsDir);
-      const allLogs: Record<string, any[]> = {};
+      const motherLogPath = join(logsDir, 'mother.log');
+      const motherLog = await readFile(motherLogPath, 'utf8');
+      const motherLines = motherLog.split('\n').filter(Boolean);
       
-      // Read all log files in parallel
-      await Promise.all(logFiles.map(async (file) => {
-        const logPath = join(logsDir, file);
-        const logContent = await readFile(logPath, 'utf8');
-        const lines = logContent.split('\n').filter(Boolean);
-        const events = lines.map(line => {
-          try {
-            return JSON.parse(line);
-          } catch {
-            console.error(`Skipping malformed log line in ${file}: ${line}`);
-            return null;
-          }
-        }).filter(Boolean);
-        allLogs[file.replace('.log', '')] = events;
-      }));
+      if (!motherLines.length) return { content: [{ type: "text", text: 'Session initializing' }] };
 
-      // Get last event from mother's log for status
-      const motherEvents = allLogs['mother'] || [];
-      const lastMotherEvent = motherEvents[motherEvents.length - 1];
+      const firstEvent = JSON.parse(motherLines[0]);
+      const lastEvent = JSON.parse(motherLines[motherLines.length - 1]);
+      const durationMs = Date.now() - new Date(firstEvent.timestamp).getTime();
+      const status = lastEvent.level === 'error' ? 'failed' :
+                    lastEvent.message?.includes('solution found') ? 'completed' : 'in_progress';
+
+      // Count scenario statuses
+      const reportsDir = join(sessionDir, 'reports');
+      const scenarioLogs = await readdir(logsDir);
+      const reportFiles = await readdir(reportsDir);
       
+      const totalScenarios = scenarioLogs.filter(f => f.startsWith('scenario-')).length;
+      const reportedScenarios = reportFiles.length;
+
+      // Build the pulse using Gemini's format
+      let pulse = `=== Deebo Session Pulse: ${sessionId} ===\n`;
+      pulse += `Timestamp: ${new Date().toISOString()}\n`;
+      pulse += `Overall Status: ${status}\n`;
+      pulse += `Session Duration: ${Math.floor(durationMs / 1000)}s\n\n`;
+
+      pulse += `--- Mother Agent ---\n`;
+      pulse += `Status: ${status === 'in_progress' ? 'Working' : status}\n`;
+      pulse += `Last Activity: ${lastEvent.timestamp}\n`;
+      pulse += `Current Focus Snippet:\n`;
+      pulse += `<<<<<<< MOTHER FOCUS\n`;
+      // Get mother's last 20 lines but filter out noisy tool results
+      const focusLines = motherLines.slice(-20)
+        .map(l => {
+          try {
+            const event = JSON.parse(l);
+            // Only show significant events
+            if (event.level === 'debug' && 
+               (event.message.includes('Sending to Claude') || 
+                event.message.includes('Received from Claude'))) {
+              return null;
+            }
+            return `[${event.timestamp}] ${event.message}`;
+          } catch {
+            return l;
+          }
+        })
+        .filter(Boolean)
+        .join('\n');
+      pulse += focusLines;
+      pulse += '\n======= MOTHER FOCUS END >>>>>>>\n\n';
+
+      pulse += `--- Scenario Agents (${totalScenarios} Total: ${totalScenarios - reportedScenarios} Running, ${reportedScenarios} Reported) ---\n\n`;
+
+      // Show scenario statuses
+      for (const file of reportFiles.slice(-5)) { // Show last 5 scenarios
+        const scenarioId = file.replace('.json', '');
+        const report = JSON.parse(await readFile(join(reportsDir, file), 'utf8'));
+        const scenarioLogPath = join(logsDir, `scenario-${scenarioId}.log`);
+        const scenarioLog = await readFile(scenarioLogPath, 'utf8');
+        const scenarioLines = scenarioLog.split('\n').filter(Boolean);
+        const startEvent = JSON.parse(scenarioLines[0]);
+
+        // Get hypothesis from scenario log
+        const hypothesisLine = scenarioLines.find(l => {
+          try {
+            const event = JSON.parse(l);
+            return event.data?.hypothesis;
+          } catch {
+            return false;
+          }
+        });
+        const hypothesis = hypothesisLine ? JSON.parse(hypothesisLine).data.hypothesis : 'Unknown hypothesis';
+
+        pulse += `* Scenario: ${scenarioId}\n`;
+        pulse += `  Status: Reported\n`;
+        pulse += `  Hypothesis: "${hypothesis}"\n`;
+        pulse += `  Outcome Snippet:\n`;
+        pulse += `  <<<<<<< OUTCOME ${scenarioId}\n`;
+        // Get first 5 and last 5 non-empty lines of report
+        const reportLines = report.split('\n').filter(Boolean);
+        const start = reportLines.slice(0, 5).join('\n');
+        const end = reportLines.slice(-5).join('\n');
+        pulse += `  ${start}\n  ...\n  ${end}\n`;
+        pulse += `  ======= OUTCOME ${scenarioId} END >>>>>>>\n`;
+        pulse += `  (Full report: ${join(reportsDir, file)})\n\n`;
+      }
+
+      // Show running scenarios
+      const runningScenarios = scenarioLogs
+        .filter(f => f.startsWith('scenario-'))
+        .filter(f => !reportFiles.includes(f.replace('scenario-', '').replace('.log', '.json')));
+
+      for (const file of runningScenarios) {
+        const scenarioId = file.replace('scenario-', '').replace('.log', '');
+        const scenarioLog = await readFile(join(logsDir, file), 'utf8');
+        const scenarioLines = scenarioLog.split('\n').filter(Boolean);
+        if (!scenarioLines.length) continue;
+
+        const startEvent = JSON.parse(scenarioLines[0]);
+        const lastEvent = JSON.parse(scenarioLines[scenarioLines.length - 1]);
+        const runtime = Math.floor((Date.now() - new Date(startEvent.timestamp).getTime()) / 1000);
+
+        // Get hypothesis same as above
+        const hypothesisLine = scenarioLines.find(l => {
+          try {
+            const event = JSON.parse(l);
+            return event.data?.hypothesis;
+          } catch {
+            return false;
+          }
+        });
+        const hypothesis = hypothesisLine ? JSON.parse(hypothesisLine).data.hypothesis : 'Unknown hypothesis';
+
+        pulse += `* Scenario: ${scenarioId}\n`;
+        pulse += `  Status: Running (${runtime}s)\n`;
+        pulse += `  Hypothesis: "${hypothesis}"\n`;
+        pulse += `  Latest Activity:\n`;
+        pulse += `  <<<<<<< LATEST ${scenarioId}\n`;
+        pulse += `  ${lastEvent.message}\n`;
+        pulse += `  ======= LATEST ${scenarioId} END >>>>>>>\n`;
+        pulse += `  (Log: ${join(logsDir, file)})\n\n`;
+      }
+
+      pulse += `--- End Session Pulse ---`;
+
       return {
         content: [{ 
           type: "text",
-          text: JSON.stringify({
-            sessionId,
-            status: lastMotherEvent?.level === 'error' ? 'failed' : 
-                    lastMotherEvent?.message?.includes('solution found') ? 'completed' : 'in_progress',
-            logs: allLogs
-          })
+          text: pulse
         }]
       };
+
     } catch (err) {
       return {
         content: [{ 
           type: "text",
-          text: `Session initializing`
+          text: `Error generating pulse: ${err}`
         }]
       };
     }
@@ -455,28 +555,68 @@ server.tool(
     // Sanitize sessionId for shell
     const sanitizedId = sessionId.replace(/[^a-zA-Z0-9-]/g, '');
     
-    const { stdout } = await execPromise(`pgrep -f ${sanitizedId}`);
-    
-    const pids = stdout
-      .split('\n')
-      .filter(Boolean)
-      .map(Number)
-      .filter(pid => !isNaN(pid));
-
-    for (const pid of pids) {
-      try {
-        process.kill(pid, 'SIGTERM');
-      } catch (err) {
-        // Already dead is fine
+    try {
+      // First attempt: SIGTERM to all processes in session tree
+      const { stdout: pids } = await execPromise(`pgrep -f ${sanitizedId}`);
+      const pidList = pids.split('\n').filter(Boolean);
+      
+      for (const pid of pidList) {
+        try {
+          // Kill process and all its children
+          await execPromise(`pkill -15 -P ${pid}`);
+          process.kill(Number(pid), 'SIGTERM');
+        } catch (err) {
+          // Ignore errors - process might be gone
+        }
       }
-    }
 
-    return {
-      content: [{
-        type: "text",
-        text: `Terminated ${pids.length} processes for session ${sanitizedId}`
-      }]
-    };
+      // Wait a moment for graceful shutdown
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Check if any processes survived
+      const { stdout: survivors } = await execPromise(`pgrep -f ${sanitizedId}`);
+      const survivorList = survivors.split('\n').filter(Boolean);
+
+      if (survivorList.length > 0) {
+        // Force kill survivors with SIGKILL
+        for (const pid of survivorList) {
+          try {
+            await execPromise(`pkill -9 -P ${pid}`);
+            process.kill(Number(pid), 'SIGKILL');
+          } catch (err) {
+            // Ignore errors
+          }
+        }
+      }
+
+      // Final check
+      const { stdout: final } = await execPromise(`pgrep -f ${sanitizedId}`);
+      const finalList = final.split('\n').filter(Boolean);
+
+      if (finalList.length > 0) {
+        return {
+          content: [{
+            type: "text",
+            text: `WARNING: ${finalList.length} processes survived cancellation. Session may need manual cleanup.`
+          }]
+        };
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: `Successfully terminated all processes for session ${sanitizedId}`
+        }]
+      };
+
+    } catch (err) {
+      return {
+        content: [{
+          type: "text",
+          text: `Error during cancellation: ${err}. Session may need manual cleanup.`
+        }]
+      };
+    }
   }
 );
 
@@ -509,7 +649,7 @@ import { Message } from '@anthropic-ai/sdk/resources/messages.js';
 import { createScenarioBranch } from './util/branch-manager.js';
 
 const MAX_RUNTIME = 15 * 60 * 1000; // 15 minutes
-const SCENARIO_TIMEOUT = 10 * 60 * 1000; 
+const SCENARIO_TIMEOUT = 5 * 60 * 1000; 
 const useMemoryBank = process.env.USE_MEMORY_BANK === 'true';
 
 // Helper for Claude's responses
@@ -555,7 +695,8 @@ export async function runMotherAgent(sessionId: string, error: string, context: 
 1. INVESTIGATE and HYPOTHESIZE aggressively
 2. Don't wait for perfect information
 3. Generate hypotheses even if you're uncertain
-
+When you've found a solution or determined none exists, wrap it in solution tags:
+<solution>Your final conclusion and solution here</solution>
 KEY DIRECTIVES:
 - Always generate at least one hypothesis within your first 2-3 responses
 - Use <hypothesis>Your hypothesis here</hypothesis> liberally
@@ -575,6 +716,7 @@ The memory bank at ${memoryBankPath} contains two key files to help your investi
 - Records important error patterns you've noticed
 - Use this to avoid repeating failed approaches
 - Read this to understand which parts of the code were already examined
+- To edit, use read_file to get the latest state, then write a targeted diff using edit_file instead of write_file to avoid overwriting
 
 2. progress.md - The full debugging history (access at ${memoryBankPath}/progress.md):
 - Contains complete records of all debug sessions
@@ -670,7 +812,7 @@ IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for p
     await log(sessionId, 'mother', 'debug', 'Sending to Claude', { messages, repoPath });
     let conversation = await anthropic.messages.create({
       model: 'claude-3-5-sonnet-20241022',
-      max_tokens: 1024,
+      max_tokens: 4096,
       messages
     });
     await log(sessionId, 'mother', 'debug', 'Received from Claude', { response: getMessageText(conversation), repoPath });
@@ -815,7 +957,7 @@ ${response}
       await log(sessionId, 'mother', 'debug', 'Sending to Claude', { messages, repoPath });
       conversation = await anthropic.messages.create({
         model: 'claude-3-5-sonnet-20241022',
-        max_tokens: 1024,
+        max_tokens: 4096,
         messages
       });
       await log(sessionId, 'mother', 'debug', 'Received from Claude', { response: getMessageText(conversation), repoPath });
@@ -1042,12 +1184,22 @@ Hypothesis: ${args.hypothesis}`
     await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to Claude', { messages, repoPath: args.repoPath });
     let conversation = await anthropic.messages.create({
       model: 'claude-3-5-sonnet-20241022',
-      max_tokens: 1024,
+      max_tokens: 4096,
       messages
     });
     await log(args.session, `scenario-${args.id}`, 'debug', 'Received from Claude', { response: getMessageText(conversation), repoPath: args.repoPath });
 
-    while (!getMessageText(conversation).includes('<report>')) {
+    // Check for report in initial response
+    const initialResponse = getMessageText(conversation);
+    const initialReportMatch = initialResponse.match(/<report>\s*([\s\S]*?)\s*<\/report>/i);
+    if (initialReportMatch) {
+      const reportText = initialReportMatch[1].trim();
+      await writeReport(args.repoPath, args.session, args.id, reportText);
+      console.log(reportText);
+      process.exit(0);
+    }
+
+    while (true) {
       if (Date.now() - startTime > MAX_RUNTIME) {
         await writeReport(args.repoPath, args.session, args.id, 'Investigation exceeded maximum runtime');
         console.log('Investigation exceeded maximum runtime');
@@ -1107,10 +1259,11 @@ Hypothesis: ${args.hypothesis}`
       }
 
       // Extract report if present
-      const reportMatch = response.match(/<report>(.*?)<\/report>/s);
+      const reportMatch = response.match(/<report>\s*([\s\S]*?)\s*<\/report>/i);
       if (reportMatch) {
-        await writeReport(args.repoPath, args.session, args.id, reportMatch[1]);
-        console.log(reportMatch[1]);
+        const reportText = reportMatch[1].trim();
+        await writeReport(args.repoPath, args.session, args.id, reportText);
+        console.log(reportText);
         process.exit(0);
       }
 
@@ -1118,7 +1271,7 @@ Hypothesis: ${args.hypothesis}`
       await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to Claude', { messages, repoPath: args.repoPath });
       conversation = await anthropic.messages.create({
         model: 'claude-3-5-sonnet-20241022',
-        max_tokens: 1024,
+        max_tokens: 4096,
         messages
       });
       await log(args.session, `scenario-${args.id}`, 'debug', 'Received from Claude', { response: getMessageText(conversation), repoPath: args.repoPath });
@@ -1150,7 +1303,6 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { DEEBO_ROOT } from '../index.js';
 import { getProjectId } from './sanitize.js';
-import { validateMemoryBankAccess } from './validation.js';
 
 // Map to track active connections
 const activeConnections: Map<string, Promise<Client>> = new Map();
@@ -1170,8 +1322,8 @@ export async function connectMcpTool(name: string, toolName: string, sessionId: 
     // Build paths
     const projectId = getProjectId(repoPath);
     //validation blocks scenario agents from accessing memory bank files
-    const memoryPath = validateMemoryBankAccess(name, join(DEEBO_ROOT, 'memory-bank', projectId)); 
-    const memoryRoot = validateMemoryBankAccess(name, join(DEEBO_ROOT, 'memory-bank')); // Add root path
+    const memoryPath = join(DEEBO_ROOT, 'memory-bank', projectId);
+    const memoryRoot = join(DEEBO_ROOT, 'memory-bank');
     
     // Replace all occurrences of placeholders
     toolConfig.args = toolConfig.args.map((arg: string | any) => 
@@ -1262,8 +1414,11 @@ import { DEEBO_ROOT } from '../index.js';
 import { getProjectId } from './sanitize.js';
 
 // src/util/reports.ts
-
-export async function writeReport(repoPath: string, sessionId: string, scenarioId: string, report: any) {
+//we changed it to text to make check tool work better then changed it back to json
+// after removing validation.ts which was blocking access to memory bank files 
+// but really inelegantly so i took it out but i might have not reverted all the 
+// changes so there's probably that if you're still getting bugs
+export async function writeReport(repoPath: string, sessionId: string, scenarioId: string, report: string) {
     const projectId = getProjectId(repoPath);
     const reportDir = join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'reports');
     await mkdir(reportDir, { recursive: true });
@@ -1292,20 +1447,6 @@ import { createHash } from 'crypto';
 export function getProjectId(repoPath: string): string {
   const hash = createHash('sha256').update(repoPath).digest('hex');
   return hash.slice(0, 12); // use first 12 characters
-}
-
-
-=== src/util/validation.ts ===
-// src/util/validation.ts
-import { join } from 'path';
-import { DEEBO_ROOT } from '../index.js';
-
-export function validateMemoryBankAccess(agentName: string, path: string): string {
-  const memoryBankRoot = join(DEEBO_ROOT, 'memory-bank');
-  if (agentName.startsWith('scenario-') && path.startsWith(memoryBankRoot)) {
-    throw new Error('Access denied: Scenario agents are not permitted to access memory bank files.');
-  }
-  return path;
 }
 
 

@@ -20,7 +20,7 @@ import { Message } from '@anthropic-ai/sdk/resources/messages.js';
 import { createScenarioBranch } from './util/branch-manager.js';
 
 const MAX_RUNTIME = 15 * 60 * 1000; // 15 minutes
-const SCENARIO_TIMEOUT = 10 * 60 * 1000; 
+const SCENARIO_TIMEOUT = 5 * 60 * 1000; 
 const useMemoryBank = process.env.USE_MEMORY_BANK === 'true';
 
 // Helper for Claude's responses
@@ -66,7 +66,8 @@ export async function runMotherAgent(sessionId: string, error: string, context: 
 1. INVESTIGATE and HYPOTHESIZE aggressively
 2. Don't wait for perfect information
 3. Generate hypotheses even if you're uncertain
-
+When you've found a solution or determined none exists, wrap it in solution tags:
+<solution>Your final conclusion and solution here</solution>
 KEY DIRECTIVES:
 - Always generate at least one hypothesis within your first 2-3 responses
 - Use <hypothesis>Your hypothesis here</hypothesis> liberally
@@ -182,7 +183,7 @@ IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for p
     await log(sessionId, 'mother', 'debug', 'Sending to Claude', { messages, repoPath });
     let conversation = await anthropic.messages.create({
       model: 'claude-3-5-sonnet-20241022',
-      max_tokens: 1024,
+      max_tokens: 4096,
       messages
     });
     await log(sessionId, 'mother', 'debug', 'Received from Claude', { response: getMessageText(conversation), repoPath });
@@ -232,11 +233,26 @@ IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for p
 
       // Only now, execute each one
       for (const { server, tool, args } of validCalls) {
-        const result = await server.callTool({ name: tool, arguments: args });
-        messages.push({
-          role: 'user',
-          content: JSON.stringify(result)
-        });
+        try {
+          const result = await server.callTool({ name: tool, arguments: args });
+          let resultStr;
+         // try {
+            resultStr = JSON.stringify(result);
+          // } catch (jsonErr) {
+          //   resultStr = `{"error": "Could not serialize tool result: ${jsonErr instanceof Error ? jsonErr.message : String(jsonErr)}"}`;
+          // }
+          
+          messages.push({
+            role: 'user',
+            content: resultStr
+          });
+        } catch (toolErr) {
+          // Handle tool call errors gracefully
+          messages.push({
+            role: 'user',
+            content: `Tool call failed: ${toolErr instanceof Error ? toolErr.message : String(toolErr)}`
+          });
+        }
       }
 
       // Handle Hypotheses → Scenario agents
@@ -327,7 +343,7 @@ ${response}
       await log(sessionId, 'mother', 'debug', 'Sending to Claude', { messages, repoPath });
       conversation = await anthropic.messages.create({
         model: 'claude-3-5-sonnet-20241022',
-        max_tokens: 1024,
+        max_tokens: 4096,
         messages
       });
       await log(sessionId, 'mother', 'debug', 'Received from Claude', { response: getMessageText(conversation), repoPath });
@@ -347,17 +363,15 @@ Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress');
     return getMessageText(conversation);
 
   } catch (err) {
-    const error = err instanceof Error ? err : new Error(String(err));
-    await log(sessionId, 'mother', 'error', `Failed: ${error.message}`, { repoPath });
-
+    const caughtError = err instanceof Error ? err : new Error(String(err));
+    await log(sessionId, 'mother', 'error', `Failed: ${caughtError.message}`, { repoPath });
     if (useMemoryBank) {
       await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - ${new Date().toISOString()}
-${error ? `Error: ${error}` : ''}
-Failed: ${error.message}
-Scenarios Run: ${activeScenarios.size}
-Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress');
+  ${caughtError ? `Error: ${String(caughtError)}` : ''}
+  Failed: ${caughtError.message}
+  Scenarios Run: ${activeScenarios.size}
+  Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress');
     }
-
-    throw error;
+    throw caughtError;
   }
 }

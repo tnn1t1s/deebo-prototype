@@ -187,12 +187,22 @@ Hypothesis: ${args.hypothesis}`
     await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to Claude', { messages, repoPath: args.repoPath });
     let conversation = await anthropic.messages.create({
       model: 'claude-3-5-sonnet-20241022',
-      max_tokens: 1024,
+      max_tokens: 4096,
       messages
     });
     await log(args.session, `scenario-${args.id}`, 'debug', 'Received from Claude', { response: getMessageText(conversation), repoPath: args.repoPath });
 
-    while (!getMessageText(conversation).includes('<report>')) {
+    // Check for report in initial response
+    const initialResponse = getMessageText(conversation);
+    const initialReportMatch = initialResponse.match(/<report>\s*([\s\S]*?)\s*<\/report>/i);
+    if (initialReportMatch) {
+      const reportText = initialReportMatch[1].trim();
+      await writeReport(args.repoPath, args.session, args.id, reportText);
+      console.log(reportText);
+      process.exit(0);
+    }
+
+    while (true) {
       if (Date.now() - startTime > MAX_RUNTIME) {
         await writeReport(args.repoPath, args.session, args.id, 'Investigation exceeded maximum runtime');
         console.log('Investigation exceeded maximum runtime');
@@ -252,10 +262,11 @@ Hypothesis: ${args.hypothesis}`
       }
 
       // Extract report if present
-      const reportMatch = response.match(/<report>(.*?)<\/report>/s);
+      const reportMatch = response.match(/<report>\s*([\s\S]*?)\s*<\/report>/i);
       if (reportMatch) {
-        await writeReport(args.repoPath, args.session, args.id, reportMatch[1]);
-        console.log(reportMatch[1]);
+        const reportText = reportMatch[1].trim();
+        await writeReport(args.repoPath, args.session, args.id, reportText);
+        console.log(reportText);
         process.exit(0);
       }
 
@@ -263,7 +274,7 @@ Hypothesis: ${args.hypothesis}`
       await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to Claude', { messages, repoPath: args.repoPath });
       conversation = await anthropic.messages.create({
         model: 'claude-3-5-sonnet-20241022',
-        max_tokens: 1024,
+        max_tokens: 4096,
         messages
       });
       await log(args.session, `scenario-${args.id}`, 'debug', 'Received from Claude', { response: getMessageText(conversation), repoPath: args.repoPath });

@@ -146,8 +146,8 @@ server.tool(
 
       // Show scenario statuses
       for (const file of reportFiles.slice(-5)) { // Show last 5 scenarios
-        const scenarioId = file.replace('.txt', '');
-        const report = await readFile(join(reportsDir, file), 'utf8');
+        const scenarioId = file.replace('.json', '');
+        const report = JSON.parse(await readFile(join(reportsDir, file), 'utf8'));
         const scenarioLogPath = join(logsDir, `scenario-${scenarioId}.log`);
         const scenarioLog = await readFile(scenarioLogPath, 'utf8');
         const scenarioLines = scenarioLog.split('\n').filter(Boolean);
@@ -181,7 +181,7 @@ server.tool(
       // Show running scenarios
       const runningScenarios = scenarioLogs
         .filter(f => f.startsWith('scenario-'))
-        .filter(f => !reportFiles.includes(f.replace('scenario-', '').replace('.log', '.txt')));
+        .filter(f => !reportFiles.includes(f.replace('scenario-', '').replace('.log', '.json')));
 
       for (const file of runningScenarios) {
         const scenarioId = file.replace('scenario-', '').replace('.log', '');
@@ -260,28 +260,68 @@ server.tool(
     // Sanitize sessionId for shell
     const sanitizedId = sessionId.replace(/[^a-zA-Z0-9-]/g, '');
     
-    const { stdout } = await execPromise(`pgrep -f ${sanitizedId}`);
-    
-    const pids = stdout
-      .split('\n')
-      .filter(Boolean)
-      .map(Number)
-      .filter(pid => !isNaN(pid));
-
-    for (const pid of pids) {
-      try {
-        process.kill(pid, 'SIGTERM');
-      } catch (err) {
-        // Already dead is fine
+    try {
+      // First attempt: SIGTERM to all processes in session tree
+      const { stdout: pids } = await execPromise(`pgrep -f ${sanitizedId}`);
+      const pidList = pids.split('\n').filter(Boolean);
+      
+      for (const pid of pidList) {
+        try {
+          // Kill process and all its children
+          await execPromise(`pkill -15 -P ${pid}`);
+          process.kill(Number(pid), 'SIGTERM');
+        } catch (err) {
+          // Ignore errors - process might be gone
+        }
       }
-    }
 
-    return {
-      content: [{
-        type: "text",
-        text: `Terminated ${pids.length} processes for session ${sanitizedId}`
-      }]
-    };
+      // Wait a moment for graceful shutdown
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Check if any processes survived
+      const { stdout: survivors } = await execPromise(`pgrep -f ${sanitizedId}`);
+      const survivorList = survivors.split('\n').filter(Boolean);
+
+      if (survivorList.length > 0) {
+        // Force kill survivors with SIGKILL
+        for (const pid of survivorList) {
+          try {
+            await execPromise(`pkill -9 -P ${pid}`);
+            process.kill(Number(pid), 'SIGKILL');
+          } catch (err) {
+            // Ignore errors
+          }
+        }
+      }
+
+      // Final check
+      const { stdout: final } = await execPromise(`pgrep -f ${sanitizedId}`);
+      const finalList = final.split('\n').filter(Boolean);
+
+      if (finalList.length > 0) {
+        return {
+          content: [{
+            type: "text",
+            text: `WARNING: ${finalList.length} processes survived cancellation. Session may need manual cleanup.`
+          }]
+        };
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: `Successfully terminated all processes for session ${sanitizedId}`
+        }]
+      };
+
+    } catch (err) {
+      return {
+        content: [{
+          type: "text",
+          text: `Error during cancellation: ${err}. Session may need manual cleanup.`
+        }]
+      };
+    }
   }
 );
 
