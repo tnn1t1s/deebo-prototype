@@ -2,6 +2,7 @@ import { log } from './util/logger.js';
 import { connectRequiredTools } from './util/mcp.js';
 import { writeReport } from './util/reports.js';  // System infrastructure for capturing output
 import { Message } from '@anthropic-ai/sdk/resources/messages.js';
+import { writeObservation, getAgentObservations } from './util/observations.js';
 
 const MAX_RUNTIME = 15 * 60 * 1000; // 15 minutes
 
@@ -83,6 +84,7 @@ export async function runScenarioAgent(args: ScenarioArgs) {
 
     // Start Claude conversation with initial context
     const startTime = Date.now();
+    // Initial conversation context
     const messages: { role: 'assistant' | 'user', content: string }[] = [{
       role: 'assistant', 
       content: `You are a scenario agent investigating a bug based on a specific hypothesis.
@@ -183,6 +185,15 @@ Repo: ${args.repoPath}
 Hypothesis: ${args.hypothesis}`
     }];
 
+    // Check for observations
+    const observations = await getAgentObservations(args.repoPath, args.session, `scenario-${args.id}`);
+    if (observations.length > 0) {
+      messages.push(...observations.map((obs: string) => ({
+        role: 'user' as const,
+        content: `Scientific observation: ${obs}`
+      })));
+    }
+
     const anthropic = new (await import('@anthropic-ai/sdk')).default();    
     await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to Claude', { messages, repoPath: args.repoPath });
     let conversation = await anthropic.messages.create({
@@ -271,6 +282,16 @@ Hypothesis: ${args.hypothesis}`
       }
 
       // Continue the conversation
+      // Check for new observations before each Claude call
+      const newObservations = await getAgentObservations(args.repoPath, args.session, `scenario-${args.id}`);
+      if (newObservations.length > observations.length) {
+        const latestObservations = newObservations.slice(observations.length);
+        messages.push(...latestObservations.map((obs: string) => ({
+          role: 'user' as const,
+          content: `Scientific observation: ${obs}`
+        })));
+      }
+
       await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to Claude', { messages, repoPath: args.repoPath });
       conversation = await anthropic.messages.create({
         model: 'claude-3-5-sonnet-20241022',

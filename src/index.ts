@@ -1,14 +1,16 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { readFile, mkdir, readdir, access } from 'fs/promises';
+import { readFile, mkdir, readdir, access, writeFile } from 'fs/promises';
 import { config } from 'dotenv';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { runMotherAgent } from './mother-agent.js';
 import { getProjectId } from './util/sanitize.js';
-import { exec } from 'child_process';
+import { writeObservation } from './util/observations.js';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
+import { log } from './util/logger.js';
 
 const execPromise = promisify(exec);
 
@@ -319,6 +321,64 @@ server.tool(
         content: [{
           type: "text",
           text: `Error during cancellation: ${err}. Session may need manual cleanup.`
+        }]
+      };
+    }
+  }
+);
+
+// Register add_observation tool
+server.tool(
+  "add_observation",
+  {
+    agentId: z.string(),
+    observation: z.string()
+  },
+  async ({ agentId, observation }) => {
+    try {
+      // Find the active session
+      const memoryBank = join(DEEBO_ROOT, 'memory-bank');
+      const projects = await readdir(memoryBank);
+      
+      let sessionId = null;
+      let repoPath = null;
+      for (const project of projects) {
+        const sessionsDir = join(memoryBank, project, 'sessions');
+        const sessions = await readdir(sessionsDir);
+        // Look for most recent session
+        const sortedSessions = sessions.sort().reverse();
+        if (sortedSessions.length > 0) {
+          sessionId = sortedSessions[0];
+          // Get repoPath from mother.log
+          const motherLog = await readFile(join(sessionsDir, sessionId, 'logs', 'mother.log'), 'utf8');
+          const firstLine = motherLog.split('\n')[0];
+          const firstEvent = JSON.parse(firstLine);
+          repoPath = firstEvent.data?.repoPath;
+          break;
+        }
+      }
+
+      if (!sessionId || !repoPath) {
+        return {
+          content: [{
+            type: "text",
+            text: "No active session found"
+          }]
+        };
+      }
+
+      await writeObservation(repoPath, sessionId, agentId, observation);
+      return { 
+        content: [{ 
+          type: "text", 
+          text: "Observation logged" 
+        }] 
+      };
+    } catch (err) {
+      return {
+        content: [{
+          type: "text",
+          text: `Error logging observation: ${err}`
         }]
       };
     }

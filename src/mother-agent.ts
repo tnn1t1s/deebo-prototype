@@ -11,6 +11,8 @@
 
 import { spawn } from 'child_process';
 import { join } from 'path';
+import { readFile, stat } from 'fs/promises';
+import { writeObservation, getAgentObservations } from './util/observations.js';
 import { log } from './util/logger.js';
 import { connectRequiredTools } from './util/mcp.js';
 import { DEEBO_ROOT } from './index.js';
@@ -51,6 +53,7 @@ export async function runMotherAgent(sessionId: string, error: string, context: 
   const activeScenarios = new Set<string>();
   const startTime = Date.now();
   const memoryBankPath = join(DEEBO_ROOT, 'memory-bank', projectId);
+  let lastObservationCheck = 0;
 
   try {
     // OBSERVE: Setup tools and Claude
@@ -179,6 +182,17 @@ ${useMemoryBank ? '\nPrevious debugging attempts and context are available in th
 
 IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for perfect information.`
     }];
+
+    // Check for new observations
+    const observations = await getAgentObservations(repoPath, sessionId, 'mother');
+    if (observations.length > 0) {
+      messages.push(...observations.map(obs => ({
+        role: 'user' as const,
+        content: `Scientific observation: ${obs}`
+      })));
+    }
+
+    // Initial Claude call
 
     await log(sessionId, 'mother', 'debug', 'Sending to Claude', { messages, repoPath });
     let conversation = await anthropic.messages.create({
@@ -339,6 +353,16 @@ ${response}
       }
 
       // Mother can optionally edit memory bank directly via filesystem-mcp. No forced writes.
+
+      // Check for new observations before each Claude call
+      const newObservations = await getAgentObservations(repoPath, sessionId, 'mother');
+      if (newObservations.length > observations.length) {
+        const latestObservations = newObservations.slice(observations.length);
+        messages.push(...latestObservations.map(obs => ({
+          role: 'user' as const,
+          content: `Scientific observation: ${obs}`
+        })));
+      }
 
       await log(sessionId, 'mother', 'debug', 'Sending to Claude', { messages, repoPath });
       conversation = await anthropic.messages.create({
