@@ -306,42 +306,37 @@ ${responseText}
             child.stdout.on('data', data => output += data);
             child.stderr.on('data', data => output += data);
 
+            // Wait for process exit OR timeout
             return new Promise<string>((resolve) => {
-              let closed = 0;
-              const maybeResolve = () => {
-                if (closed === 2) resolve(output);
-              };
+              let resolved = false; // Prevent double resolution
 
-              child.stdout.on('close', () => {
-                closed++;
-                maybeResolve();
-              });
-              
-              child.stderr.on('close', () => {
-                closed++;
-                maybeResolve();
-              });
-
-              // Capture process-level errors
-              child.on('error', err => {
-                output += `\nProcess error: ${err}`;
+              // Resolve when the process exits
+              child.on('exit', (code, signal) => {
+                if (resolved) return;
+                resolved = true;
+                output += `\nScenario exited with code ${code}, signal ${signal}`;
                 resolve(output);
               });
 
-              // Capture stream-level errors
-              child.stdout.on('error', err => {
-                output += `\nStdout error: ${err}`;
-              });
-              child.stderr.on('error', err => {
-                output += `\nStderr error: ${err}`;
+              // Capture process-level errors (also resolves)
+              child.on('error', err => {
+                if (resolved) return;
+                resolved = true;
+                output += `\nProcess spawn error: ${err}`;
+                resolve(output); // Resolve immediately on spawn error
               });
 
-              // Global safety timeout in case streams never close
+              // Capture stream-level errors (don't resolve promise)
+              child.stdout.on('error', err => { output += `\nStdout error: ${err}`; });
+              child.stderr.on('error', err => { output += `\nStderr error: ${err}`; });
+
+              // Global safety timeout (resolves if exit/error didn't happen)
               setTimeout(() => {
-                if (closed < 2) {
+                if (!resolved) {
+                  resolved = true;
                   output += '\nScenario timeout';
-                  child.kill();
-                  resolve(output);
+                  child.kill(); // Force kill
+                  resolve(output); // Resolve after timeout
                 }
               }, SCENARIO_TIMEOUT);
             });
