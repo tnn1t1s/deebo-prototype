@@ -10,7 +10,6 @@ import { getProjectId } from './util/sanitize.js';
 import { writeObservation } from './util/observations.js';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
-import { log } from './util/logger.js';
 
 const execPromise = promisify(exec);
 
@@ -19,9 +18,16 @@ const execPromise = promisify(exec);
 config();
 
 // Validate required environment variables
-if (!process.env.ANTHROPIC_API_KEY) {
-  throw new Error('ANTHROPIC_API_KEY environment variable is required');
+if (!process.env.OPENROUTER_API_KEY) {
+  throw new Error('OPENROUTER_API_KEY environment variable is required');
 }
+if (!process.env.MOTHER_MODEL) {
+  throw new Error('MOTHER_MODEL environment variable is required');
+}
+if (!process.env.SCENARIO_MODEL) {
+  throw new Error('SCENARIO_MODEL environment variable is required');
+}
+
 
 // Set up basic directories
 const __filename = fileURLToPath(import.meta.url);
@@ -349,9 +355,10 @@ server.tool(
         const sortedSessions = sessions.sort().reverse();
         if (sortedSessions.length > 0) {
           sessionId = sortedSessions[0];
-          // Get repoPath from mother.log
-          const motherLog = await readFile(join(sessionsDir, sessionId, 'logs', 'mother.log'), 'utf8');
-          const firstLine = motherLog.split('\n')[0];
+          // Get repoPath from agent log
+          const logFile = join(sessionsDir, sessionId, 'logs', `${agentId}.log`);
+          const agentLog = await readFile(logFile, 'utf8');
+          const firstLine = agentLog.split('\n')[0];
           const firstEvent = JSON.parse(firstLine);
           repoPath = firstEvent.data?.repoPath;
           break;

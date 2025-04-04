@@ -18,33 +18,13 @@ import { connectRequiredTools } from './util/mcp.js';
 import { DEEBO_ROOT } from './index.js';
 import { updateMemoryBank } from './util/membank.js';
 import { getProjectId } from './util/sanitize.js';
-import { Message } from '@anthropic-ai/sdk/resources/messages.js';
+import OpenAI from 'openai';
+import { ChatCompletionMessageParam, ChatCompletionMessage } from 'openai/resources/chat/completions';
 import { createScenarioBranch } from './util/branch-manager.js';
 
 const MAX_RUNTIME = 15 * 60 * 1000; // 15 minutes
-const SCENARIO_TIMEOUT = 5 * 60 * 1000; 
+const SCENARIO_TIMEOUT = 5 * 60 * 1000;
 const useMemoryBank = process.env.USE_MEMORY_BANK === 'true';
-
-// Helper for Claude's responses
-function getMessageText(message: Message): string {
-  if (!message?.content?.length) return '';
-  return message.content
-    .map(block => {
-      switch (block.type) {
-        case 'text':
-          return block.text;
-        case 'tool_use':
-          return `<tool_use>${JSON.stringify(block)}</tool_use>`;
-        case 'thinking':
-          return block.thinking;
-        case 'redacted_thinking':
-          return block.data;
-        default:
-          return '';
-      }
-    })
-    .join('');
-}
 
 // Mother agent main loop
 export async function runMotherAgent(sessionId: string, error: string, context: string, language: string, filePath: string, repoPath: string) {
@@ -56,13 +36,26 @@ export async function runMotherAgent(sessionId: string, error: string, context: 
   let lastObservationCheck = 0;
 
   try {
-    // OBSERVE: Setup tools and Claude
+    // OBSERVE: Setup tools and LLM Client
     await log(sessionId, 'mother', 'info', 'OODA: observe', { repoPath });
     const { gitClient, filesystemClient } = await connectRequiredTools('mother', sessionId, repoPath);
-    const anthropic = new (await import('@anthropic-ai/sdk')).default();
+
+    // Setup LLM Client (OpenRouter via OpenAI SDK)
+    const openrouterApiKey = process.env.OPENROUTER_API_KEY;
+    const openrouterBaseUrl = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
+    const motherModel = process.env.MOTHER_MODEL;
+
+    if (!openrouterApiKey || !motherModel) {
+      throw new Error('OPENROUTER_API_KEY and MOTHER_MODEL environment variables are required for mother-agent');
+    }
+
+    const openai = new OpenAI({
+      apiKey: openrouterApiKey,
+      baseURL: openrouterBaseUrl,
+    });
 
     // Initial conversation context
-    const messages: { role: 'assistant' | 'user', content: string }[] = [{
+    const messages: ChatCompletionMessageParam[] = [{
       role: 'assistant',
       content: `You are the mother agent in an OODA loop debugging investigation. Your core mission:
 
@@ -192,31 +185,36 @@ IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for p
       })));
     }
 
-    // Initial Claude call
-
-    await log(sessionId, 'mother', 'debug', 'Sending to Claude', { messages, repoPath });
-    let conversation = await anthropic.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
+    // Initial LLM call
+    await log(sessionId, 'mother', 'debug', 'Sending to LLM', { model: motherModel, messages, repoPath });
+    let completion = await openai.chat.completions.create({
+      model: motherModel,
       max_tokens: 4096,
-      messages
+      messages: messages
     });
-    await log(sessionId, 'mother', 'debug', 'Received from Claude', { response: getMessageText(conversation), repoPath });
+    await log(sessionId, 'mother', 'debug', 'Received from LLM', { response: completion.choices[0]?.message, repoPath });
 
     // ORIENT: Begin investigation loop
     await log(sessionId, 'mother', 'info', 'OODA: orient', { repoPath });
 
-    while (!getMessageText(conversation).includes('<solution>')) {
+    let assistantResponse: ChatCompletionMessage | null = completion.choices[0]?.message ?? null;
+
+    while (assistantResponse?.content && !assistantResponse.content.includes('<solution>')) {
       if (Date.now() - startTime > MAX_RUNTIME) {
         throw new Error('Investigation exceeded maximum runtime');
       }
 
-      const response = getMessageText(conversation);
-      messages.push({ role: 'assistant', content: response });
+      // Add assistant's response to history
+      if (assistantResponse) {
+        messages.push(assistantResponse);
+      }
 
-      // Handle MULTIPLE MCP tools (if any)
-      const toolCalls = response.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
+      const responseText = assistantResponse?.content ?? '';
 
-      const parsedCalls = toolCalls.map(tc => {
+      // Handle MULTIPLE MCP tools (if any) - Parsing from responseText
+      const toolCalls = responseText.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
+
+      const parsedCalls = toolCalls.map((tc: string) => {
         try {
           const server = tc.includes('git-mcp') ? gitClient! : filesystemClient!;
           const toolMatch = tc.match(/<tool_name>(.*?)<\/tool_name>/);
@@ -269,17 +267,17 @@ IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for p
         }
       }
 
-      // Handle Hypotheses → Scenario agents
-      if (response.includes('<hypothesis>')) {
-        const hypotheses = [...response.matchAll(/<hypothesis>([\s\S]*?)<\/hypothesis>/g)].map(match => match[1].trim());
-        
+      // Handle Hypotheses → Scenario agents - Parsing from responseText
+      if (responseText.includes('<hypothesis>')) {
+        const hypotheses = [...responseText.matchAll(/<hypothesis>([\s\S]*?)<\/hypothesis>/g)].map(match => match[1].trim());
+
         if (useMemoryBank) {
           await updateMemoryBank(projectId, `==================
 AUTOMATED HYPOTHESIS RECORD
 Timestamp: ${new Date().toISOString()}
 Error: ${error || 'No error provided'}
 
-${response}
+${responseText}
 
 ==================
 `, 'activeContext');
@@ -364,27 +362,30 @@ ${response}
         })));
       }
 
-      await log(sessionId, 'mother', 'debug', 'Sending to Claude', { messages, repoPath });
-      conversation = await anthropic.messages.create({
-        model: 'claude-3-5-sonnet-20241022',
+      // Make next LLM call
+      await log(sessionId, 'mother', 'debug', 'Sending to LLM', { model: motherModel, messages, repoPath });
+      completion = await openai.chat.completions.create({
+        model: motherModel,
         max_tokens: 4096,
-        messages
+        messages: messages
       });
-      await log(sessionId, 'mother', 'debug', 'Received from Claude', { response: getMessageText(conversation), repoPath });
+      await log(sessionId, 'mother', 'debug', 'Received from LLM', { response: completion.choices[0]?.message, repoPath });
+      assistantResponse = completion.choices[0]?.message ?? null;
 
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
-    // Structured record at the end
+    // Structured record at the end (using last assistant response)
+    const finalContent = assistantResponse?.content ?? 'No final content received.';
     if (useMemoryBank) {
       await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - ${new Date().toISOString()}
 ${error ? `Error: ${error}` : ''}
-${getMessageText(conversation)}
+${finalContent}
 Scenarios Run: ${activeScenarios.size}
 Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress');
     }
     await log(sessionId, 'mother', 'info', 'solution found', { repoPath });
-    return getMessageText(conversation);
+    return finalContent;
 
   } catch (err) {
     const caughtError = err instanceof Error ? err : new Error(String(err));

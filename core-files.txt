@@ -296,13 +296,14 @@ Would you like me to explain what specific assumptions led me to this flawed thi
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { readFile, mkdir, readdir, access } from 'fs/promises';
+import { readFile, mkdir, readdir, access, writeFile } from 'fs/promises';
 import { config } from 'dotenv';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { runMotherAgent } from './mother-agent.js';
 import { getProjectId } from './util/sanitize.js';
-import { exec } from 'child_process';
+import { writeObservation } from './util/observations.js';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 
 const execPromise = promisify(exec);
@@ -620,6 +621,65 @@ server.tool(
   }
 );
 
+// Register add_observation tool
+server.tool(
+  "add_observation",
+  {
+    agentId: z.string(),
+    observation: z.string()
+  },
+  async ({ agentId, observation }) => {
+    try {
+      // Find the active session
+      const memoryBank = join(DEEBO_ROOT, 'memory-bank');
+      const projects = await readdir(memoryBank);
+      
+      let sessionId = null;
+      let repoPath = null;
+      for (const project of projects) {
+        const sessionsDir = join(memoryBank, project, 'sessions');
+        const sessions = await readdir(sessionsDir);
+        // Look for most recent session
+        const sortedSessions = sessions.sort().reverse();
+        if (sortedSessions.length > 0) {
+          sessionId = sortedSessions[0];
+          // Get repoPath from agent log
+          const logFile = join(sessionsDir, sessionId, 'logs', `${agentId}.log`);
+          const agentLog = await readFile(logFile, 'utf8');
+          const firstLine = agentLog.split('\n')[0];
+          const firstEvent = JSON.parse(firstLine);
+          repoPath = firstEvent.data?.repoPath;
+          break;
+        }
+      }
+
+      if (!sessionId || !repoPath) {
+        return {
+          content: [{
+            type: "text",
+            text: "No active session found"
+          }]
+        };
+      }
+
+      await writeObservation(repoPath, sessionId, agentId, observation);
+      return { 
+        content: [{ 
+          type: "text", 
+          text: "Observation logged" 
+        }] 
+      };
+    } catch (err) {
+      return {
+        content: [{
+          type: "text",
+          text: `Error logging observation: ${err}`
+        }]
+      };
+    }
+  }
+);
+
 // Connect transport
 const transport = new StdioServerTransport();
 await server.connect(transport);
@@ -640,6 +700,8 @@ await server.connect(transport);
 
 import { spawn } from 'child_process';
 import { join } from 'path';
+import { readFile, stat } from 'fs/promises';
+import { writeObservation, getAgentObservations } from './util/observations.js';
 import { log } from './util/logger.js';
 import { connectRequiredTools } from './util/mcp.js';
 import { DEEBO_ROOT } from './index.js';
@@ -680,6 +742,7 @@ export async function runMotherAgent(sessionId: string, error: string, context: 
   const activeScenarios = new Set<string>();
   const startTime = Date.now();
   const memoryBankPath = join(DEEBO_ROOT, 'memory-bank', projectId);
+  let lastObservationCheck = 0;
 
   try {
     // OBSERVE: Setup tools and Claude
@@ -809,6 +872,17 @@ ${useMemoryBank ? '\nPrevious debugging attempts and context are available in th
 IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for perfect information.`
     }];
 
+    // Check for new observations
+    const observations = await getAgentObservations(repoPath, sessionId, 'mother');
+    if (observations.length > 0) {
+      messages.push(...observations.map(obs => ({
+        role: 'user' as const,
+        content: `Scientific observation: ${obs}`
+      })));
+    }
+
+    // Initial Claude call
+
     await log(sessionId, 'mother', 'debug', 'Sending to Claude', { messages, repoPath });
     let conversation = await anthropic.messages.create({
       model: 'claude-3-5-sonnet-20241022',
@@ -862,11 +936,26 @@ IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for p
 
       // Only now, execute each one
       for (const { server, tool, args } of validCalls) {
-        const result = await server.callTool({ name: tool, arguments: args });
-        messages.push({
-          role: 'user',
-          content: JSON.stringify(result)
-        });
+        try {
+          const result = await server.callTool({ name: tool, arguments: args });
+          let resultStr;
+         // try {
+            resultStr = JSON.stringify(result);
+          // } catch (jsonErr) {
+          //   resultStr = `{"error": "Could not serialize tool result: ${jsonErr instanceof Error ? jsonErr.message : String(jsonErr)}"}`;
+          // }
+          
+          messages.push({
+            role: 'user',
+            content: resultStr
+          });
+        } catch (toolErr) {
+          // Handle tool call errors gracefully
+          messages.push({
+            role: 'user',
+            content: `Tool call failed: ${toolErr instanceof Error ? toolErr.message : String(toolErr)}`
+          });
+        }
       }
 
       // Handle Hypotheses → Scenario agents
@@ -954,6 +1043,16 @@ ${response}
 
       // Mother can optionally edit memory bank directly via filesystem-mcp. No forced writes.
 
+      // Check for new observations before each Claude call
+      const newObservations = await getAgentObservations(repoPath, sessionId, 'mother');
+      if (newObservations.length > observations.length) {
+        const latestObservations = newObservations.slice(observations.length);
+        messages.push(...latestObservations.map(obs => ({
+          role: 'user' as const,
+          content: `Scientific observation: ${obs}`
+        })));
+      }
+
       await log(sessionId, 'mother', 'debug', 'Sending to Claude', { messages, repoPath });
       conversation = await anthropic.messages.create({
         model: 'claude-3-5-sonnet-20241022',
@@ -977,18 +1076,16 @@ Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress');
     return getMessageText(conversation);
 
   } catch (err) {
-    const error = err instanceof Error ? err : new Error(String(err));
-    await log(sessionId, 'mother', 'error', `Failed: ${error.message}`, { repoPath });
-
+    const caughtError = err instanceof Error ? err : new Error(String(err));
+    await log(sessionId, 'mother', 'error', `Failed: ${caughtError.message}`, { repoPath });
     if (useMemoryBank) {
       await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - ${new Date().toISOString()}
-${error ? `Error: ${error}` : ''}
-Failed: ${error.message}
-Scenarios Run: ${activeScenarios.size}
-Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress');
+  ${caughtError ? `Error: ${String(caughtError)}` : ''}
+  Failed: ${caughtError.message}
+  Scenarios Run: ${activeScenarios.size}
+  Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress');
     }
-
-    throw error;
+    throw caughtError;
   }
 }
 
@@ -999,6 +1096,7 @@ import { log } from './util/logger.js';
 import { connectRequiredTools } from './util/mcp.js';
 import { writeReport } from './util/reports.js';  // System infrastructure for capturing output
 import { Message } from '@anthropic-ai/sdk/resources/messages.js';
+import { writeObservation, getAgentObservations } from './util/observations.js';
 
 const MAX_RUNTIME = 15 * 60 * 1000; // 15 minutes
 
@@ -1080,6 +1178,7 @@ export async function runScenarioAgent(args: ScenarioArgs) {
 
     // Start Claude conversation with initial context
     const startTime = Date.now();
+    // Initial conversation context
     const messages: { role: 'assistant' | 'user', content: string }[] = [{
       role: 'assistant', 
       content: `You are a scenario agent investigating a bug based on a specific hypothesis.
@@ -1180,6 +1279,15 @@ Repo: ${args.repoPath}
 Hypothesis: ${args.hypothesis}`
     }];
 
+    // Check for observations
+    const observations = await getAgentObservations(args.repoPath, args.session, `scenario-${args.id}`);
+    if (observations.length > 0) {
+      messages.push(...observations.map((obs: string) => ({
+        role: 'user' as const,
+        content: `Scientific observation: ${obs}`
+      })));
+    }
+
     const anthropic = new (await import('@anthropic-ai/sdk')).default();    
     await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to Claude', { messages, repoPath: args.repoPath });
     let conversation = await anthropic.messages.create({
@@ -1268,6 +1376,16 @@ Hypothesis: ${args.hypothesis}`
       }
 
       // Continue the conversation
+      // Check for new observations before each Claude call
+      const newObservations = await getAgentObservations(args.repoPath, args.session, `scenario-${args.id}`);
+      if (newObservations.length > observations.length) {
+        const latestObservations = newObservations.slice(observations.length);
+        messages.push(...latestObservations.map((obs: string) => ({
+          role: 'user' as const,
+          content: `Scientific observation: ${obs}`
+        })));
+      }
+
       await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to Claude', { messages, repoPath: args.repoPath });
       conversation = await anthropic.messages.create({
         model: 'claude-3-5-sonnet-20241022',
