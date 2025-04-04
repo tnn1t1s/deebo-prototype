@@ -14,39 +14,10 @@ X = implemented, tested, complete (afaik)
 ## 🛠️ PRIORITY 1 – MUST-HAVE TO SHIP DEEBO 1.0
 
 These are blocking. They affect correctness, portability, or public usability.
-- [!] **Agents Consistently Fail to Access Memory Bank** 
-  - All agents try `memory-bank` or `/memory-bank` and get denied
-  - Logged: `"Access denied - path outside allowed directories"`
-  - Mother agent is confirmed to be using `join(DEEBO_ROOT, 'memory-bank')`, but Claude is likely being told a relative path
-  - FIX: inject `"memoryPath"` in `tools.json` and prompt Claude to use that absolute path
+- update memory bank literally only controls progress.md LOL at least extend it to all non-logs files
+- add to prompt tell mother agent to verify solution first before returning it only 95% confidence or higher
+- change file system mcp to desktop commander so agents can run code
 
-- [!] **Claude Crashes on Trailing Whitespace**
-  - `SCENARIO ERROR: 400` with `final assistant content cannot end with trailing whitespace`
-  - Occurs when writing report to `session-xxxx/reports/session-xxxx.json`
-
-- [!] **Inconsistent Tool Parameters Cause Repeated Failures** 
-  - Examples from logs:
-    - `"branch"` instead of `"branch_name"`
-    - `"changes"` instead of `"edits"`
-    - `"pattern"` / `"replacement"` instead of `"oldText"` / `"newText"`
-  - Fix is not prompt tuning alone — enforce usage examples like Cline does
-
-- [!] **Prompt Better for Tool Use (Copy Cline)**
-  - Provide canonical `<use_mcp_tool>` examples in agent system prompts
-  - Copy Cline's format for clarity and success rate
-- [!] **Reduce Redundant Hypotheses via Prompt + Context Args**
-  - Claude already receives full message history per scenario
-  - But agents still retry the same ideas unless prompted not to
-  - Update mother prompt to say:
-    > "Avoid redundant hypotheses. Use prior scenario results to avoid repeating work."
-  - Remind mother to utilize scenario args such as 'context' to give it useful information such as 'dont try x i already tried x and it gave y its a waste of time' 
-- [ ] **Finalize Session Completion Signal for Cline**
-  - Currently: Cline polls and waits for end condition
-  - Ideas:
-    - Write flag/log indicating completion
-    - Return ETA or session phase via `checkSessionStatus()`
-    - Don't return full logs — return summary, error, status
-  - Update: finalized on gemini's 'session pulse' plan
 - [ ] **Hardcoded Path in Config**
     - File: config/tools.json
     - Problem: The git-mcp command path /Users/sriram/.local/bin/uvx is specific to one machine.
@@ -67,18 +38,7 @@ Not strictly blocking, but improves clarity, modularity, and contributor sanity.
     - Logging wrapper (from `logger.ts`)
   - Goal: minimal duplication across `mother-agent.ts`, `scenario-agent.ts`, `mcp.ts`
 
-- [!] **Format `activeContext.md` Better**
-  - Use direct FS operations:
-    - On start: write date + client error message
-    - On session end / crash: append `==========` + mother's notes
-  - Be careful not to duplicate `progress.md` behavior
 
-- [!] **Git Repo Requirement (Discuss)**
-  - Deebo implicitly requires `.git/` to function
-  - Decide:
-    - Fail gracefully if not a Git repo
-    - Or `git init` automatically (but this is invasive and potentially surprising)
-  - Leans toward: **Document in README** and don’t handle responsibility inside Deebo
 
 
 
@@ -144,3 +104,48 @@ These are philosophical polish or extra clarity. Not needed for 1.0.
       Scenarios Run: 8
       Duration: 950s
       ```
+
+- [X] **Claude Crashes on Trailing Whitespace**
+  - `SCENARIO ERROR: 400` with `final assistant content cannot end with trailing whitespace`
+  - Occurs when writing report to `session-xxxx/reports/session-xxxx.json`
+
+- [X] **Inconsistent Tool Parameters Cause Repeated Failures** 
+  - Examples from logs:
+    - `"branch"` instead of `"branch_name"`
+    - `"changes"` instead of `"edits"`
+    - `"pattern"` / `"replacement"` instead of `"oldText"` / `"newText"`
+  - Fix is not prompt tuning alone — enforce usage examples like Cline does
+
+- [X] **Prompt Better for Tool Use (Copy Cline)**
+  - Provide canonical `<use_mcp_tool>` examples in agent system prompts
+  - Copy Cline's format for clarity and success rate
+- [X] **Reduce Redundant Hypotheses via Prompt + Context Args**
+  - Claude already receives full message history per scenario
+  - But agents still retry the same ideas unless prompted not to
+  - Update mother prompt to say:
+    > "Avoid redundant hypotheses. Use prior scenario results to avoid repeating work."
+  - Remind mother to utilize scenario args such as 'context' to give it useful information such as 'dont try x i already tried x and it gave y its a waste of time' 
+- [X] **Finalize Session Completion Signal for Cline**
+  - Currently: Cline polls and waits for end condition
+  - Ideas:
+    - Write flag/log indicating completion
+    - Return ETA or session phase via `checkSessionStatus()`
+    - Don't return full logs — return summary, error, status
+  - Update: finalized on gemini's 'session pulse' plan
+  - [X] **Format `activeContext.md` Better**
+  - Use direct FS operations:
+    - On start: write date + client error message
+    - On session end / crash: append `==========` + mother's notes
+  - Be careful not to duplicate `progress.md` behavior
+
+- [X] **Git Repo Requirement (Discuss)**
+  - Deebo implicitly requires `.git/` to function
+  - Decide:
+    - Fail gracefully if not a Git repo
+    - Or `git init` automatically (but this is invasive and potentially surprising)
+  - Leans toward: **Document in README** and don’t handle responsibility inside Deebo
+- [X] **Agents Consistently Fail to Access Memory Bank** 
+  - All agents try `memory-bank` or `/memory-bank` and get denied
+  - Logged: `"Access denied - path outside allowed directories"`
+  - Mother agent is confirmed to be using `join(DEEBO_ROOT, 'memory-bank')`, but Claude is likely being told a relative path
+  - FIX: inject `"memoryPath"` in `tools.json` and prompt Claude to use that absolute path
