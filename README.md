@@ -135,7 +135,7 @@ Add this to your mcpServers config (e.g., in Cline):
       "env": {
         "OPENROUTER_API_KEY": "your-key",
         "MOTHER_MODEL": "anthropic/claude-3.5-sonnet",
-        "SCENARIO_MODEL": "anthropic/claude-3.5-haiku",
+        "SCENARIO_MODEL": "anthropic/claude-3.5-sonnet",
         "USE_MEMORY_BANK": "true"
       },
       "transportType": "stdio"
