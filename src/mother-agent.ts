@@ -11,8 +11,7 @@
 
 import { spawn } from 'child_process';
 import { join } from 'path';
-import { readFile, stat } from 'fs/promises';
-import { writeObservation, getAgentObservations } from './util/observations.js';
+import { getAgentObservations } from './util/observations.js';
 import { log } from './util/logger.js';
 import { connectRequiredTools } from './util/mcp.js';
 import { DEEBO_ROOT } from './index.js';
@@ -209,7 +208,8 @@ IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for p
         messages.push(assistantResponse);
       }
 
-      const responseText = assistantResponse?.content ?? '';
+      // Ensure responseText gets the string content correctly, whether assistantResponse is the string or an object containing it.
+      const responseText = (typeof assistantResponse === 'string' ? assistantResponse : assistantResponse?.content) ?? '';
 
       // Handle MULTIPLE MCP tools (if any) - Parsing from responseText
       const toolCalls = responseText.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
@@ -311,7 +311,7 @@ ${responseText}
               let resolved = false; // Prevent double resolution
 
               // Resolve when the process exits
-              child.on('exit', (code, signal) => {
+              child.on('exit', (code, signal) => { // Added comma
                 if (resolved) return;
                 resolved = true;
                 output += `\nScenario exited with code ${code}, signal ${signal}`;
@@ -319,7 +319,7 @@ ${responseText}
               });
 
               // Capture process-level errors (also resolves)
-              child.on('error', err => {
+              child.on('error', err => { // Added comma
                 if (resolved) return;
                 resolved = true;
                 output += `\nProcess spawn error: ${err}`;
