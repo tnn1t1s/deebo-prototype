@@ -413,108 +413,178 @@ server.tool(
       const totalScenarios = scenarioLogs.filter(f => f.startsWith('scenario-')).length;
       const reportedScenarios = reportFiles.length;
 
-      // Build the pulse using Gemini's format
+      // Build the pulse
       let pulse = `=== Deebo Session Pulse: ${sessionId} ===\n`;
       pulse += `Timestamp: ${new Date().toISOString()}\n`;
       pulse += `Overall Status: ${status}\n`;
       pulse += `Session Duration: ${Math.floor(durationMs / 1000)}s\n\n`;
 
       pulse += `--- Mother Agent ---\n`;
-      pulse += `Status: ${status === 'in_progress' ? 'Working' : status}\n`;
+      pulse += `Status: ${status === 'in_progress' ? 'working' : status}\n`;
       pulse += `Last Activity: ${lastEvent.timestamp}\n`;
-      pulse += `Current Focus Snippet:\n`;
-      pulse += `<<<<<<< MOTHER FOCUS\n`;
-      // Get mother's last 20 lines but filter out noisy tool results
-      const focusLines = motherLines.slice(-20)
-        .map(l => {
+
+      // For completed sessions, find and show solution
+      if (status === 'completed') {
+        // Look for solution in mother log
+        let foundSolution = false;
+        
+        // Scan backwards for efficiency (newer entries more likely to have solution)
+        for (let i = motherLines.length - 1; i >= 0; i--) {
           try {
-            const event = JSON.parse(l);
-            // Only show significant events
-            if (event.level === 'debug' && 
-               (event.message.includes('Sending to Claude') || 
-                event.message.includes('Received from Claude'))) {
-              return null;
+            const line = motherLines[i];
+            const event = JSON.parse(line);
+            const content = event.data?.response?.content || event.message || '';
+            
+            // Check for solution tag in content string
+            if (content.includes('<solution>')) {
+              const match = content.match(/<solution>([\s\S]*?)<\/solution>/);
+              if (match && match[1]) {
+                pulse += `MOTHER SOLUTION:\n`;
+                pulse += `<<<<<<< SOLUTION\n`;
+                pulse += match[1].trim() + '\n';
+                pulse += `======= SOLUTION END >>>>>>>\n\n`;
+                foundSolution = true;
+                break;
+              }
             }
-            return `[${event.timestamp}] ${event.message}`;
-          } catch {
-            return l;
+          } catch (e) {
+            // Skip invalid JSON lines
+            continue;
           }
-        })
-        .filter(Boolean)
-        .join('\n');
-      pulse += focusLines;
-      pulse += '\n======= MOTHER FOCUS END >>>>>>>\n\n';
+        }
+        
+        // No solution found message
+        if (!foundSolution) {
+          pulse += `STATUS COMPLETE BUT NO SOLUTION FOUND\n`;
+          pulse += `Check the mother.log file for more details.\n\n`;
+        }
+      } else {
+        // For in-progress, just show current OODA stage - without reversing
+        for (let i = motherLines.length - 1; i >= 0; i--) {
+          try {
+            const event = JSON.parse(motherLines[i]);
+            if (event.message && event.message.includes('OODA:')) {
+              pulse += `Current Stage: ${event.message}\n\n`;
+              break;
+            }
+          } catch (e) {
+            // Skip invalid JSON lines
+            continue;
+          }
+        }
+      }
 
       pulse += `--- Scenario Agents (${totalScenarios} Total: ${totalScenarios - reportedScenarios} Running, ${reportedScenarios} Reported) ---\n\n`;
 
-      // Show scenario statuses
-      for (const file of reportFiles.slice(-5)) { // Show last 5 scenarios
+      // Process reported scenarios
+      for (const file of reportFiles) {
         const scenarioId = file.replace('.json', '');
-        const report = JSON.parse(await readFile(join(reportsDir, file), 'utf8'));
+        
         const scenarioLogPath = join(logsDir, `scenario-${scenarioId}.log`);
-        const scenarioLog = await readFile(scenarioLogPath, 'utf8');
+        let scenarioLog;
+        try {
+          scenarioLog = await readFile(scenarioLogPath, 'utf8');
+        } catch (e) {
+          continue; // Skip if log file doesn't exist
+        }
+        
         const scenarioLines = scenarioLog.split('\n').filter(Boolean);
-        const startEvent = JSON.parse(scenarioLines[0]);
+        if (!scenarioLines.length) continue;
 
-        // Get hypothesis from scenario log
-        const hypothesisLine = scenarioLines.find(l => {
+        // Get hypothesis - scan once
+        let hypothesis = 'Unknown hypothesis';
+        for (let i = 0; i < scenarioLines.length; i++) {
           try {
-            const event = JSON.parse(l);
-            return event.data?.hypothesis;
-          } catch {
-            return false;
+            const event = JSON.parse(scenarioLines[i]);
+            if (event.data?.hypothesis) {
+              hypothesis = event.data.hypothesis;
+              break;
+            }
+          } catch (e) {
+            continue;
           }
-        });
-        const hypothesis = hypothesisLine ? JSON.parse(hypothesisLine).data.hypothesis : 'Unknown hypothesis';
+        }
 
         pulse += `* Scenario: ${scenarioId}\n`;
         pulse += `  Status: Reported\n`;
         pulse += `  Hypothesis: "${hypothesis}"\n`;
-        pulse += `  Outcome Snippet:\n`;
-        pulse += `  <<<<<<< OUTCOME ${scenarioId}\n`;
-        // Get first 5 and last 5 non-empty lines of report
-        const reportLines = report.split('\n').filter(Boolean);
-        const start = reportLines.slice(0, 5).join('\n');
-        const end = reportLines.slice(-5).join('\n');
-        pulse += `  ${start}\n  ...\n  ${end}\n`;
-        pulse += `  ======= OUTCOME ${scenarioId} END >>>>>>>\n`;
-        pulse += `  (Full report: ${join(reportsDir, file)})\n\n`;
+
+        if (status === 'completed') {
+          // Show summary for completed scenarios in completed sessions
+          try {
+            const reportRaw = await readFile(join(reportsDir, `${scenarioId}.json`), 'utf8');
+            const report = JSON.parse(reportRaw);
+            
+            // Handle report as string or object
+            const reportStr = typeof report === 'string' ? report : JSON.stringify(report, null, 2);
+            // Limit to first few lines
+            const reportLines = reportStr.split('\n').slice(0, 5);
+            
+            pulse += `  Outcome Summary:\n`;
+            pulse += `  <<<<<<< OUTCOME ${scenarioId}\n`;
+            pulse += `  ${reportLines.join('\n  ')}\n`;
+            if (reportStr.split('\n').length > 5) {
+              pulse += `  [...more lines...]\n`;
+            }
+            pulse += `  ======= OUTCOME ${scenarioId} END >>>>>>>\n`;
+          } catch (e) {
+            const error = e as Error;
+            pulse += `  Error reading report: ${error.message}\n`;
+          }
+        }
+
+        pulse += `  (Full report: ${join(reportsDir, `${scenarioId}.json`)})\n\n`;
       }
 
-      // Show running scenarios
+      // Process running scenarios
       const runningScenarios = scenarioLogs
         .filter(f => f.startsWith('scenario-'))
         .filter(f => !reportFiles.includes(f.replace('scenario-', '').replace('.log', '.json')));
-
+      
       for (const file of runningScenarios) {
         const scenarioId = file.replace('scenario-', '').replace('.log', '');
-        const scenarioLog = await readFile(join(logsDir, file), 'utf8');
+        
+        let scenarioLog;
+        try {
+          scenarioLog = await readFile(join(logsDir, file), 'utf8');
+        } catch (e) {
+          continue; // Skip if log file doesn't exist
+        }
+        
         const scenarioLines = scenarioLog.split('\n').filter(Boolean);
         if (!scenarioLines.length) continue;
 
-        const startEvent = JSON.parse(scenarioLines[0]);
-        const lastEvent = JSON.parse(scenarioLines[scenarioLines.length - 1]);
-        const runtime = Math.floor((Date.now() - new Date(startEvent.timestamp).getTime()) / 1000);
-
-        // Get hypothesis same as above
-        const hypothesisLine = scenarioLines.find(l => {
+        // Get hypothesis - more efficient scan
+        let hypothesis = 'Unknown hypothesis';
+        for (let i = 0; i < scenarioLines.length; i++) {
           try {
-            const event = JSON.parse(l);
-            return event.data?.hypothesis;
-          } catch {
-            return false;
+            const event = JSON.parse(scenarioLines[i]);
+            if (event.data?.hypothesis) {
+              hypothesis = event.data.hypothesis;
+              break;
+            }
+          } catch (e) {
+            continue;
           }
-        });
-        const hypothesis = hypothesisLine ? JSON.parse(hypothesisLine).data.hypothesis : 'Unknown hypothesis';
+        }
 
-        pulse += `* Scenario: ${scenarioId}\n`;
-        pulse += `  Status: Running (${runtime}s)\n`;
-        pulse += `  Hypothesis: "${hypothesis}"\n`;
-        pulse += `  Latest Activity:\n`;
-        pulse += `  <<<<<<< LATEST ${scenarioId}\n`;
-        pulse += `  ${lastEvent.message}\n`;
-        pulse += `  ======= LATEST ${scenarioId} END >>>>>>>\n`;
-        pulse += `  (Log: ${join(logsDir, file)})\n\n`;
+        // First and last events
+        let firstEvent, lastEvent;
+        try {
+          firstEvent = JSON.parse(scenarioLines[0]);
+          lastEvent = JSON.parse(scenarioLines[scenarioLines.length - 1]);
+          const runtime = Math.floor((Date.now() - new Date(firstEvent.timestamp).getTime()) / 1000);
+
+          pulse += `* Scenario: ${scenarioId}\n`;
+          pulse += `  Status: Running\n`;
+          pulse += `  Hypothesis: "${hypothesis}"\n`;
+          pulse += `  Runtime: ${runtime}s\n`;
+          pulse += `  Latest Activity: ${lastEvent.message}\n`;
+          pulse += `  (Log: ${join(logsDir, file)})\n\n`;
+        } catch (e) {
+          // Skip scenarios with invalid JSON
+          continue;
+        }
       }
 
       pulse += `--- End Session Pulse ---`;
@@ -707,8 +777,7 @@ await server.connect(transport);
 
 import { spawn } from 'child_process';
 import { join } from 'path';
-import { readFile, stat } from 'fs/promises';
-import { writeObservation, getAgentObservations } from './util/observations.js';
+import { getAgentObservations } from './util/observations.js';
 import { log } from './util/logger.js';
 import { connectRequiredTools } from './util/mcp.js';
 import { DEEBO_ROOT } from './index.js';
@@ -758,8 +827,7 @@ export async function runMotherAgent(sessionId: string, error: string, context: 
 1. INVESTIGATE and HYPOTHESIZE aggressively
 2. Don't wait for perfect information
 3. Generate hypotheses even if you're uncertain
-When you've found a solution or determined none exists, wrap it in solution tags:
-<solution>Your final conclusion and solution here</solution>
+
 KEY DIRECTIVES:
 - Always generate at least one hypothesis within your first 2-3 responses
 - Use <hypothesis>Your hypothesis here</hypothesis> liberally
@@ -768,6 +836,16 @@ KEY DIRECTIVES:
 - Don't wait for full context - start with what you have
 - AVOID REDUNDANT HYPOTHESES - read scenario reports to learn what's been tried
 - Pass what failed to scenarios via context argument so they don't waste time
+
+SOLUTION CONFIDENCE:
+Only use <solution> tags when you are at least 96% confident in the solution.
+If your confidence is lower:
+- Create your own branch to test it
+- Keep investigating (you have the same tools as scenarios)
+- Generate new hypotheses if needed
+Solution tags = "I am at least 96% confident this works"
+When you've found a solution or determined none exists, wrap it in solution tags:
+<solution>Your final conclusion and solution here</solution>
 ${useMemoryBank ? `
 MEMORY BANK INVESTIGATION AIDS:
 The memory bank at ${memoryBankPath} contains two key files to help your investigation:
@@ -833,26 +911,231 @@ git-mcp (use for ALL git operations):
 - git_show: Show contents of a specific commit
   Example: { "repo_path": "/path/to/repo", "revision": "HEAD" }
 
-filesystem-mcp (use ONLY for non-git file operations):
-- read_file: Read file contents from {memoryRoot}/${projectId}/ for memory bank files
-(of course you can also read the files in the repo using ${repoPath} and are strongly encouraged to do so)
-  Example: { "path": "${memoryBankPath}/activeContext.md" }
+desktop-commander (use ONLY for non-git operations):
+
+Terminal Tools:
+- execute_command: Run terminal commands with timeout
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>execute_command</tool_name>
+    <arguments>
+      {
+        "command": "npm run build",
+        "timeout_ms": 5000
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- read_output: Get output from running commands
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>read_output</tool_name>
+    <arguments>
+      {
+        "pid": 12345
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- force_terminate: Stop running command sessions
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>force_terminate</tool_name>
+    <arguments>
+      {
+        "pid": 12345
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- list_sessions: View active command sessions
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>list_sessions</tool_name>
+    <arguments>
+      {}
+    </arguments>
+  </use_mcp_tool>
+
+- list_processes: List system processes
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>list_processes</tool_name>
+    <arguments>
+      {}
+    </arguments>
+  </use_mcp_tool>
+
+- kill_process: Terminate processes by PID
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>kill_process</tool_name>
+    <arguments>
+      {
+        "pid": 12345
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- block_command: Block a command from execution
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>block_command</tool_name>
+    <arguments>
+      {
+        "command": "rm -rf /"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- unblock_command: Unblock a command
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>unblock_command</tool_name>
+    <arguments>
+      {
+        "command": "rm -rf /"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+Filesystem Tools:
+- read_file: Read file contents
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>read_file</tool_name>
+    <arguments>
+      {
+        "path": "${memoryBankPath}/activeContext.md"
+      }
+    </arguments>
+  </use_mcp_tool>
+
 - read_multiple_files: Read multiple files at once
-  Example: { "paths": ["/path/to/file1.ts", "/path/to/file2.ts"] }
-- edit_file: Edit a file based on pattern matching
-  Example: { "path": "/path/to/file.ts", "edits": [{ "oldText": "old code", "newText": "new code" }] }
-- list_directory: List contents of a directory
-  Example: { "path": "/path/to/dir" }
-- search_files: Recursively search files  
-  Example: { "path": "/path/to/dir", "pattern": "*.ts" }
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>read_multiple_files</tool_name>
+    <arguments>
+      {
+        "paths": ["file1.ts", "file2.ts"]
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- write_file: Write content to files
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>write_file</tool_name>
+    <arguments>
+      {
+        "path": "file.ts",
+        "content": "console.log('hello');"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- edit_file: Apply surgical text replacements
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>edit_file</tool_name>
+    <arguments>
+      {
+        "path": "file.ts",
+        "diff": "<<<<<<< SEARCH\nold code\n=======\nnew code\n>>>>>>> REPLACE"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- list_directory: List directory contents
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>list_directory</tool_name>
+    <arguments>
+      {
+        "path": "${memoryBankPath}"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- search_files: Search files with pattern
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>search_files</tool_name>
+    <arguments>
+      {
+        "path": "${memoryBankPath}",
+        "pattern": "error",
+        "file_pattern": "*.ts"
+      }
+    </arguments>
+  </use_mcp_tool>
+
 - create_directory: Create a new directory
-  Example: { "path": "/path/to/dir" }
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>create_directory</tool_name>
+    <arguments>
+      {
+        "path": "new-dir"
+      }
+    </arguments>
+  </use_mcp_tool>
+
 - move_file: Move or rename a file
-  Example: { "source": "/path/to/old.ts", "destination": "/path/to/new.ts" }
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>move_file</tool_name>
+    <arguments>
+      {
+        "source": "old.ts",
+        "destination": "new.ts"
+      }
+    </arguments>
+  </use_mcp_tool>
+
 - get_file_info: Get file metadata
-  Example: { "path": "/path/to/file.ts" }
-- list_allowed_directories: View allowed directories
-  Example: {}
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>get_file_info</tool_name>
+    <arguments>
+      {
+        "path": "file.ts"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- search_code: Recursive code search
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>search_code</tool_name>
+    <arguments>
+      {
+        "path": "${memoryBankPath}",
+        "pattern": "function",
+        "filePattern": "*.ts",
+        "contextLines": 2,
+        "ignoreCase": true
+      }
+    </arguments>
+  </use_mcp_tool>
 
 IMPORTANT MEMORY BANK WARNINGS:
 - DO NOT use write_file on memory bank files - use filesystem-mcp edit_file instead
@@ -1171,6 +1454,7 @@ A dedicated Git branch '${args.branch}' has been created for your investigation.
 
 Your hypothesis: "${args.hypothesis}"
 Your job is to either validate the hypothesis, falsify it, or propose alternative directions if stuck. You do not need to fix the entire bug — your focus is the truth of the SPECIFIC hypothesis you are assigned to.
+That being said, don't be too hasty to report a conclusion. If you see something potentially useful/interesting, investigate it further. Debugging is a complicated, nonlinear process, and subtle clues could be useful.
 IMPORTANT:
 - READ THE CONTEXT CAREFULLY: "${args.context}"
 - This contains what approaches have failed and why
@@ -1214,27 +1498,231 @@ git-mcp (use for ALL git operations):
 - git_show: Show contents of a specific commit
   Example: { "repo_path": "${args.repoPath}", "revision": "HEAD" }
 
-filesystem-mcp (use ONLY for non-git file operations):
+desktop-commander (use ONLY for non-git operations):
+
+Terminal Tools:
+- execute_command: Run terminal commands with timeout
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>execute_command</tool_name>
+    <arguments>
+      {
+        "command": "npm run build",
+        "timeout_ms": 5000
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- read_output: Get output from running commands
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>read_output</tool_name>
+    <arguments>
+      {
+        "pid": 12345
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- force_terminate: Stop running command sessions
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>force_terminate</tool_name>
+    <arguments>
+      {
+        "pid": 12345
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- list_sessions: View active command sessions
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>list_sessions</tool_name>
+    <arguments>
+      {}
+    </arguments>
+  </use_mcp_tool>
+
+- list_processes: List system processes
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>list_processes</tool_name>
+    <arguments>
+      {}
+    </arguments>
+  </use_mcp_tool>
+
+- kill_process: Terminate processes by PID
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>kill_process</tool_name>
+    <arguments>
+      {
+        "pid": 12345
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- block_command: Block a command from execution
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>block_command</tool_name>
+    <arguments>
+      {
+        "command": "rm -rf /"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- unblock_command: Unblock a command
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>unblock_command</tool_name>
+    <arguments>
+      {
+        "command": "rm -rf /"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+Filesystem Tools:
 - read_file: Read file contents
-  Example: { "path": "${args.repoPath}/src/file.ts" }
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>read_file</tool_name>
+    <arguments>
+      {
+        "path": "${args.repoPath}/file.ts"
+      }
+    </arguments>
+  </use_mcp_tool>
+
 - read_multiple_files: Read multiple files at once
-  Example: { "paths": ["${args.repoPath}/src/file1.ts", "${args.repoPath}/src/file2.ts"] }
-- write_file: Write to files
-  Example: { "path": "${args.repoPath}/src/file.ts", "content": "content" }
-- edit_file: Edit a file based on pattern matching
-  Example: { "path": "${args.repoPath}/src/file.ts", "edits": [{ "oldText": "old code", "newText": "new code" }] }
-- list_directory: List contents of a directory
-  Example: { "path": "${args.repoPath}/src" }
-- search_files: Recursively search files
-  Example: { "path": "${args.repoPath}", "pattern": "*.ts" }
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>read_multiple_files</tool_name>
+    <arguments>
+      {
+        "paths": ["file1.ts", "file2.ts"]
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- write_file: Write content to files
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>write_file</tool_name>
+    <arguments>
+      {
+        "path": "file.ts",
+        "content": "console.log('hello');"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- edit_file: Apply surgical text replacements
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>edit_file</tool_name>
+    <arguments>
+      {
+        "path": "file.ts",
+        "diff": "<<<<<<< SEARCH\nold code\n=======\nnew code\n>>>>>>> REPLACE"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- list_directory: List directory contents
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>list_directory</tool_name>
+    <arguments>
+      {
+        "path": "${args.repoPath}"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- search_files: Search files with pattern
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>search_files</tool_name>
+    <arguments>
+      {
+        "path": "${args.repoPath}",
+        "pattern": "error",
+        "file_pattern": "*.ts"
+      }
+    </arguments>
+  </use_mcp_tool>
+
 - create_directory: Create a new directory
-  Example: { "path": "${args.repoPath}/new-dir" }
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>create_directory</tool_name>
+    <arguments>
+      {
+        "path": "new-dir"
+      }
+    </arguments>
+  </use_mcp_tool>
+
 - move_file: Move or rename a file
-  Example: { "source": "${args.repoPath}/src/old.ts", "destination": "${args.repoPath}/src/new.ts" }
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>move_file</tool_name>
+    <arguments>
+      {
+        "source": "old.ts",
+        "destination": "new.ts"
+      }
+    </arguments>
+  </use_mcp_tool>
+
 - get_file_info: Get file metadata
-  Example: { "path": "${args.repoPath}/src/file.ts" }
-- list_allowed_directories: View allowed directories
-  Example: {}
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>get_file_info</tool_name>
+    <arguments>
+      {
+        "path": "file.ts"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- search_code: Recursive code search
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>search_code</tool_name>
+    <arguments>
+      {
+        "path": "${args.repoPath}",
+        "pattern": "function",
+        "filePattern": "*.ts",
+        "contextLines": 2,
+        "ignoreCase": true
+      }
+    </arguments>
+  </use_mcp_tool>
 
 REPORT FORMAT:
 When you've completed your investigation, use:
@@ -1430,6 +1918,7 @@ runScenarioAgent(args).catch(err => {
 
 
 === src/util/mcp.ts ===
+// src/util/mcp.ts
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { readFile } from 'fs/promises';
@@ -1450,21 +1939,18 @@ export async function connectMcpTool(name: string, toolName: string, sessionId: 
 
   const connectionPromise = (async () => {
     const config = JSON.parse(await readFile(join(DEEBO_ROOT, 'config', 'tools.json'), 'utf-8'));
-    const toolConfig = {...config.tools[toolName]};  // Clone to avoid modifying original
+    const toolConfig = { ...config.tools[toolName] };
 
-    // Build paths
+    // Build paths for placeholder replacement
     const projectId = getProjectId(repoPath);
-    //validation blocks scenario agents from accessing memory bank files
     const memoryPath = join(DEEBO_ROOT, 'memory-bank', projectId);
     const memoryRoot = join(DEEBO_ROOT, 'memory-bank');
     
-    // Replace all occurrences of placeholders
-    toolConfig.args = toolConfig.args.map((arg: string | any) => 
-      typeof arg === 'string' 
-        ? arg.replace(/{repoPath}/g, repoPath)
-           .replace(/{memoryPath}/g, memoryPath)
-           .replace(/{memoryRoot}/g, memoryRoot)
-        : arg
+    // Replace placeholders in arguments
+    toolConfig.args = toolConfig.args.map((arg: string) =>
+      arg.replace(/{repoPath}/g, repoPath)
+         .replace(/{memoryPath}/g, memoryPath)
+         .replace(/{memoryRoot}/g, memoryRoot)
     );
 
     const transport = new StdioClientTransport({
@@ -1472,15 +1958,10 @@ export async function connectMcpTool(name: string, toolName: string, sessionId: 
       args: toolConfig.args
     });
 
-    const client = new Client({
-      name,
-      version: '1.0.0'
-    }, {
-      capabilities: { 
-        tools: true
-      }
-    });
-
+    const client = new Client(
+      { name, version: '1.0.0' },
+      { capabilities: { tools: true } }
+    );
     await client.connect(transport);
     return client;
   })();
@@ -1499,14 +1980,13 @@ export async function connectRequiredTools(agentName: string, sessionId: string,
 }> {
   const [gitClient, filesystemClient] = await Promise.all([
     connectMcpTool(`${agentName}-git`, 'git-mcp', sessionId, repoPath),
-    connectMcpTool(`${agentName}-filesystem`, 'filesystem-mcp', sessionId, repoPath)
+    // Switch from "filesystem-mcp" to "desktop-commander"
+    connectMcpTool(`${agentName}-desktop-commander`, 'desktopCommander', sessionId, repoPath)
   ]);
 
-  return {
-    gitClient,
-    filesystemClient
-  };
+  return { gitClient, filesystemClient };
 }
+
 
 
 === src/util/logger.ts ===
@@ -1635,17 +2115,14 @@ export async function createScenarioBranch(repoPath: string, sessionId: string):
 === config/tools.json ===
 {
   "tools": {
-    "filesystem-mcp": {
+    "desktopCommander": {
       "command": "npx",
       "args": [
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "{memoryPath}",  
-        "{repoPath}"    
+        "@wonderwhy-er/desktop-commander"
       ]
     },
     "git-mcp": {
-      "command": "/Users/sriram/.local/bin/uvx",
+      "command": "uvx",
       "args": [
         "mcp-server-git",
         "--repository",
@@ -1654,6 +2131,7 @@ export async function createScenarioBranch(repoPath: string, sessionId: string):
     }
   }
 }
+
 
 
 === memory.txt ===

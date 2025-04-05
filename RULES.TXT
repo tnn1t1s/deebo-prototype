@@ -1,3 +1,5 @@
+NOTE: this document was created because I was very frustrated with re-explaining how to work on the Deebo codebase to my LLM assistants. Though effective, I agree that it is unnecessarily hostile and am actively working on a more amicable version of these rules.
+
 rules.txt
 
 Welcome to Deebo. This document defines how code and suggestions should be made within this project.

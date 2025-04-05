@@ -1,71 +1,180 @@
-# Deebo: Autonomous Debugging Assistant
+# Deebo: Autonomous Debugging Agent MCP Server
 
-An Agentic Debugging System (ADS) that uses multi-agent collaboration to autonomously diagnose and fix software errors.
+Deebo is an autonomous debugging system built for integration into coding agent workflows using the Model Context Protocol (MCP). It acts as a delegated tool that can investigate software bugs, run experiments in isolated environments, and report validated fixes, asynchronously, without human intervention.
 
-![Deebo Banner](https://img.shields.io/badge/Deebo-Agentic%20Debugging%20System-blue)
-![Status](https://img.shields.io/badge/status-prototype-orange)
+## 🔧 What is Deebo?
 
-## Overview
+Deebo is a fully MCP-compatible agent system that your coding agent (e.g., Claude Desktop, Cline, Cursor, etc.) can call when it encounters a bug it can’t fix confidently.
 
-Deebo is an advanced debugging system that uses AI agents to diagnose and fix software issues automatically. It employs a multi-agent architecture to explore different debugging hypotheses in parallel, with each hypothesis tested in isolation through Git branches.
+Instead of relying on a single step or suggestion, Deebo:
 
-### Key Features
+- Spawns multiple subprocesses (“scenario agents”) to test competing hypotheses
+- Runs each scenario in a dedicated Git branch
+- Validates or falsifies each approach
+- Returns structured reports and solutions
+- Optionally logs session history and context to a memory bank
 
-- **Mother/Scenario Agent Architecture**: Orchestrates multiple scenario agents, each exploring a specific debugging hypothesis
-- **Git-Based Isolation**: Each debugging scenario runs in its own Git branch for clean isolation
-- **Dynamic Scenario Generation**: Analyzes errors to determine the most promising debugging approaches
-- **Empirical Validation**: Tests fixes with actual command execution to validate solutions
-- **MCP Integration**: Easily accessible through Claude Desktop or Cline via the Model Context Protocol
+Coding agents are not necessarily great at debugging, as their primary purpose is generating working end-to-end apps. Deebo gives your agent the ability to offload tricky bugs that would otherwise require several turns of chat to resolve, allowing you to focus more on shipping.
 
-## Architecture
 
-Deebo consists of:
+## 🛠️ Exposed MCP Tools
 
-1. **Mother Agent**: The orchestrator that analyzes errors, generates scenarios, and coordinates the debugging process
-2. **Scenario Agents**: Autonomous agents that explore specific hypotheses in isolated Git branches
-3. **MCP Server Interface**: Exposes the debugging functionality through standardized tools
-4. **MCP Tools Integration**: Utilizes Git MCP and File System MCP for repository and file system operations
+Deebo acts as a single MCP server and exposes four tools:
 
-## Installation
+| Tool             | Description                                                          |
+| ---------------- | -------------------------------------------------------------------- |
+| `start`          | Begins a debugging session                                           |
+| `check`          | Returns current status of debugging session                   |
+| `cancel`         | Terminates all processes for a given debugging session                         |
+| `add_observation`| Logs external observations for an agent (e.g., from another tool like Cline) |
 
-See [INSTALLATION.md](INSTALLATION.md) for detailed setup instructions.
+## 🚀 Usage
 
-## Usage
+### Start a Session
 
-Deebo can be used through Claude Desktop or Cline as an MCP server. It exposes the following tools:
-
-- `start_debug_session`: Begin a new debugging session with an error
-- `check_debug_status`: Check the status of an ongoing debugging session
-- `list_scenarios`: List active debugging scenarios
-
-## Example
-
-```
-# Start a debugging session
-{
-  "error_message": "Error: Cannot find module 'express'",
-  "code_context": "const express = require('express');\nconst app = express();",
-  "repo_path": "/path/to/project"
-}
-
-# Check status
-{
-  "session_id": "session-id-from-previous-response"
-}
+```xml
+<deebo>
+  <start
+    error="ReferenceError: x is not defined"
+    repoPath="/my/project/path"
+    context="// suspect function below\nfunction handleClick() { ... }"
+    filePath="src/ui/buttons.ts"
+    language="typescript"
+  />
+</deebo>
 ```
 
-## Technical Details
+### Check Session Status
 
-- Built with TypeScript and Node.js
-- Uses Claude 3.5 Sonnet for agent intelligence
-- Process-based agent isolation
-- Git-based testing isolation
-- File-based inter-agent communication
+```xml
+<deebo>
+  <check sessionId="session-1712268439123" />
+</deebo>
+```
 
-## License
+This returns a human-readable session pulse, including:
+- Mother agent’s current status
+- Running vs. completed scenario agents
+- Reported hypotheses
+- Any <solution> found
+
+### Cancel Session
+
+```xml
+<deebo>
+  <cancel sessionId="session-1712268439123" />
+</deebo>
+```
+
+### Add Observation (e.g., from Cline)
+
+```xml
+<deebo>
+  <add_observation
+    agentId="scenario-session-1712268439123-2"
+    observation="The error disappears if we disable memoization"
+  />
+</deebo>
+```
+
+## 🧠 Memory Bank (Optional)
+
+If USE_MEMORY_BANK=true is set, Deebo enables structured memory logging:
+
+| File | Description |
+|------|-------------|
+| `activeContext.md` | Editable live journal for the Mother agent |
+| `progress.md` | Summarized results of completed debug sessions |
+| `sessions/<id>/reports/` | Structured scenario agent reports |
+| `sessions/<id>/logs/` | Raw logs from Mother and scenarios |
+| `sessions/<id>/observations/` | Logs of external observations from tools like Cline |
+
+## 📦 Installation
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/snagasuri/deebo-prototype.git
+cd deebo-prototype
+```
+
+### 2. Install Required MCP Tools
+
+```bash
+pip install uvx  # or pipx install uvx
+uvx install mcp-server-git
+```
+
+`desktop-commander` runs via `npx` — no install required.
+
+### 3. Install and Build
+
+```bash
+npm install
+npm run build
+```
+
+### 4. Register Deebo as an MCP Server
+
+Add this to your mcpServers config (e.g., in Cline):
+
+```json
+{
+  "mcpServers": {
+    "deebo": {
+      "autoApprove": [],
+      "disabled": false,
+      "timeout": 30,
+      "command": "node",
+      "args": [
+        "--experimental-specifier-resolution=node",
+        "--experimental-modules",
+        "--max-old-space-size=4096",
+        "/absolute/path/to/deebo-prototype/build/index.js"
+      ],
+      "env": {
+        "OPENROUTER_API_KEY": "your-key",
+        "MOTHER_MODEL": "anthropic/claude-3.5-sonnet",
+        "SCENARIO_MODEL": "anthropic/claude-3.5-haiku",
+        "USE_MEMORY_BANK": "true"
+      },
+      "transportType": "stdio"
+    }
+  }
+}
+```
+
+## 💡 How It Works
+
+### Architecture
+- **Mother Agent**: Coordinates the investigation, spawns scenarios, and writes solutions.
+- **Scenario Agents**: Each investigates a single hypothesis in its own Git branch and reports findings via <report>.
+- **Process Isolation**: All agents run as Node.js subprocesses with timeout enforcement and independent lifecycles.
+
+### Tooling
+- **git-mcp**: Git operations (branching, diffs, logs)
+- **desktopCommander**: File I/O, terminal commands, directories
+
+Agents generate tool calls in <use_mcp_tool> format. Tool output is injected into the next prompt cycle.
+
+
+## ✅ Why Use Deebo?
+
+Deebo is ideal when you want to offload bug investigations to a self-directed agent that:
+- Runs real experiments in your codebase
+- Uses Git branches for full isolation
+- Handles failure gracefully — multiple agents can run in parallel
+- Returns validated fixes (not just guesses)
+- Scales horizontally — plug into any Claude/MCP-compatible agent
+
+
+## 🔒 Design Principles
+
+- **Tool-isolated**: All mutations are done via MCP tools (no raw fs/git calls inside agents)
+- **Stateless scenario agents**: No shared memory; pure function behavior
+- **Raw logs, not opinionated UIs**: Human-readable, tailable logs and reports
+- **Designed for delegation**: Meant to be called by other agents like Claude, not manually
+
+## 📜 License
 
 Apache 2.0
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.

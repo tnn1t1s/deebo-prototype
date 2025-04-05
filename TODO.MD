@@ -15,8 +15,6 @@ X = implemented, tested, complete (afaik)
 
 These are blocking. They affect correctness, portability, or public usability.
 - [ ] update memory bank literally only controls progress.md LOL at least extend it to all non-logs files
-- [ ] add to prompt tell mother agent to verify solution first before returning it only 95% confidence or higher
-
 
 ---
 
@@ -137,3 +135,5 @@ These are philosophical polish or extra clarity. Not needed for 1.0.
     - Problem: The git-mcp command path /Users/sriram/.local/bin/uvx is specific to one machine.
     - Result: Not portable.
     - Why it matters: While not a direct rule violation, robust system infrastructure (Rule 1) should ideally be easily deployable.
+- [x] add to prompt tell mother agent to verify solution first before returning it only 95% confidence or higher
+- [x] made check tool more efficient
