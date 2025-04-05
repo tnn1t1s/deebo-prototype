@@ -89,6 +89,8 @@ If USE_MEMORY_BANK=true is set, Deebo enables structured memory logging:
 | `sessions/<id>/logs/` | Raw logs from Mother and scenarios |
 | `sessions/<id>/observations/` | Logs of external observations from tools like Cline |
 
+The memory bank allows Deebo to learn from its mistakes and personalize to your codebase over time. You can also utilize the context field when starting a debugging session with Deebo if there's specific information that Deebo would benefit from, and you can also add observations to specific agents mid-session if guidance is necessary.
+
 ## 📦 Installation
 
 ### 1. Clone the Repository
@@ -135,7 +137,7 @@ Add this to your mcpServers config (e.g., in Cline):
       "env": {
         "OPENROUTER_API_KEY": "your-key",
         "MOTHER_MODEL": "anthropic/claude-3.5-sonnet",
-        "SCENARIO_MODEL": "anthropic/claude-3.5-haiku",
+        "SCENARIO_MODEL": "anthropic/claude-3.5-sonnet",
         "USE_MEMORY_BANK": "true"
       },
       "transportType": "stdio"
@@ -155,7 +157,7 @@ Add this to your mcpServers config (e.g., in Cline):
 - **git-mcp**: Git operations (branching, diffs, logs)
 - **desktopCommander**: File I/O, terminal commands, directories
 
-Agents generate tool calls in <use_mcp_tool> format. Tool output is injected into the next prompt cycle.
+Deebo agents are clients themselves- they use the git-mcp and desktopCommander MCP servers to investigate. 
 
 
 ## ✅ Why Use Deebo?
