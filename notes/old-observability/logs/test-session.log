@@ -1,0 +1,5 @@
+{"timestamp":"2025-03-28T06:09:18.913Z","agent":"scenario-test-scenario","level":"info","message":"Scenario agent started","data":{"hypothesis":""}}
+{"timestamp":"2025-03-28T06:09:18.914Z","agent":"scenario-test-scenario","level":"info","message":"Micro OODA cycle","data":{"state":"investigate"}}
+{"timestamp":"2025-03-28T06:09:19.341Z","agent":"scenario-test-scenario","level":"info","message":"Micro OODA cycle","data":{"state":"investigate"}}
+{"timestamp":"2025-03-28T06:09:19.715Z","agent":"scenario-test-scenario","level":"info","message":"Micro OODA cycle","data":{"state":"analyze"}}
+{"timestamp":"2025-03-28T06:09:19.792Z","agent":"scenario-test-scenario","level":"error","message":"Scenario agent failed","data":{"error":{}}}

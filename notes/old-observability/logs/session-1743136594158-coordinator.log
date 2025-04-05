@@ -1,0 +1,2 @@
+{"timestamp":"2025-03-28T04:36:34.158Z","level":"info","message":"Session started","data":{"error":"Race condition in task cache management","language":"typescript"}}
+{"timestamp":"2025-03-28T04:36:34.167Z","level":"error","message":"Session failed","data":{"error":{"errno":-2,"code":"ENOENT","syscall":"spawn python","path":"python","spawnargs":["-m","mcp_server_git"]}}}

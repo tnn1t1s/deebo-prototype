@@ -1,0 +1,2 @@
+{"timestamp":"2025-03-28T02:26:24.057Z","level":"info","message":"Scenario agent started","data":{"hypothesis":"Testing direct scenario agent execution"}}
+{"timestamp":"2025-03-28T02:26:24.069Z","level":"info","message":"Micro OODA cycle","data":{"state":"investigate"}}

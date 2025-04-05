@@ -455,3 +455,120 @@ The solution has high confidence because:
 Would you like me to proceed with implementing these changes or would you prefer to discuss any specific aspects of the solution first?
 Scenarios Run: 2
 Duration: 62s
+
+## Debug Session session-1743842120778 - 2025-04-05T08:36:16.945Z
+Error: Race condition in task cache management
+Based on the code analysis and confirmed hypotheses, I can now propose a solution with high confidence:
+
+<solution>
+The race condition can be fixed by:
+
+1. Making cache operations properly awaited and synchronized:
+```typescript
+// In taskService.ts
+export async function getTasks(
+  filters: TaskFilterOptions = {},
+  pagination: PaginationOptions = { page: 1, limit: 20 }
+): Promise<PaginatedResponse<Task>> {
+  const cacheKey = `tasks:${JSON.stringify({ filters, pagination })}`;
+  
+  // First check cache
+  const cachedResult = await getCachedTasks(cacheKey);
+  if (cachedResult) {
+    return cachedResult;
+  }
+  
+  // ... existing query building and database operations ...
+
+  const paginatedResponse: PaginatedResponse<Task> = {
+    items: tasks,
+    total,
+    page,
+    limit,
+    totalPages: Math.ceil(total / limit)
+  };
+  
+  // FIX: Await the cache operation and handle errors properly
+  try {
+    await setCachedTasks(cacheKey, paginatedResponse);
+  } catch (err) {
+    logger.error('Cache setting error:', err);
+    // Optionally invalidate cache here to ensure consistency
+    await invalidateTaskCache();
+  }
+  
+  return paginatedResponse;
+}
+
+// Similar changes in updateTask:
+if (result.rows.length === 0) {
+  return null;
+}
+
+// FIX: Await cache invalidation before processing result
+await invalidateTaskCache();
+
+// Convert snake_case to camelCase
+const row = result.rows[0];
+// ... rest of the function
+```
+
+2. Add proper cache version synchronization in cacheService.ts:
+```typescript
+// In cacheService.ts
+let cacheVersion = 0;
+const cacheOperationLock = new AsyncLock(); // Using a proper async lock library
+
+export async function setCachedTasks(key: string, data: any): Promise<boolean> {
+  return await cacheOperationLock.acquire('cache', async () => {
+    const versionedKey = `${key}:v${cacheVersion}`;
+    // Set cache with version
+    await cache.set(versionedKey, data);
+    return true;
+  });
+}
+
+export async function invalidateTaskCache(): Promise<void> {
+  return await cacheOperationLock.acquire('cache', async () => {
+    cacheVersion++;
+    logger.debug(`Incremented cache version to ${cacheVersion}`);
+  });
+}
+
+export async function getCachedTasks(key: string): Promise<any> {
+  return await cacheOperationLock.acquire('cache', async () => {
+    const versionedKey = `${key}:v${cacheVersion}`;
+    return await cache.get(versionedKey);
+  });
+}
+```
+
+Key changes:
+1. All cache operations are properly awaited
+2. Added a locking mechanism to synchronize cache operations
+3. Implemented versioned cache keys to prevent stale data
+4. Proper error handling that maintains cache consistency
+5. Cache operations are atomic within the lock
+
+These changes ensure that:
+- Cache operations happen in the correct order
+- No race conditions between set and invalidate
+- Cache version is properly synchronized
+- Errors don't leave the cache in an inconsistent state
+
+The solution addresses both confirmed hypotheses by:
+1. Ensuring cache operations are properly awaited and synchronized
+2. Preventing parallel operations from causing inconsistency
+3. Adding proper versioning to handle concurrent requests
+</solution>
+
+This solution has high confidence because:
+1. It addresses all identified race conditions
+2. Uses well-established patterns (locks, versioning)
+3. Maintains proper async/await chain
+4. Adds proper error handling
+5. Preserves existing functionality while adding safety
+
+Would you like me to explain any part of the solution in more detail or discuss alternative approaches?
+Scenarios Run: 2
+Duration: 56s

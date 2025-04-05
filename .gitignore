@@ -20,10 +20,6 @@ build/
 *.swo
 .DS_Store
 
-# Logs
-logs/
-*.log
-
 # Coverage directory used by tools like istanbul
 coverage/
 

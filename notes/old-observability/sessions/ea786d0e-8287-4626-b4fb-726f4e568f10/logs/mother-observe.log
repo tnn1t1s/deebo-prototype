@@ -1,0 +1,2 @@
+{"timestamp":"2025-03-26T02:39:35.974Z","level":"info","component":"mother-observe","message":"Gathering observations","metadata":{"iteration":0}}
+{"timestamp":"2025-03-26T02:39:35.974Z","level":"debug","component":"mother-observe","message":"Observations gathered","metadata":{"observations":{"iteration":0}}}

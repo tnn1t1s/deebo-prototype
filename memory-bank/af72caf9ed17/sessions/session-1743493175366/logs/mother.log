@@ -1,0 +1,4 @@
+{"timestamp":"2025-04-01T07:39:35.367Z","agent":"mother","level":"info","message":"Mother agent started","data":{"repoPath":"/Users/sriram/Documents/task-manager"}}
+{"timestamp":"2025-04-01T07:39:35.369Z","agent":"mother","level":"info","message":"OODA: observe","data":{"repoPath":"/Users/sriram/Documents/task-manager"}}
+{"timestamp":"2025-04-01T07:39:50.658Z","agent":"mother","level":"info","message":"OODA: orient","data":{"repoPath":"/Users/sriram/Documents/task-manager"}}
+{"timestamp":"2025-04-01T07:40:59.939Z","agent":"mother","level":"error","message":"Failed: 529 {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}","data":{"repoPath":"/Users/sriram/Documents/task-manager"}}

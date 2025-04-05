@@ -1,0 +1,91 @@
+{"timestamp":"2025-03-26T02:28:29.145Z","level":"info","component":"mcp-server","message":"Deebo MCP server initialized"}
+{"timestamp":"2025-03-26T02:28:29.146Z","level":"info","component":"mcp-server","message":"Deebo prototype MCP Server running on stdio"}
+{"timestamp":"2025-03-26T02:29:32.434Z","level":"info","component":"mcp-server","message":"Deebo MCP server initialized"}
+{"timestamp":"2025-03-26T02:29:32.435Z","level":"info","component":"mcp-server","message":"Deebo prototype MCP Server running on stdio"}
+{"timestamp":"2025-03-26T02:38:43.368Z","level":"info","component":"mcp-server","message":"Deebo MCP server initialized"}
+{"timestamp":"2025-03-26T02:38:43.369Z","level":"info","component":"mcp-server","message":"Deebo prototype MCP Server running on stdio"}
+{"timestamp":"2025-03-26T02:40:04.150Z","level":"info","component":"mcp-server","message":"Server shutting down"}
+{"timestamp":"2025-03-26T02:45:29.907Z","level":"info","component":"mcp-server","message":"Deebo MCP server initialized"}
+{"timestamp":"2025-03-26T02:45:29.909Z","level":"info","component":"mcp-server","message":"Deebo prototype MCP Server running on stdio"}
+{"timestamp":"2025-03-26T03:04:51.140Z","level":"info","component":"mcp-server","message":"Starting Deebo MCP server","metadata":{"name":"deebo-prototype","version":"0.1.0","transport":"stdio"}}
+{"timestamp":"2025-03-26T03:04:51.141Z","level":"info","component":"mcp-server","message":"Resources initialized"}
+{"timestamp":"2025-03-26T03:04:51.142Z","level":"info","component":"mcp-server","message":"Tools initialized"}
+{"timestamp":"2025-03-26T03:04:51.142Z","level":"info","component":"mcp-server","message":"Server connected to stdio transport"}
+{"timestamp":"2025-03-26T03:04:51.142Z","level":"info","component":"mcp-server","message":"Deebo MCP server running","metadata":{"transport":"stdio"}}
+{"timestamp":"2025-03-26T03:42:07.235Z","level":"info","component":"mcp-server","message":"Starting Deebo MCP server","metadata":{"name":"deebo-prototype","version":"0.1.0","transport":"stdio","cwd":"/Users/sriram/Documents/Cline/MCP/deebo-prototype"}}
+{"timestamp":"2025-03-26T03:42:07.236Z","level":"info","component":"mcp-server","message":"Resources initialized"}
+{"timestamp":"2025-03-26T03:42:07.237Z","level":"info","component":"mcp-server","message":"Tools initialized"}
+{"timestamp":"2025-03-26T03:42:07.257Z","level":"info","component":"mcp-server","message":"Server connected to stdio transport"}
+{"timestamp":"2025-03-26T03:42:07.257Z","level":"info","component":"mcp-server","message":"Deebo MCP server running","metadata":{"transport":"stdio"}}
+{"timestamp":"2025-03-26T03:43:13.826Z","level":"info","component":"mcp-server","message":"Starting Deebo MCP server","metadata":{"name":"deebo-prototype","version":"0.1.0","transport":"stdio","cwd":"/Users/sriram/Documents/Cline/MCP/deebo-prototype"}}
+{"timestamp":"2025-03-26T03:43:13.826Z","level":"info","component":"mcp-server","message":"Resources initialized"}
+{"timestamp":"2025-03-26T03:43:13.826Z","level":"info","component":"mcp-server","message":"Tools initialized"}
+{"timestamp":"2025-03-26T03:43:13.830Z","level":"info","component":"mcp-server","message":"Server connected to stdio transport"}
+{"timestamp":"2025-03-26T03:43:13.830Z","level":"info","component":"mcp-server","message":"Deebo MCP server running","metadata":{"transport":"stdio"}}
+{"timestamp":"2025-03-26T03:44:53.752Z","level":"info","component":"mcp-server","message":"Starting Deebo MCP server","metadata":{"name":"deebo-prototype","version":"0.1.0","transport":"stdio","cwd":"/Users/sriram/Documents/Cline/MCP/deebo-prototype"}}
+{"timestamp":"2025-03-26T03:44:53.753Z","level":"info","component":"mcp-server","message":"Resources initialized"}
+{"timestamp":"2025-03-26T03:44:53.753Z","level":"info","component":"mcp-server","message":"Tools initialized"}
+{"timestamp":"2025-03-26T03:44:53.757Z","level":"info","component":"mcp-server","message":"Server connected to stdio transport"}
+{"timestamp":"2025-03-26T03:44:53.758Z","level":"info","component":"mcp-server","message":"Deebo MCP server running","metadata":{"transport":"stdio"}}
+{"timestamp":"2025-03-26T03:46:56.501Z","level":"info","component":"mcp-server","message":"Starting Deebo MCP server","metadata":{"name":"deebo-prototype","version":"0.1.0","transport":"stdio","cwd":"/Users/sriram/Documents/Cline/MCP/deebo-prototype"}}
+{"timestamp":"2025-03-26T03:46:56.502Z","level":"info","component":"mcp-server","message":"Resources initialized"}
+{"timestamp":"2025-03-26T03:46:56.502Z","level":"info","component":"mcp-server","message":"Tools initialized"}
+{"timestamp":"2025-03-26T03:46:56.505Z","level":"info","component":"mcp-server","message":"Server connected to stdio transport"}
+{"timestamp":"2025-03-26T03:46:56.505Z","level":"info","component":"mcp-server","message":"Deebo MCP server running","metadata":{"transport":"stdio"}}
+{"timestamp":"2025-03-26T03:48:17.908Z","level":"info","component":"mcp-server","message":"Starting Deebo MCP server","metadata":{"name":"deebo-prototype","version":"0.1.0","transport":"stdio","cwd":"/Users/sriram/Documents/Cline/MCP/deebo-prototype"}}
+{"timestamp":"2025-03-26T03:48:17.909Z","level":"info","component":"mcp-server","message":"Resources initialized"}
+{"timestamp":"2025-03-26T03:48:17.909Z","level":"info","component":"mcp-server","message":"Tools initialized"}
+{"timestamp":"2025-03-26T03:48:17.913Z","level":"info","component":"mcp-server","message":"Server connected to stdio transport"}
+{"timestamp":"2025-03-26T03:48:17.913Z","level":"info","component":"mcp-server","message":"Deebo MCP server running","metadata":{"transport":"stdio"}}
+{"timestamp":"2025-03-26T03:48:47.802Z","level":"info","component":"mcp-server","message":"Starting Deebo MCP server","metadata":{"name":"deebo-prototype","version":"0.1.0","transport":"stdio","cwd":"/Users/sriram/Documents/Cline/MCP/deebo-prototype"}}
+{"timestamp":"2025-03-26T03:48:47.803Z","level":"info","component":"mcp-server","message":"Resources initialized"}
+{"timestamp":"2025-03-26T03:48:47.804Z","level":"info","component":"mcp-server","message":"Tools initialized"}
+{"timestamp":"2025-03-26T03:48:47.807Z","level":"info","component":"mcp-server","message":"Server connected to stdio transport"}
+{"timestamp":"2025-03-26T03:48:47.807Z","level":"info","component":"mcp-server","message":"Deebo MCP server running","metadata":{"transport":"stdio"}}
+{"timestamp":"2025-03-26T03:49:21.164Z","level":"info","component":"mcp-server","message":"Starting Deebo MCP server","metadata":{"name":"deebo-prototype","version":"0.1.0","transport":"stdio","cwd":"/Users/sriram/Documents/Cline/MCP/deebo-prototype"}}
+{"timestamp":"2025-03-26T03:49:21.165Z","level":"info","component":"mcp-server","message":"Resources initialized"}
+{"timestamp":"2025-03-26T03:49:21.165Z","level":"info","component":"mcp-server","message":"Tools initialized"}
+{"timestamp":"2025-03-26T03:49:21.168Z","level":"info","component":"mcp-server","message":"Server connected to stdio transport"}
+{"timestamp":"2025-03-26T03:49:21.169Z","level":"info","component":"mcp-server","message":"Deebo MCP server running","metadata":{"transport":"stdio"}}
+{"timestamp":"2025-03-26T03:51:09.709Z","level":"info","component":"mcp-server","message":"Starting Deebo MCP server","metadata":{"name":"deebo-prototype","version":"0.1.0","transport":"stdio","cwd":"/Users/sriram/Documents/Cline/MCP/deebo-prototype"}}
+{"timestamp":"2025-03-26T03:51:09.710Z","level":"info","component":"mcp-server","message":"Resources initialized"}
+{"timestamp":"2025-03-26T03:51:09.710Z","level":"info","component":"mcp-server","message":"Tools initialized"}
+{"timestamp":"2025-03-26T03:51:09.714Z","level":"info","component":"mcp-server","message":"Server connected to stdio transport"}
+{"timestamp":"2025-03-26T03:51:09.714Z","level":"info","component":"mcp-server","message":"Deebo MCP server running","metadata":{"transport":"stdio"}}
+{"timestamp":"2025-03-26T04:20:21.184Z","level":"info","component":"mcp-server","message":"Starting Deebo MCP server","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log","metadata":{"name":"deebo-prototype","version":"0.1.0","transport":"stdio","cwd":"/Users/sriram/Documents/Cline/MCP/deebo-prototype"}}
+{"timestamp":"2025-03-26T04:20:21.216Z","level":"info","component":"mcp-server","message":"Resources initialized","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-26T04:20:21.217Z","level":"info","component":"mcp-server","message":"Tools initialized","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-26T04:20:21.217Z","level":"info","component":"mcp-server","message":"Agents initialized","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-26T04:20:21.217Z","level":"info","component":"mcp-server","message":"Transports initialized","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-26T04:20:21.221Z","level":"info","component":"mcp-server","message":"Server connected to stdio transport","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-26T04:20:21.221Z","level":"info","component":"mcp-server","message":"Deebo MCP server running","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log","metadata":{"transport":"stdio"}}
+{"timestamp":"2025-03-26T04:23:37.442Z","level":"info","component":"mcp-server","message":"Server shutting down","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-26T05:28:29.172Z","level":"info","component":"mcp-server","message":"Starting Deebo MCP server","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log","metadata":{"name":"deebo-prototype","version":"0.1.0","transport":"stdio","cwd":"/Users/sriram/Documents/Cline/MCP/deebo-prototype"}}
+{"timestamp":"2025-03-26T05:28:29.200Z","level":"info","component":"mcp-server","message":"Resources initialized","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-26T05:28:29.201Z","level":"info","component":"mcp-server","message":"Tools initialized","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-26T05:28:29.201Z","level":"info","component":"mcp-server","message":"Agents initialized","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-26T05:28:29.201Z","level":"info","component":"mcp-server","message":"Transports initialized","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-26T05:28:29.205Z","level":"info","component":"mcp-server","message":"Server connected to stdio transport","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-26T05:28:29.205Z","level":"info","component":"mcp-server","message":"Deebo MCP server running","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log","metadata":{"transport":"stdio"}}
+{"timestamp":"2025-03-26T05:57:05.426Z","level":"info","component":"mcp-server","message":"Starting Deebo MCP server","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log","metadata":{"name":"deebo-prototype","version":"0.1.0","transport":"stdio","cwd":"/Users/sriram/Documents/Cline/MCP/deebo-prototype"}}
+{"timestamp":"2025-03-26T05:57:05.455Z","level":"info","component":"mcp-server","message":"Resources initialized","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-26T05:57:05.456Z","level":"info","component":"mcp-server","message":"Tools initialized","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-26T05:57:05.456Z","level":"info","component":"mcp-server","message":"Agents initialized","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-26T05:57:05.456Z","level":"info","component":"mcp-server","message":"Transports initialized","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-26T05:57:05.460Z","level":"info","component":"mcp-server","message":"Server connected to stdio transport","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-26T05:57:05.460Z","level":"info","component":"mcp-server","message":"Deebo MCP server running","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log","metadata":{"transport":"stdio"}}
+{"timestamp":"2025-03-26T06:00:54.975Z","level":"info","component":"mcp-server","message":"Server shutting down","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-26T06:02:31.775Z","level":"info","component":"mcp-server","message":"Starting Deebo MCP server","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log","metadata":{"name":"deebo-prototype","version":"0.1.0","transport":"stdio","cwd":"/Users/sriram/Documents/Cline/MCP/deebo-prototype"}}
+{"timestamp":"2025-03-26T06:02:31.809Z","level":"info","component":"mcp-server","message":"Resources initialized","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-26T06:02:31.809Z","level":"info","component":"mcp-server","message":"Tools initialized","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-26T06:02:31.810Z","level":"info","component":"mcp-server","message":"Agents initialized","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-26T06:02:31.810Z","level":"info","component":"mcp-server","message":"Transports initialized","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-26T06:02:31.812Z","level":"info","component":"mcp-server","message":"Server connected to stdio transport","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-26T06:02:31.812Z","level":"info","component":"mcp-server","message":"Deebo MCP server running","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log","metadata":{"transport":"stdio"}}
+{"timestamp":"2025-03-26T06:09:02.191Z","level":"info","component":"mcp-server","message":"Server shutting down","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-27T08:34:12.118Z","level":"info","component":"mcp-server","message":"Initializing server components","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-27T08:34:12.966Z","level":"info","component":"mcp-server","message":"Creating transport","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-27T08:34:12.968Z","level":"info","component":"mcp-server","message":"Connecting transport","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-27T08:34:12.968Z","level":"info","component":"mcp-server","message":"Deebo MCP server initialized successfully","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
+{"timestamp":"2025-03-27T08:34:12.968Z","level":"info","component":"mcp-server","message":"Server started successfully","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log","metadata":{"name":"deebo-prototype","version":"0.1.0"}}
+{"timestamp":"2025-03-27T08:34:40.094Z","level":"info","component":"mcp-server","message":"Server shutting down","path":"/Users/sriram/Documents/Cline/MCP/deebo-prototype/sessions/server/mcp-server.log"}
