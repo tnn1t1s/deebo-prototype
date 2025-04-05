@@ -15,6 +15,8 @@ X = implemented, tested, complete (afaik)
 
 These are blocking. They affect correctness, portability, or public usability.
 - [ ] update memory bank literally only controls progress.md LOL at least extend it to all non-logs files
+- make cancel tool work in all cases
+- make observations tool more clear how to use
 
 ---
 
