@@ -14,6 +14,7 @@ FILES=(
   "src/util/reports.ts"
   "src/util/membank.ts"
   "src/util/sanitize.ts"
+  "src/util/observations.ts"
   "src/util/branch-manager.ts"
   "config/tools.json"
   "memory.txt"

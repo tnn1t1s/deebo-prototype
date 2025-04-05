@@ -313,9 +313,16 @@ const execPromise = promisify(exec);
 config();
 
 // Validate required environment variables
-if (!process.env.ANTHROPIC_API_KEY) {
-  throw new Error('ANTHROPIC_API_KEY environment variable is required');
+if (!process.env.OPENROUTER_API_KEY) {
+  throw new Error('OPENROUTER_API_KEY environment variable is required');
 }
+if (!process.env.MOTHER_MODEL) {
+  throw new Error('MOTHER_MODEL environment variable is required');
+}
+if (!process.env.SCENARIO_MODEL) {
+  throw new Error('SCENARIO_MODEL environment variable is required');
+}
+
 
 // Set up basic directories
 const __filename = fileURLToPath(import.meta.url);
@@ -707,33 +714,13 @@ import { connectRequiredTools } from './util/mcp.js';
 import { DEEBO_ROOT } from './index.js';
 import { updateMemoryBank } from './util/membank.js';
 import { getProjectId } from './util/sanitize.js';
-import { Message } from '@anthropic-ai/sdk/resources/messages.js';
+import OpenAI from 'openai';
+import { ChatCompletionMessageParam, ChatCompletionMessage } from 'openai/resources/chat/completions';
 import { createScenarioBranch } from './util/branch-manager.js';
 
 const MAX_RUNTIME = 15 * 60 * 1000; // 15 minutes
-const SCENARIO_TIMEOUT = 5 * 60 * 1000; 
+const SCENARIO_TIMEOUT = 5 * 60 * 1000;
 const useMemoryBank = process.env.USE_MEMORY_BANK === 'true';
-
-// Helper for Claude's responses
-function getMessageText(message: Message): string {
-  if (!message?.content?.length) return '';
-  return message.content
-    .map(block => {
-      switch (block.type) {
-        case 'text':
-          return block.text;
-        case 'tool_use':
-          return `<tool_use>${JSON.stringify(block)}</tool_use>`;
-        case 'thinking':
-          return block.thinking;
-        case 'redacted_thinking':
-          return block.data;
-        default:
-          return '';
-      }
-    })
-    .join('');
-}
 
 // Mother agent main loop
 export async function runMotherAgent(sessionId: string, error: string, context: string, language: string, filePath: string, repoPath: string) {
@@ -745,13 +732,26 @@ export async function runMotherAgent(sessionId: string, error: string, context: 
   let lastObservationCheck = 0;
 
   try {
-    // OBSERVE: Setup tools and Claude
+    // OBSERVE: Setup tools and LLM Client
     await log(sessionId, 'mother', 'info', 'OODA: observe', { repoPath });
     const { gitClient, filesystemClient } = await connectRequiredTools('mother', sessionId, repoPath);
-    const anthropic = new (await import('@anthropic-ai/sdk')).default();
+
+    // Setup LLM Client (OpenRouter via OpenAI SDK)
+    const openrouterApiKey = process.env.OPENROUTER_API_KEY;
+    const openrouterBaseUrl = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
+    const motherModel = process.env.MOTHER_MODEL;
+
+    if (!openrouterApiKey || !motherModel) {
+      throw new Error('OPENROUTER_API_KEY and MOTHER_MODEL environment variables are required for mother-agent');
+    }
+
+    const openai = new OpenAI({
+      apiKey: openrouterApiKey,
+      baseURL: openrouterBaseUrl,
+    });
 
     // Initial conversation context
-    const messages: { role: 'assistant' | 'user', content: string }[] = [{
+    const messages: ChatCompletionMessageParam[] = [{
       role: 'assistant',
       content: `You are the mother agent in an OODA loop debugging investigation. Your core mission:
 
@@ -881,31 +881,37 @@ IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for p
       })));
     }
 
-    // Initial Claude call
-
-    await log(sessionId, 'mother', 'debug', 'Sending to Claude', { messages, repoPath });
-    let conversation = await anthropic.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
+    // Initial LLM call
+    await log(sessionId, 'mother', 'debug', 'Sending to LLM', { model: motherModel, messages, repoPath });
+    let completion = await openai.chat.completions.create({
+      model: motherModel,
       max_tokens: 4096,
-      messages
+      messages: messages
     });
-    await log(sessionId, 'mother', 'debug', 'Received from Claude', { response: getMessageText(conversation), repoPath });
+    await log(sessionId, 'mother', 'debug', 'Received from LLM', { response: completion.choices[0]?.message, repoPath });
 
     // ORIENT: Begin investigation loop
     await log(sessionId, 'mother', 'info', 'OODA: orient', { repoPath });
 
-    while (!getMessageText(conversation).includes('<solution>')) {
+    let assistantResponse: ChatCompletionMessage | null = completion.choices[0]?.message ?? null;
+
+    while (assistantResponse?.content && !assistantResponse.content.includes('<solution>')) {
       if (Date.now() - startTime > MAX_RUNTIME) {
         throw new Error('Investigation exceeded maximum runtime');
       }
 
-      const response = getMessageText(conversation);
-      messages.push({ role: 'assistant', content: response });
+      // Add assistant's response to history
+      if (assistantResponse) {
+        messages.push(assistantResponse);
+      }
 
-      // Handle MULTIPLE MCP tools (if any)
-      const toolCalls = response.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
+      // Ensure responseText gets the string content correctly, whether assistantResponse is the string or an object containing it.
+      const responseText = (typeof assistantResponse === 'string' ? assistantResponse : assistantResponse?.content) ?? '';
 
-      const parsedCalls = toolCalls.map(tc => {
+      // Handle MULTIPLE MCP tools (if any) - Parsing from responseText
+      const toolCalls = responseText.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
+
+      const parsedCalls = toolCalls.map((tc: string) => {
         try {
           const server = tc.includes('git-mcp') ? gitClient! : filesystemClient!;
           const toolMatch = tc.match(/<tool_name>(.*?)<\/tool_name>/);
@@ -958,17 +964,17 @@ IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for p
         }
       }
 
-      // Handle Hypotheses → Scenario agents
-      if (response.includes('<hypothesis>')) {
-        const hypotheses = [...response.matchAll(/<hypothesis>([\s\S]*?)<\/hypothesis>/g)].map(match => match[1].trim());
-        
+      // Handle Hypotheses → Scenario agents - Parsing from responseText
+      if (responseText.includes('<hypothesis>')) {
+        const hypotheses = [...responseText.matchAll(/<hypothesis>([\s\S]*?)<\/hypothesis>/g)].map(match => match[1].trim());
+
         if (useMemoryBank) {
           await updateMemoryBank(projectId, `==================
 AUTOMATED HYPOTHESIS RECORD
 Timestamp: ${new Date().toISOString()}
 Error: ${error || 'No error provided'}
 
-${response}
+${responseText}
 
 ==================
 `, 'activeContext');
@@ -997,42 +1003,37 @@ ${response}
             child.stdout.on('data', data => output += data);
             child.stderr.on('data', data => output += data);
 
+            // Wait for process exit OR timeout
             return new Promise<string>((resolve) => {
-              let closed = 0;
-              const maybeResolve = () => {
-                if (closed === 2) resolve(output);
-              };
+              let resolved = false; // Prevent double resolution
 
-              child.stdout.on('close', () => {
-                closed++;
-                maybeResolve();
-              });
-              
-              child.stderr.on('close', () => {
-                closed++;
-                maybeResolve();
-              });
-
-              // Capture process-level errors
-              child.on('error', err => {
-                output += `\nProcess error: ${err}`;
+              // Resolve when the process exits
+              child.on('exit', (code, signal) => { // Added comma
+                if (resolved) return;
+                resolved = true;
+                output += `\nScenario exited with code ${code}, signal ${signal}`;
                 resolve(output);
               });
 
-              // Capture stream-level errors
-              child.stdout.on('error', err => {
-                output += `\nStdout error: ${err}`;
-              });
-              child.stderr.on('error', err => {
-                output += `\nStderr error: ${err}`;
+              // Capture process-level errors (also resolves)
+              child.on('error', err => { // Added comma
+                if (resolved) return;
+                resolved = true;
+                output += `\nProcess spawn error: ${err}`;
+                resolve(output); // Resolve immediately on spawn error
               });
 
-              // Global safety timeout in case streams never close
+              // Capture stream-level errors (don't resolve promise)
+              child.stdout.on('error', err => { output += `\nStdout error: ${err}`; });
+              child.stderr.on('error', err => { output += `\nStderr error: ${err}`; });
+
+              // Global safety timeout (resolves if exit/error didn't happen)
               setTimeout(() => {
-                if (closed < 2) {
+                if (!resolved) {
+                  resolved = true;
                   output += '\nScenario timeout';
-                  child.kill();
-                  resolve(output);
+                  child.kill(); // Force kill
+                  resolve(output); // Resolve after timeout
                 }
               }, SCENARIO_TIMEOUT);
             });
@@ -1053,27 +1054,30 @@ ${response}
         })));
       }
 
-      await log(sessionId, 'mother', 'debug', 'Sending to Claude', { messages, repoPath });
-      conversation = await anthropic.messages.create({
-        model: 'claude-3-5-sonnet-20241022',
+      // Make next LLM call
+      await log(sessionId, 'mother', 'debug', 'Sending to LLM', { model: motherModel, messages, repoPath });
+      completion = await openai.chat.completions.create({
+        model: motherModel,
         max_tokens: 4096,
-        messages
+        messages: messages
       });
-      await log(sessionId, 'mother', 'debug', 'Received from Claude', { response: getMessageText(conversation), repoPath });
+      await log(sessionId, 'mother', 'debug', 'Received from LLM', { response: completion.choices[0]?.message, repoPath });
+      assistantResponse = completion.choices[0]?.message ?? null;
 
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
-    // Structured record at the end
+    // Structured record at the end (using last assistant response)
+    const finalContent = assistantResponse?.content ?? 'No final content received.';
     if (useMemoryBank) {
       await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - ${new Date().toISOString()}
 ${error ? `Error: ${error}` : ''}
-${getMessageText(conversation)}
+${finalContent}
 Scenarios Run: ${activeScenarios.size}
 Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress');
     }
     await log(sessionId, 'mother', 'info', 'solution found', { repoPath });
-    return getMessageText(conversation);
+    return finalContent;
 
   } catch (err) {
     const caughtError = err instanceof Error ? err : new Error(String(err));
@@ -1095,30 +1099,11 @@ Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress');
 import { log } from './util/logger.js';
 import { connectRequiredTools } from './util/mcp.js';
 import { writeReport } from './util/reports.js';  // System infrastructure for capturing output
-import { Message } from '@anthropic-ai/sdk/resources/messages.js';
+import OpenAI from 'openai';
+import { ChatCompletionMessageParam, ChatCompletionMessage } from 'openai/resources/chat/completions';
 import { writeObservation, getAgentObservations } from './util/observations.js';
 
 const MAX_RUNTIME = 15 * 60 * 1000; // 15 minutes
-
-function getMessageText(message: Message): string {
-  if (!message?.content?.length) return '';
-  return message.content
-    .map(block => {
-      switch (block.type) {
-        case 'text':
-          return block.text;
-        case 'tool_use':
-          return `<tool_use>${JSON.stringify(block)}</tool_use>`;
-        case 'thinking':
-          return block.thinking;
-        case 'redacted_thinking':
-          return block.data;
-        default:
-          return '';
-      }
-    })
-    .join('');
-}
 
 interface ScenarioArgs {
   id: string;
@@ -1176,11 +1161,11 @@ export async function runScenarioAgent(args: ScenarioArgs) {
 
     // Branch creation is handled by system infrastructure before this agent is spawned.
 
-    // Start Claude conversation with initial context
+    // Start LLM conversation with initial context
     const startTime = Date.now();
     // Initial conversation context
-    const messages: { role: 'assistant' | 'user', content: string }[] = [{
-      role: 'assistant', 
+    const messages: ChatCompletionMessageParam[] = [{
+      role: 'assistant',
       content: `You are a scenario agent investigating a bug based on a specific hypothesis.
 A dedicated Git branch '${args.branch}' has been created for your investigation.
 
@@ -1288,18 +1273,32 @@ Hypothesis: ${args.hypothesis}`
       })));
     }
 
-    const anthropic = new (await import('@anthropic-ai/sdk')).default();    
-    await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to Claude', { messages, repoPath: args.repoPath });
-    let conversation = await anthropic.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
-      max_tokens: 4096,
-      messages
+    // Setup LLM Client (OpenRouter via OpenAI SDK)
+    const openrouterApiKey = process.env.OPENROUTER_API_KEY;
+    const openrouterBaseUrl = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
+    const scenarioModel = process.env.SCENARIO_MODEL;
+
+    if (!openrouterApiKey || !scenarioModel) {
+      throw new Error('OPENROUTER_API_KEY and SCENARIO_MODEL environment variables are required for scenario-agent');
+    }
+
+    const openai = new OpenAI({
+      apiKey: openrouterApiKey,
+      baseURL: openrouterBaseUrl,
     });
-    await log(args.session, `scenario-${args.id}`, 'debug', 'Received from Claude', { response: getMessageText(conversation), repoPath: args.repoPath });
+
+    await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to LLM', { model: scenarioModel, messages, repoPath: args.repoPath });
+    let completion = await openai.chat.completions.create({
+      model: scenarioModel,
+      max_tokens: 4096,
+      messages: messages
+    });
+    await log(args.session, `scenario-${args.id}`, 'debug', 'Received from LLM', { response: completion.choices[0]?.message, repoPath: args.repoPath });
 
     // Check for report in initial response
-    const initialResponse = getMessageText(conversation);
-    const initialReportMatch = initialResponse.match(/<report>\s*([\s\S]*?)\s*<\/report>/i);
+    const initialAssistantMessage = completion.choices[0]?.message;
+    const initialResponseText = initialAssistantMessage?.content ?? '';
+    const initialReportMatch = initialResponseText.match(/<report>\s*([\s\S]*?)\s*<\/report>/i);
     if (initialReportMatch) {
       const reportText = initialReportMatch[1].trim();
       await writeReport(args.repoPath, args.session, args.id, reportText);
@@ -1314,13 +1313,17 @@ Hypothesis: ${args.hypothesis}`
         process.exit(1);
       }
 
-      const response = getMessageText(conversation).trimEnd();
-      messages.push({ role: 'assistant', content: response });
+      let assistantResponse: ChatCompletionMessage | null = completion.choices[0]?.message ?? null;
+      if (assistantResponse) {
+          messages.push(assistantResponse); // Add assistant's response to history
+      }
+      const responseText = assistantResponse?.content ?? '';
 
-      // Handle MULTIPLE MCP tools (if any)
-      const toolCalls = response.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
 
-      const parsedCalls = toolCalls.map(tc => {
+      // Handle MULTIPLE MCP tools (if any) - Parsing from responseText
+      const toolCalls = responseText.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
+
+      const parsedCalls = toolCalls.map((tc: string) => {
         try {
           const server = tc.includes('git-mcp') ? gitClient! : filesystemClient!;
           const toolMatch = tc.match(/<tool_name>(.*?)<\/tool_name>/);
@@ -1344,6 +1347,7 @@ Hypothesis: ${args.hypothesis}`
           role: 'user',
           content: `One of your tool calls was malformed and none were run. Error: ${invalid.error}`
         });
+        // No need to clear assistantResponse here, just continue the loop
         continue;
       }
       
@@ -1358,16 +1362,23 @@ Hypothesis: ${args.hypothesis}`
           });
           continue;
         }
-      
-        const result = await server.callTool({ name: tool, arguments: args });
-        messages.push({
-          role: 'user',
-          content: JSON.stringify(result)
-        });
+
+        try {
+            const result = await server.callTool({ name: tool, arguments: args });
+            messages.push({
+              role: 'user',
+              content: JSON.stringify(result)
+            });
+        } catch (toolErr) {
+            messages.push({
+              role: 'user',
+              content: `Tool call failed: ${toolErr instanceof Error ? toolErr.message : String(toolErr)}`
+            });
+        }
       }
 
-      // Extract report if present
-      const reportMatch = response.match(/<report>\s*([\s\S]*?)\s*<\/report>/i);
+      // Extract report if present - Parsing from responseText
+      const reportMatch = responseText.match(/<report>\s*([\s\S]*?)\s*<\/report>/i);
       if (reportMatch) {
         const reportText = reportMatch[1].trim();
         await writeReport(args.repoPath, args.session, args.id, reportText);
@@ -1380,19 +1391,23 @@ Hypothesis: ${args.hypothesis}`
       const newObservations = await getAgentObservations(args.repoPath, args.session, `scenario-${args.id}`);
       if (newObservations.length > observations.length) {
         const latestObservations = newObservations.slice(observations.length);
-        messages.push(...latestObservations.map((obs: string) => ({
-          role: 'user' as const,
+        messages.push(...latestObservations.map((obs: string): ChatCompletionMessageParam => ({
+          role: 'user', // No 'as const' needed here
           content: `Scientific observation: ${obs}`
         })));
+        // Update the baseline observations count after processing
+        // This was the bug in the previous attempt - it needs to be updated *outside* the if block
+        // observations = newObservations; // Let's remove this line as it wasn't in the original and might be incorrect logic introduced by me. The original logic only checked length difference.
       }
 
-      await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to Claude', { messages, repoPath: args.repoPath });
-      conversation = await anthropic.messages.create({
-        model: 'claude-3-5-sonnet-20241022',
+      // Make next LLM call
+      await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to LLM', { model: scenarioModel, messages, repoPath: args.repoPath });
+      completion = await openai.chat.completions.create({
+        model: scenarioModel,
         max_tokens: 4096,
-        messages
+        messages: messages
       });
-      await log(args.session, `scenario-${args.id}`, 'debug', 'Received from Claude', { response: getMessageText(conversation), repoPath: args.repoPath });
+      await log(args.session, `scenario-${args.id}`, 'debug', 'Received from LLM', { response: completion.choices[0]?.message, repoPath: args.repoPath });
 
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
@@ -1566,6 +1581,42 @@ export function getProjectId(repoPath: string): string {
   const hash = createHash('sha256').update(repoPath).digest('hex');
   return hash.slice(0, 12); // use first 12 characters
 }
+
+
+=== src/util/observations.ts ===
+import { writeFile, mkdir, readFile } from 'fs/promises';
+import { join } from 'path';
+import { DEEBO_ROOT } from '../index.js';
+import { getProjectId } from './sanitize.js';
+
+export async function getAgentObservations(repoPath: string, sessionId: string, agentId: string): Promise<string[]> {
+  const projectId = getProjectId(repoPath);
+  const obsPath = join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'observations', `${agentId}.log`);
+  
+  try {
+    const content = await readFile(obsPath, 'utf8');
+    return content
+      .split('\n')
+      .filter(Boolean)
+      .map((line: string) => JSON.parse(line).observation);
+  } catch {
+    return []; // No observations yet
+  }
+}
+
+export async function writeObservation(repoPath: string, sessionId: string, agentId: string, observation: string) {
+  const projectId = getProjectId(repoPath);
+  const obsDir = join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'observations');
+  await mkdir(obsDir, { recursive: true });
+  
+  const entry = JSON.stringify({
+    timestamp: new Date().toISOString(),
+    observation
+  }) + '\n';
+  
+  await writeFile(join(obsDir, `${agentId}.log`), entry, { flag: 'a' });
+}
+
 
 
 === src/util/branch-manager.ts ===
