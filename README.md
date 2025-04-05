@@ -155,7 +155,7 @@ Add this to your mcpServers config (e.g., in Cline):
 - **git-mcp**: Git operations (branching, diffs, logs)
 - **desktopCommander**: File I/O, terminal commands, directories
 
-Agents generate tool calls in <use_mcp_tool> format. Tool output is injected into the next prompt cycle.
+Deebo agents are clients themselves- they use the git-mcp and desktopCommander MCP servers to investigate. 
 
 
 ## ✅ Why Use Deebo?
