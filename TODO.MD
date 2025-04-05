@@ -14,15 +14,9 @@ X = implemented, tested, complete (afaik)
 ## 🛠️ PRIORITY 1 – MUST-HAVE TO SHIP DEEBO 1.0
 
 These are blocking. They affect correctness, portability, or public usability.
-- update memory bank literally only controls progress.md LOL at least extend it to all non-logs files
-- add to prompt tell mother agent to verify solution first before returning it only 95% confidence or higher
-- change file system mcp to desktop commander so agents can run code
+- [ ] update memory bank literally only controls progress.md LOL at least extend it to all non-logs files
+- [ ] add to prompt tell mother agent to verify solution first before returning it only 95% confidence or higher
 
-- [ ] **Hardcoded Path in Config**
-    - File: config/tools.json
-    - Problem: The git-mcp command path /Users/sriram/.local/bin/uvx is specific to one machine.
-    - Result: Not portable.
-    - Why it matters: While not a direct rule violation, robust system infrastructure (Rule 1) should ideally be easily deployable.
 
 ---
 
@@ -37,24 +31,11 @@ Not strictly blocking, but improves clarity, modularity, and contributor sanity.
     - Scenario arg parsing
     - Logging wrapper (from `logger.ts`)
   - Goal: minimal duplication across `mother-agent.ts`, `scenario-agent.ts`, `mcp.ts`
-
-
-
-
-
 ---
 
 ## 💸 PRIORITY 3 – COST REDUCTION / PERFORMANCE
 
 These are cost optimization or toggleable runtime features. They can land after 1.0.
-
-- [ ] **Use QwQ 32b or Claude Haiku for Scenario Agents**
-  - Claude Sonnet is expensive
-  - Plan to test QwQ-32b and R1 tomorrow and compare
-
-- [ ] **Tool Suppression for Cheap Mode**
-  - Add a flag for “no tools” debugging
-  - Claude will only debate/think, no `<use_mcp_tool>` XML
 
 ---
 
@@ -149,3 +130,10 @@ These are philosophical polish or extra clarity. Not needed for 1.0.
   - Logged: `"Access denied - path outside allowed directories"`
   - Mother agent is confirmed to be using `join(DEEBO_ROOT, 'memory-bank')`, but Claude is likely being told a relative path
   - FIX: inject `"memoryPath"` in `tools.json` and prompt Claude to use that absolute path
+- [X]change file system mcp to desktop commander so agents can run code
+
+- [X] **Hardcoded Path in Config**
+    - File: config/tools.json
+    - Problem: The git-mcp command path /Users/sriram/.local/bin/uvx is specific to one machine.
+    - Result: Not portable.
+    - Why it matters: While not a direct rule violation, robust system infrastructure (Rule 1) should ideally be easily deployable.

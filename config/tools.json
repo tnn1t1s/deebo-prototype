@@ -1,16 +1,14 @@
 {
   "tools": {
-    "filesystem-mcp": {
+    "desktop-commander": {
       "command": "npx",
       "args": [
         "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "{memoryPath}",  
-        "{repoPath}"    
+        "@wonderwhy-er/desktop-commander"
       ]
     },
     "git-mcp": {
-      "command": "/Users/sriram/.local/bin/uvx",
+      "command": "uvx",
       "args": [
         "mcp-server-git",
         "--repository",

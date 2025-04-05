@@ -71,6 +71,14 @@ KEY DIRECTIVES:
 - Don't wait for full context - start with what you have
 - AVOID REDUNDANT HYPOTHESES - read scenario reports to learn what's been tried
 - Pass what failed to scenarios via context argument so they don't waste time
+
+SOLUTION CONFIDENCE:
+Only use <solution> tags when you are at least 96% confident in the solution.
+If your confidence is lower:
+- Create your own branch to test it
+- Keep investigating (you have the same tools as scenarios)
+- Generate new hypotheses if needed
+Solution tags = "I am at least 96% confident this works"
 ${useMemoryBank ? `
 MEMORY BANK INVESTIGATION AIDS:
 The memory bank at ${memoryBankPath} contains two key files to help your investigation:
@@ -136,26 +144,231 @@ git-mcp (use for ALL git operations):
 - git_show: Show contents of a specific commit
   Example: { "repo_path": "/path/to/repo", "revision": "HEAD" }
 
-filesystem-mcp (use ONLY for non-git file operations):
-- read_file: Read file contents from {memoryRoot}/${projectId}/ for memory bank files
-(of course you can also read the files in the repo using ${repoPath} and are strongly encouraged to do so)
-  Example: { "path": "${memoryBankPath}/activeContext.md" }
+desktop-commander (use ONLY for non-git operations):
+
+Terminal Tools:
+- execute_command: Run terminal commands with timeout
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>execute_command</tool_name>
+    <arguments>
+      {
+        "command": "npm run build",
+        "timeout_ms": 5000
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- read_output: Get output from running commands
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>read_output</tool_name>
+    <arguments>
+      {
+        "pid": 12345
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- force_terminate: Stop running command sessions
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>force_terminate</tool_name>
+    <arguments>
+      {
+        "pid": 12345
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- list_sessions: View active command sessions
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>list_sessions</tool_name>
+    <arguments>
+      {}
+    </arguments>
+  </use_mcp_tool>
+
+- list_processes: List system processes
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>list_processes</tool_name>
+    <arguments>
+      {}
+    </arguments>
+  </use_mcp_tool>
+
+- kill_process: Terminate processes by PID
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>kill_process</tool_name>
+    <arguments>
+      {
+        "pid": 12345
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- block_command: Block a command from execution
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>block_command</tool_name>
+    <arguments>
+      {
+        "command": "rm -rf /"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- unblock_command: Unblock a command
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>unblock_command</tool_name>
+    <arguments>
+      {
+        "command": "rm -rf /"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+Filesystem Tools:
+- read_file: Read file contents
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>read_file</tool_name>
+    <arguments>
+      {
+        "path": "${memoryBankPath}/activeContext.md"
+      }
+    </arguments>
+  </use_mcp_tool>
+
 - read_multiple_files: Read multiple files at once
-  Example: { "paths": ["/path/to/file1.ts", "/path/to/file2.ts"] }
-- edit_file: Edit a file based on pattern matching
-  Example: { "path": "/path/to/file.ts", "edits": [{ "oldText": "old code", "newText": "new code" }] }
-- list_directory: List contents of a directory
-  Example: { "path": "/path/to/dir" }
-- search_files: Recursively search files  
-  Example: { "path": "/path/to/dir", "pattern": "*.ts" }
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>read_multiple_files</tool_name>
+    <arguments>
+      {
+        "paths": ["file1.ts", "file2.ts"]
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- write_file: Write content to files
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>write_file</tool_name>
+    <arguments>
+      {
+        "path": "file.ts",
+        "content": "console.log('hello');"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- edit_file: Apply surgical text replacements
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>edit_file</tool_name>
+    <arguments>
+      {
+        "path": "file.ts",
+        "diff": "<<<<<<< SEARCH\nold code\n=======\nnew code\n>>>>>>> REPLACE"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- list_directory: List directory contents
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>list_directory</tool_name>
+    <arguments>
+      {
+        "path": "${memoryBankPath}"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- search_files: Search files with pattern
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>search_files</tool_name>
+    <arguments>
+      {
+        "path": "${memoryBankPath}",
+        "pattern": "error",
+        "file_pattern": "*.ts"
+      }
+    </arguments>
+  </use_mcp_tool>
+
 - create_directory: Create a new directory
-  Example: { "path": "/path/to/dir" }
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>create_directory</tool_name>
+    <arguments>
+      {
+        "path": "new-dir"
+      }
+    </arguments>
+  </use_mcp_tool>
+
 - move_file: Move or rename a file
-  Example: { "source": "/path/to/old.ts", "destination": "/path/to/new.ts" }
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>move_file</tool_name>
+    <arguments>
+      {
+        "source": "old.ts",
+        "destination": "new.ts"
+      }
+    </arguments>
+  </use_mcp_tool>
+
 - get_file_info: Get file metadata
-  Example: { "path": "/path/to/file.ts" }
-- list_allowed_directories: View allowed directories
-  Example: {}
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>get_file_info</tool_name>
+    <arguments>
+      {
+        "path": "file.ts"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- search_code: Recursive code search
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>search_code</tool_name>
+    <arguments>
+      {
+        "path": "${memoryBankPath}",
+        "pattern": "function",
+        "filePattern": "*.ts",
+        "contextLines": 2,
+        "ignoreCase": true
+      }
+    </arguments>
+  </use_mcp_tool>
 
 IMPORTANT MEMORY BANK WARNINGS:
 - DO NOT use write_file on memory bank files - use filesystem-mcp edit_file instead

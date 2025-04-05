@@ -64,7 +64,7 @@ Deebo can be used through Claude Desktop or Cline as an MCP server. It exposes t
 
 ## License
 
-MIT
+Apache 2.0
 
 ## Contributing
 

@@ -125,6 +125,3 @@ If you encounter issues with the Deebo MCP server:
 3. Make sure the paths in your MCP configuration are absolute and correct
 4. Ensure Node.js is in your PATH environment variable
 
----
-
-For more information about Deebo, refer to the `IMPLEMENTATION_REPORT.md` document.
