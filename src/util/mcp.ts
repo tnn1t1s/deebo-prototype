@@ -61,7 +61,7 @@ export async function connectRequiredTools(agentName: string, sessionId: string,
   const [gitClient, filesystemClient] = await Promise.all([
     connectMcpTool(`${agentName}-git`, 'git-mcp', sessionId, repoPath),
     // Switch from "filesystem-mcp" to "desktop-commander"
-    connectMcpTool(`${agentName}-desktop-commander`, 'desktop-commander', sessionId, repoPath)
+    connectMcpTool(`${agentName}-desktop-commander`, 'desktopCommander', sessionId, repoPath)
   ]);
 
   return { gitClient, filesystemClient };

@@ -61,8 +61,7 @@ export async function runMotherAgent(sessionId: string, error: string, context: 
 1. INVESTIGATE and HYPOTHESIZE aggressively
 2. Don't wait for perfect information
 3. Generate hypotheses even if you're uncertain
-When you've found a solution or determined none exists, wrap it in solution tags:
-<solution>Your final conclusion and solution here</solution>
+
 KEY DIRECTIVES:
 - Always generate at least one hypothesis within your first 2-3 responses
 - Use <hypothesis>Your hypothesis here</hypothesis> liberally
@@ -79,6 +78,8 @@ If your confidence is lower:
 - Keep investigating (you have the same tools as scenarios)
 - Generate new hypotheses if needed
 Solution tags = "I am at least 96% confident this works"
+When you've found a solution or determined none exists, wrap it in solution tags:
+<solution>Your final conclusion and solution here</solution>
 ${useMemoryBank ? `
 MEMORY BANK INVESTIGATION AIDS:
 The memory bank at ${memoryBankPath} contains two key files to help your investigation:

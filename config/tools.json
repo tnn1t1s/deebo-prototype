@@ -1,9 +1,8 @@
 {
   "tools": {
-    "desktop-commander": {
+    "desktopCommander": {
       "command": "npx",
       "args": [
-        "-y",
         "@wonderwhy-er/desktop-commander"
       ]
     },

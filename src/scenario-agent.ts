@@ -73,6 +73,7 @@ A dedicated Git branch '${args.branch}' has been created for your investigation.
 
 Your hypothesis: "${args.hypothesis}"
 Your job is to either validate the hypothesis, falsify it, or propose alternative directions if stuck. You do not need to fix the entire bug — your focus is the truth of the SPECIFIC hypothesis you are assigned to.
+That being said, don't be too hasty to report a conclusion. If you see something potentially useful/interesting, investigate it further. Debugging is a complicated, nonlinear process, and subtle clues could be useful.
 IMPORTANT:
 - READ THE CONTEXT CAREFULLY: "${args.context}"
 - This contains what approaches have failed and why

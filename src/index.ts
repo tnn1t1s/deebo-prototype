@@ -118,108 +118,178 @@ server.tool(
       const totalScenarios = scenarioLogs.filter(f => f.startsWith('scenario-')).length;
       const reportedScenarios = reportFiles.length;
 
-      // Build the pulse using Gemini's format
+      // Build the pulse
       let pulse = `=== Deebo Session Pulse: ${sessionId} ===\n`;
       pulse += `Timestamp: ${new Date().toISOString()}\n`;
       pulse += `Overall Status: ${status}\n`;
       pulse += `Session Duration: ${Math.floor(durationMs / 1000)}s\n\n`;
 
       pulse += `--- Mother Agent ---\n`;
-      pulse += `Status: ${status === 'in_progress' ? 'Working' : status}\n`;
+      pulse += `Status: ${status === 'in_progress' ? 'working' : status}\n`;
       pulse += `Last Activity: ${lastEvent.timestamp}\n`;
-      pulse += `Current Focus Snippet:\n`;
-      pulse += `<<<<<<< MOTHER FOCUS\n`;
-      // Get mother's last 20 lines but filter out noisy tool results
-      const focusLines = motherLines.slice(-20)
-        .map(l => {
+
+      // For completed sessions, find and show solution
+      if (status === 'completed') {
+        // Look for solution in mother log
+        let foundSolution = false;
+        
+        // Scan backwards for efficiency (newer entries more likely to have solution)
+        for (let i = motherLines.length - 1; i >= 0; i--) {
           try {
-            const event = JSON.parse(l);
-            // Only show significant events
-            if (event.level === 'debug' && 
-               (event.message.includes('Sending to Claude') || 
-                event.message.includes('Received from Claude'))) {
-              return null;
+            const line = motherLines[i];
+            const event = JSON.parse(line);
+            const content = event.data?.response?.content || event.message || '';
+            
+            // Check for solution tag in content string
+            if (content.includes('<solution>')) {
+              const match = content.match(/<solution>([\s\S]*?)<\/solution>/);
+              if (match && match[1]) {
+                pulse += `MOTHER SOLUTION:\n`;
+                pulse += `<<<<<<< SOLUTION\n`;
+                pulse += match[1].trim() + '\n';
+                pulse += `======= SOLUTION END >>>>>>>\n\n`;
+                foundSolution = true;
+                break;
+              }
             }
-            return `[${event.timestamp}] ${event.message}`;
-          } catch {
-            return l;
+          } catch (e) {
+            // Skip invalid JSON lines
+            continue;
           }
-        })
-        .filter(Boolean)
-        .join('\n');
-      pulse += focusLines;
-      pulse += '\n======= MOTHER FOCUS END >>>>>>>\n\n';
+        }
+        
+        // No solution found message
+        if (!foundSolution) {
+          pulse += `STATUS COMPLETE BUT NO SOLUTION FOUND\n`;
+          pulse += `Check the mother.log file for more details.\n\n`;
+        }
+      } else {
+        // For in-progress, just show current OODA stage - without reversing
+        for (let i = motherLines.length - 1; i >= 0; i--) {
+          try {
+            const event = JSON.parse(motherLines[i]);
+            if (event.message && event.message.includes('OODA:')) {
+              pulse += `Current Stage: ${event.message}\n\n`;
+              break;
+            }
+          } catch (e) {
+            // Skip invalid JSON lines
+            continue;
+          }
+        }
+      }
 
       pulse += `--- Scenario Agents (${totalScenarios} Total: ${totalScenarios - reportedScenarios} Running, ${reportedScenarios} Reported) ---\n\n`;
 
-      // Show scenario statuses
-      for (const file of reportFiles.slice(-5)) { // Show last 5 scenarios
+      // Process reported scenarios
+      for (const file of reportFiles) {
         const scenarioId = file.replace('.json', '');
-        const report = JSON.parse(await readFile(join(reportsDir, file), 'utf8'));
+        
         const scenarioLogPath = join(logsDir, `scenario-${scenarioId}.log`);
-        const scenarioLog = await readFile(scenarioLogPath, 'utf8');
+        let scenarioLog;
+        try {
+          scenarioLog = await readFile(scenarioLogPath, 'utf8');
+        } catch (e) {
+          continue; // Skip if log file doesn't exist
+        }
+        
         const scenarioLines = scenarioLog.split('\n').filter(Boolean);
-        const startEvent = JSON.parse(scenarioLines[0]);
+        if (!scenarioLines.length) continue;
 
-        // Get hypothesis from scenario log
-        const hypothesisLine = scenarioLines.find(l => {
+        // Get hypothesis - scan once
+        let hypothesis = 'Unknown hypothesis';
+        for (let i = 0; i < scenarioLines.length; i++) {
           try {
-            const event = JSON.parse(l);
-            return event.data?.hypothesis;
-          } catch {
-            return false;
+            const event = JSON.parse(scenarioLines[i]);
+            if (event.data?.hypothesis) {
+              hypothesis = event.data.hypothesis;
+              break;
+            }
+          } catch (e) {
+            continue;
           }
-        });
-        const hypothesis = hypothesisLine ? JSON.parse(hypothesisLine).data.hypothesis : 'Unknown hypothesis';
+        }
 
         pulse += `* Scenario: ${scenarioId}\n`;
         pulse += `  Status: Reported\n`;
         pulse += `  Hypothesis: "${hypothesis}"\n`;
-        pulse += `  Outcome Snippet:\n`;
-        pulse += `  <<<<<<< OUTCOME ${scenarioId}\n`;
-        // Get first 5 and last 5 non-empty lines of report
-        const reportLines = report.split('\n').filter(Boolean);
-        const start = reportLines.slice(0, 5).join('\n');
-        const end = reportLines.slice(-5).join('\n');
-        pulse += `  ${start}\n  ...\n  ${end}\n`;
-        pulse += `  ======= OUTCOME ${scenarioId} END >>>>>>>\n`;
-        pulse += `  (Full report: ${join(reportsDir, file)})\n\n`;
+
+        if (status === 'completed') {
+          // Show summary for completed scenarios in completed sessions
+          try {
+            const reportRaw = await readFile(join(reportsDir, `${scenarioId}.json`), 'utf8');
+            const report = JSON.parse(reportRaw);
+            
+            // Handle report as string or object
+            const reportStr = typeof report === 'string' ? report : JSON.stringify(report, null, 2);
+            // Limit to first few lines
+            const reportLines = reportStr.split('\n').slice(0, 5);
+            
+            pulse += `  Outcome Summary:\n`;
+            pulse += `  <<<<<<< OUTCOME ${scenarioId}\n`;
+            pulse += `  ${reportLines.join('\n  ')}\n`;
+            if (reportStr.split('\n').length > 5) {
+              pulse += `  [...more lines...]\n`;
+            }
+            pulse += `  ======= OUTCOME ${scenarioId} END >>>>>>>\n`;
+          } catch (e) {
+            const error = e as Error;
+            pulse += `  Error reading report: ${error.message}\n`;
+          }
+        }
+
+        pulse += `  (Full report: ${join(reportsDir, `${scenarioId}.json`)})\n\n`;
       }
 
-      // Show running scenarios
+      // Process running scenarios
       const runningScenarios = scenarioLogs
         .filter(f => f.startsWith('scenario-'))
         .filter(f => !reportFiles.includes(f.replace('scenario-', '').replace('.log', '.json')));
-
+      
       for (const file of runningScenarios) {
         const scenarioId = file.replace('scenario-', '').replace('.log', '');
-        const scenarioLog = await readFile(join(logsDir, file), 'utf8');
+        
+        let scenarioLog;
+        try {
+          scenarioLog = await readFile(join(logsDir, file), 'utf8');
+        } catch (e) {
+          continue; // Skip if log file doesn't exist
+        }
+        
         const scenarioLines = scenarioLog.split('\n').filter(Boolean);
         if (!scenarioLines.length) continue;
 
-        const startEvent = JSON.parse(scenarioLines[0]);
-        const lastEvent = JSON.parse(scenarioLines[scenarioLines.length - 1]);
-        const runtime = Math.floor((Date.now() - new Date(startEvent.timestamp).getTime()) / 1000);
-
-        // Get hypothesis same as above
-        const hypothesisLine = scenarioLines.find(l => {
+        // Get hypothesis - more efficient scan
+        let hypothesis = 'Unknown hypothesis';
+        for (let i = 0; i < scenarioLines.length; i++) {
           try {
-            const event = JSON.parse(l);
-            return event.data?.hypothesis;
-          } catch {
-            return false;
+            const event = JSON.parse(scenarioLines[i]);
+            if (event.data?.hypothesis) {
+              hypothesis = event.data.hypothesis;
+              break;
+            }
+          } catch (e) {
+            continue;
           }
-        });
-        const hypothesis = hypothesisLine ? JSON.parse(hypothesisLine).data.hypothesis : 'Unknown hypothesis';
+        }
 
-        pulse += `* Scenario: ${scenarioId}\n`;
-        pulse += `  Status: Running (${runtime}s)\n`;
-        pulse += `  Hypothesis: "${hypothesis}"\n`;
-        pulse += `  Latest Activity:\n`;
-        pulse += `  <<<<<<< LATEST ${scenarioId}\n`;
-        pulse += `  ${lastEvent.message}\n`;
-        pulse += `  ======= LATEST ${scenarioId} END >>>>>>>\n`;
-        pulse += `  (Log: ${join(logsDir, file)})\n\n`;
+        // First and last events
+        let firstEvent, lastEvent;
+        try {
+          firstEvent = JSON.parse(scenarioLines[0]);
+          lastEvent = JSON.parse(scenarioLines[scenarioLines.length - 1]);
+          const runtime = Math.floor((Date.now() - new Date(firstEvent.timestamp).getTime()) / 1000);
+
+          pulse += `* Scenario: ${scenarioId}\n`;
+          pulse += `  Status: Running\n`;
+          pulse += `  Hypothesis: "${hypothesis}"\n`;
+          pulse += `  Runtime: ${runtime}s\n`;
+          pulse += `  Latest Activity: ${lastEvent.message}\n`;
+          pulse += `  (Log: ${join(logsDir, file)})\n\n`;
+        } catch (e) {
+          // Skip scenarios with invalid JSON
+          continue;
+        }
       }
 
       pulse += `--- End Session Pulse ---`;
