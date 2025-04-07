@@ -408,40 +408,26 @@ server.tool(
   "add_observation",
   {
     agentId: z.string(),
-    observation: z.string()
+    observation: z.string(),
+    sessionId: z.string()
   },
-  async ({ agentId, observation }) => {
+  async ({ agentId, observation, sessionId }) => {
     try {
-      // Find the active session
-      const memoryBank = join(DEEBO_ROOT, 'memory-bank');
-      const projects = await readdir(memoryBank);
-      
-      let sessionId = null;
-      let repoPath = null;
-      for (const project of projects) {
-        const sessionsDir = join(memoryBank, project, 'sessions');
-        const sessions = await readdir(sessionsDir);
-        // Look for most recent session
-        const sortedSessions = sessions.sort().reverse();
-        if (sortedSessions.length > 0) {
-          sessionId = sortedSessions[0];
-          // Get repoPath from agent log
-          const logFile = join(sessionsDir, sessionId, 'logs', `${agentId}.log`);
-          const agentLog = await readFile(logFile, 'utf8');
-          const firstLine = agentLog.split('\n')[0];
-          const firstEvent = JSON.parse(firstLine);
-          repoPath = firstEvent.data?.repoPath;
-          break;
-        }
+      // Get session directory
+      const sessionDir = await findSessionDir(sessionId);
+      if (!sessionDir) {
+        throw new Error('Session not found');
       }
 
-      if (!sessionId || !repoPath) {
-        return {
-          content: [{
-            type: "text",
-            text: "No active session found"
-          }]
-        };
+      // Get repoPath from agent log
+      const logFile = join(sessionDir, 'logs', `${agentId}.log`);
+      const agentLog = await readFile(logFile, 'utf8');
+      const firstLine = agentLog.split('\n')[0];
+      const firstEvent = JSON.parse(firstLine);
+      const repoPath = firstEvent.data?.repoPath;
+      
+      if (!repoPath) {
+        throw new Error('Could not find repoPath in agent log');
       }
 
       await writeObservation(repoPath, sessionId, agentId, observation);
@@ -452,12 +438,7 @@ server.tool(
         }] 
       };
     } catch (err) {
-      return {
-        content: [{
-          type: "text",
-          text: `Error logging observation: ${err}`
-        }]
-      };
+      throw new Error(`Observation write failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 );
