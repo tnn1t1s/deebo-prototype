@@ -8,10 +8,17 @@ import { fileURLToPath } from 'url';
 import { runMotherAgent } from './mother-agent.js';
 import { getProjectId } from './util/sanitize.js';
 import { writeObservation } from './util/observations.js';
-import { exec, spawn } from 'child_process';
+import { exec, spawn, ChildProcess } from 'child_process';
 import { promisify } from 'util';
 
 const execPromise = promisify(exec);
+
+// Registry to track active sessions and their associated processes/controllers
+const processRegistry = new Map<string, {
+  motherController: AbortController;
+  scenarioPids: Set<number>; // Store PIDs of spawned scenario agents
+}>();
+// Removed duplicate declaration below
 
 
 // Load environment variables from .env file
@@ -58,15 +65,39 @@ server.tool(
     const sessionId = `session-${Date.now()}`;
     await mkdir(join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'logs'), { recursive: true });
     await mkdir(join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'reports'), { recursive: true });
-    // Run mother agent in background
+
+    // Create controller and PID set for this session
+    const motherController = new AbortController();
+    const scenarioPids = new Set<number>();
+
+    // Register the session
+    processRegistry.set(sessionId, {
+      motherController,
+      scenarioPids
+    });
+    // console.log(`Registered session ${sessionId}`); // Removed informational log
+
+    // Run mother agent in background, passing the signal and PID set
+    // Note: runMotherAgent signature needs to be updated in mother-agent.ts to accept these
     runMotherAgent(
       sessionId,
       error,
       context ?? "",
       language ?? "typescript",
       filePath ?? "",
-      repoPath
-    ).catch(err => console.error('Debug session failed:', err));
+      repoPath,
+      motherController.signal, // Pass the signal
+      scenarioPids // Pass the Set for tracking scenario PIDs
+    ).catch(err => {
+      console.error(`Debug session ${sessionId} failed during execution:`, err);
+      // Clean up registry if mother agent fails during execution
+      processRegistry.delete(sessionId);
+    }).finally(() => {
+      // Optional: Could also remove from registry on normal completion,
+      // but cancel needs to handle the case where it's still running.
+      // For now, only removing on error/cancel.
+      // console.log(`Mother agent promise settled for session ${sessionId}.`); // Removed internal log
+    });
 
     // Return session ID immediately
     return {
@@ -335,73 +366,78 @@ server.tool(
     sessionId: z.string()
   },
   async ({ sessionId }) => {
-    // Sanitize sessionId for shell
-    const sanitizedId = sessionId.replace(/[^a-zA-Z0-9-]/g, '');
-    
+    // No need to sanitize ID when using the registry Map key
+    const sessionEntry = processRegistry.get(sessionId);
+
+    if (!sessionEntry) {
+      return {
+        content: [{
+          type: "text",
+          text: `Session ${sessionId} not found in registry. It might have already completed or failed.`
+        }]
+      };
+    }
+
+    const { motherController, scenarioPids } = sessionEntry;
+    let killedScenarios = 0;
+    let failedKills = 0;
+
     try {
-      // First attempt: SIGTERM to all processes in session tree
-      const { stdout: pids } = await execPromise(`pgrep -f ${sanitizedId}`);
-      const pidList = pids.split('\n').filter(Boolean);
-      
-      for (const pid of pidList) {
+      // 1. Signal the Mother agent to stop its loop cooperatively
+      // console.log(`Signaling Mother Agent for session ${sessionId} to stop.`); // Removed informational log
+      motherController.abort();
+
+      // 2. Terminate any tracked Scenario agent processes
+      // console.log(`Terminating ${scenarioPids.size} tracked Scenario Agents for session ${sessionId}.`); // Removed informational log
+      for (const pid of scenarioPids) {
         try {
-          // Kill process and all its children
-          await execPromise(`pkill -15 -P ${pid}`);
-          process.kill(Number(pid), 'SIGTERM');
-        } catch (err) {
-          // Ignore errors - process might be gone
-        }
-      }
-
-      // Wait a moment for graceful shutdown
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      // Check if any processes survived
-      const { stdout: survivors } = await execPromise(`pgrep -f ${sanitizedId}`);
-      const survivorList = survivors.split('\n').filter(Boolean);
-
-      if (survivorList.length > 0) {
-        // Force kill survivors with SIGKILL
-        for (const pid of survivorList) {
-          try {
-            await execPromise(`pkill -9 -P ${pid}`);
-            process.kill(Number(pid), 'SIGKILL');
-          } catch (err) {
-            // Ignore errors
+          // Use SIGTERM first for graceful shutdown
+          process.kill(pid, 'SIGTERM');
+          killedScenarios++;
+          // console.log(`Sent SIGTERM to scenario PID ${pid}`); // Removed informational log
+        } catch (err: any) {
+          // Ignore errors if process is already gone (e.g., ESRCH)
+          if (err.code !== 'ESRCH') {
+            // console.warn(`Failed to send SIGTERM to scenario PID ${pid}: ${err.message}`); // Removed console.warn
+            failedKills++;
+          } else {
+            // Process already gone
           }
         }
       }
 
-      // Final check
-      const { stdout: final } = await execPromise(`pgrep -f ${sanitizedId}`);
-      const finalList = final.split('\n').filter(Boolean);
+      // Optional: Add a short delay and SIGKILL survivors if needed.
+      // For simplicity, we'll rely on SIGTERM for now.
 
-      if (finalList.length > 0) {
+      // 3. Clean up the registry entry *after* attempting kills
+      processRegistry.delete(sessionId);
+      // console.log(`Removed session ${sessionId} from process registry.`); // Removed informational log
+
+      return {
+          content: [{
+            type: "text",
+            text: `Cancellation request sent for session ${sessionId}:\n` +
+                  `- Mother agent signaled to stop.\n` +
+                  `- Targeted ${killedScenarios} scenario processes (includes already exited).\n` +
+                  `- ${failedKills} termination signals failed (excluding already exited).`
+          }]
+        };
+
+      } catch (err: any) {
+        // Handle potential errors during the cancellation process itself
+        const errorMessage = err.message || String(err);
+        // console.error(`Error during cancellation for session ${sessionId}: ${errorMessage}`); // Removed console.error
+        // Attempt to clean up registry even if cancellation had issues
+        processRegistry.delete(sessionId); // Ensure cleanup
         return {
           content: [{
             type: "text",
-            text: `WARNING: ${finalList.length} processes survived cancellation. Session may need manual cleanup.`
+            text: `Error during cancellation for session ${sessionId}: ${errorMessage}. Registry entry removed.`
           }]
         };
       }
-
-      return {
-        content: [{
-          type: "text",
-          text: `Successfully terminated all processes for session ${sanitizedId}`
-        }]
-      };
-
-    } catch (err) {
-      return {
-        content: [{
-          type: "text",
-          text: `Error during cancellation: ${err}. Session may need manual cleanup.`
-        }]
-      };
     }
-  }
-);
+  );
 
 // Register add_observation tool
 server.tool(
@@ -425,17 +461,17 @@ server.tool(
       const firstLine = agentLog.split('\n')[0];
       const firstEvent = JSON.parse(firstLine);
       const repoPath = firstEvent.data?.repoPath;
-      
+
       if (!repoPath) {
         throw new Error('Could not find repoPath in agent log');
       }
 
       await writeObservation(repoPath, sessionId, agentId, observation);
-      return { 
-        content: [{ 
-          type: "text", 
-          text: "Observation logged" 
-        }] 
+      return {
+        content: [{
+          type: "text",
+          text: "Observation logged"
+        }]
       };
     } catch (err) {
       throw new Error(`Observation write failed: ${err instanceof Error ? err.message : String(err)}`);

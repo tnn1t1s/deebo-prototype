@@ -372,3 +372,136 @@ Let me search for the invalidateTaskCache implementation:
 Would you like me to continue investigating these hypotheses? I can also generate additional hypotheses if needed.
 
 ==================
+
+==================
+AUTOMATED HYPOTHESIS RECORD
+Timestamp: 2025-04-06T03:53:05.855Z
+Error: Race condition in task cache management
+
+I'll start investigating this race condition issue. First, let me check the existing debugging context and then form initial hypotheses.
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>read_file</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/Cline/MCP/deebo-prototype/memory-bank/af72caf9ed17/activeContext.md"
+    }
+  </arguments>
+</use_mcp_tool>
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>read_file</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/task-manager/src/services/taskService.ts"
+  }
+  </arguments>
+</use_mcp_tool>
+
+Based on the error message and the code snippet, I can already form some initial hypotheses:
+
+<hypothesis>
+The race condition is occurring because setCachedTasks is being called asynchronously without awaiting its completion, while invalidateTaskCache might be called concurrently. This could lead to:
+1. A stale cache being written after a cache invalidation
+2. Cache inconsistency if multiple tasks are being updated simultaneously
+</hypothesis>
+
+<hypothesis>
+The unhandled promise from .catch() could be causing timing issues where errors in cache setting are not properly propagated, leading to inconsistent state between the actual data and cached data
+</hypothesis>
+
+Let me verify this by checking how invalidateTaskCache is implemented and where it's called.
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>search_code</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/task-manager/src",
+      "pattern": "invalidateTaskCache",
+      "filePattern": "*.ts",
+      "contextLines": 5,
+      "ignoreCase": false
+    }
+  </arguments>
+</use_mcp_tool>
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>search_code</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/task-manager/src",
+      "pattern": "setCachedTasks",
+      "filePattern": "*.ts",
+      "contextLines": 5,
+      "ignoreCase": false
+    }
+  </arguments>
+</use_mcp_tool>
+
+I'd like to generate a more specific hypothesis based on what I've seen:
+
+<hypothesis>
+The core issue is likely in the execution order and promise handling:
+
+1. The current code returns paginatedResponse immediately without awaiting setCachedTasks
+2. This means that subsequent operations (including possible cache invalidations) can occur before the cache is actually set
+3. If invalidateTaskCache is called right after this function returns but before setCachedTasks completes, we could end up with:
+   - Cache being invalidated
+   - Old data being written to cache after invalidation
+   - Resulting in stale data persisting in cache
+</hypothesis>
+
+To properly investigate this, I need to:
+1. See how the cache key is generated
+2. Check the implementation of both setCachedTasks and invalidateTaskCache
+3. Look at the call patterns to understand the concurrency scenarios
+
+Would you like me to continue investigating any of these specific aspects, or should I propose a potential solution based on my current hypothesis?
+
+==================
+
+==================
+AUTOMATED HYPOTHESIS RECORD
+Timestamp: 2025-04-07T22:55:36.927Z
+Error: Race condition in task cache management
+
+Okay, I've reviewed the `activeContext.md`. It seems this race condition has been looked at before, and the recurring hypothesis is that `setCachedTasks` is not being `await`ed, causing a "fire-and-forget" situation where it might complete *after* an `invalidateTaskCache` call, leading to stale data being written back.
+
+Let's confirm this by examining the code. I need to see the context around the problematic line, the implementation of `setCachedTasks`, and how `invalidateTaskCache` is used.
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>read_file</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/task-manager/src/services/taskService.ts"
+    }
+  </arguments>
+</use_mcp_tool>
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>search_code</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/task-manager/src",
+      "pattern": "invalidateTaskCache",
+      "filePattern": "*.ts",
+      "contextLines": 5
+    }
+  </arguments>
+</use_mcp_tool>
+
+Based on the provided snippet and the history in `activeContext.md`, here's my primary hypothesis:
+
+<hypothesis>
+The race condition is caused by the `setCachedTasks` promise not being awaited before the function returns `paginatedResponse`. This allows subsequent operations, potentially including `invalidateTaskCache` (e.g., triggered by a task update or deletion shortly after a fetch), to execute before the cache write completes. If `invalidateTaskCache` runs and clears the relevant cache entries, the still-pending `setCachedTasks` operation will then write stale data back into the cache upon its eventual completion. The `.catch()` only logs the error but doesn't prevent the function from returning prematurely.
+</hypothesis>
+
+I'll analyze the file content and search results when they arrive to confirm this and propose a specific fix, likely involving adding `await` to the `setCachedTasks` call.
+
+==================

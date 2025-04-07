@@ -1,0 +1,1 @@
+{"timestamp":"2025-04-06T04:25:35.253Z","observation":"The SINK UOp appears to be present in the initial graph but gets lost during the block finalization process. This suggests a transformation or optimization pass is incorrectly handling the SINK node."}

@@ -15,9 +15,10 @@ X = implemented, tested, complete (afaik)
 
 These are blocking. They affect correctness, portability, or public usability.
 - [ ] update memory bank literally only controls progress.md LOL at least extend it to all non-logs files
-- make cancel tool work in all cases
 - make observations tool more clear how to use
-
+- describe deebo tool usage clearly for llm assistants
+- Use lightweight XML parser (e.g., fast-xml-parser) that tolerates irregularities
+- add readme instructions for windows
 ---
 
 ## ⚙️ PRIORITY 2 – CLEANUP / INFRA REFACTOR
@@ -139,3 +140,5 @@ These are philosophical polish or extra clarity. Not needed for 1.0.
     - Why it matters: While not a direct rule violation, robust system infrastructure (Rule 1) should ideally be easily deployable.
 - [x] add to prompt tell mother agent to verify solution first before returning it only 95% confidence or higher
 - [x] made check tool more efficient
+- [x] fix llm client to support diff providers for mother/scenario agent
+- [x] make cancel tool work in all cases

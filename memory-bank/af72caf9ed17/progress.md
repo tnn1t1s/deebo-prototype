@@ -572,3 +572,168 @@ This solution has high confidence because:
 Would you like me to explain any part of the solution in more detail or discuss alternative approaches?
 Scenarios Run: 2
 Duration: 56s
+
+## Debug Session session-1743911569698 - 2025-04-06T03:53:48.660Z
+Error: Race condition in task cache management
+Based on the thorough investigation and code analysis, I can now propose a solution with high confidence:
+
+<solution>
+The race condition can be fixed by properly awaiting the cache operations and implementing atomic cache updates. Here are the specific changes needed:
+
+1. Modify the getTasks function to await cache operations:
+```typescript
+export async function getTasks(
+  filters: TaskFilterOptions = {},
+  pagination: PaginationOptions = { page: 1, limit: 20 }
+): Promise<PaginatedResponse<Task>> {
+  const cacheKey = `tasks:${JSON.stringify({ filters, pagination })}`;
+  
+  // First check cache
+  const cachedResult = await getCachedTasks(cacheKey);
+  if (cachedResult) {
+    return cachedResult;
+  }
+  
+  // ... existing query logic ...
+  
+  const paginatedResponse: PaginatedResponse<Task> = {
+    items: tasks,
+    total,
+    page,
+    limit,
+    totalPages: Math.ceil(total / limit)
+  };
+  
+  // FIXED: Await cache operation and handle failures properly
+  try {
+    await setCachedTasks(cacheKey, paginatedResponse);
+  } catch (err) {
+    logger.error('Failed to set cache, invalidating to maintain consistency:', err);
+    await invalidateTaskCache();
+  }
+  
+  return paginatedResponse;
+}
+```
+
+2. Update all cache operations to be properly awaited:
+```typescript
+// In updateTask function
+try {
+  const result = await pool.query(query, values);
+  if (result.rows.length === 0) {
+    return null;
+  }
+  
+  // Ensure cache operations complete before continuing
+  await invalidateTaskCache();
+  
+  // Convert and return task...
+} catch (err) {
+  logger.error('Error updating task:', err);
+  await invalidateTaskCache(); // Ensure cache is invalidated on error
+  throw err;
+}
+
+// Similar changes in deleteTask and createTask functions
+```
+
+3. Modify cacheService.ts to use atomic operations:
+```typescript
+// Add version-based atomic updates
+export async function setCachedTasks<T>(key: string, data: T): Promise<void> {
+  const currentVersion = cacheVersion;
+  const entry: CacheEntry<T> = {
+    data,
+    version: currentVersion,
+    timestamp: Date.now()
+  };
+  
+  // Only set if version matches (atomic check)
+  await cache.set(key, entry, (existing) => {
+    return !existing || existing.version <= currentVersion;
+  });
+}
+
+export async function invalidateTaskCache(): Promise<void> {
+  cacheVersion++;
+  logger.debug(`Incremented cache version to ${cacheVersion}`);
+  // Optional: Clear old entries in background
+  clearOldCacheEntries().catch(err => 
+    logger.error('Error clearing old cache entries:', err)
+  );
+}
+```
+
+These changes ensure:
+1. All cache operations are properly awaited
+2. Cache consistency is maintained through atomic version checks
+3. Failures are handled gracefully
+4. Race conditions are prevented by ensuring operation order
+5. Error states are properly logged and recovered from
+
+The solution provides both immediate fixes (proper await usage) and robust improvements (atomic operations) to prevent future race conditions.
+</solution>
+
+This solution directly addresses the confirmed hypotheses:
+1. Fixes the async timing issues by properly awaiting cache operations
+2. Prevents stale data writes through version checking
+3. Maintains cache consistency even during errors
+4. Provides atomic operations to prevent race conditions
+
+Would you like me to explain any part of the solution in more detail or help implement these changes?
+Scenarios Run: 3
+Duration: 59s
+
+## Debug Session session-1744066520557 - 2025-04-07T22:56:19.300Z
+Initial Error: Race condition in task cache management
+Final Status: Session cancelled by user request.
+Okay, the file contents and search results confirm the situation:
+
+1.  **`getTasks` function:** Calls `setCachedTasks(cacheKey, paginatedResponse)` without `await` right before returning.
+2.  **`getTaskById` function:** Calls `setCachedTasks(cacheKey, task as Task)` *with* `await` before returning. This inconsistency highlights the likely oversight in `getTasks`.
+3.  **`createTask`, `updateTask`, `deleteTask` functions:** All call `invalidateTaskCache()`. The `updateTask` and `deleteTask` functions explicitly call `await invalidateTaskCache()`. `createTask` also uses `await`.
+4.  **`invalidateTaskCache` (from search results in `cacheService.ts`):** Uses a versioning approach (`cacheVersion++`) rather than deleting specific keys.
+
+The previous scenario agent (`session-1744066520557-0`) correctly identified the root cause: the missing `await` allows `getTasks` to return while the cache write is still pending. If `invalidateTaskCache` increments the `cacheVersion` during this window, the subsequent completion of `setCachedTasks` writes data associated with the *old* version, leading to cache inconsistencies or apparent staleness on the next read.
+
+The fix is to ensure the cache write completes before the function returns, matching the pattern used in `getTaskById`.
+
+<solution>
+The race condition in `/Users/sriram/Documents/task-manager/src/services/taskService.ts` occurs because the `setCachedTasks` call within the `getTasks` function is not awaited before the function returns. This allows the cache write operation to be pending while other operations (like `updateTask` or `deleteTask`) can call `invalidateTaskCache` (which increments a cache version). When `setCachedTasks` eventually completes, it writes data that may be associated with an outdated cache version, leading to cache inconsistencies.
+
+To fix this, add the `await` keyword before the `setCachedTasks` call in the `getTasks` function.
+
+Apply the following change using the `edit_file` tool:
+
+File: `/Users/sriram/Documents/task-manager/src/services/taskService.ts`
+
+```diff
+<<<<<<< SEARCH
+  // Cache the result - BUG: This is causing a race condition with invalidateTaskCache
+  setCachedTasks(cacheKey, paginatedResponse);
+
+  return paginatedResponse;
+=======
+  // Cache the result - Ensure this completes before returning
+  await setCachedTasks(cacheKey, paginatedResponse);
+  // Removed .catch() here as errors should now propagate up if await fails
+
+  return paginatedResponse;
+>>>>>>> REPLACE
+```
+
+I will now apply this change.
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>edit_file</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/task-manager/src/services/taskService.ts",
+      "diff": "<<<<<<< SEARCH\n  // Cache the result - BUG: This is causing a race condition with invalidateTaskCache\n  setCachedTasks(cacheKey, paginatedResponse);\n\n  return paginatedResponse;\n=======\n  // Cache the result - Ensure this completes before returning\n  await setCachedTasks(cacheKey, paginatedResponse);\n  // Removed .catch() here as errors should now propagate up if await fails\n\n  return paginatedResponse;\n>>>>>>> REPLACE"
+    }
+  </arguments>
+</use_mcp_tool>
+</solution>
+Scenarios Spawned: 1
+Duration: 59s

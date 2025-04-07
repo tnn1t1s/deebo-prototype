@@ -17,19 +17,31 @@ import { connectRequiredTools } from './util/mcp.js';
 import { DEEBO_ROOT } from './index.js';
 import { updateMemoryBank } from './util/membank.js';
 import { getProjectId } from './util/sanitize.js';
-import OpenAI from 'openai';
+// import OpenAI from 'openai'; // Removed
 import { ChatCompletionMessageParam, ChatCompletionMessage } from 'openai/resources/chat/completions';
 import { createScenarioBranch } from './util/branch-manager.js';
+import { callLlm } from './util/agent-utils.js'; // Added
 
-const MAX_RUNTIME = 15 * 60 * 1000; // 15 minutes
+const MAX_RUNTIME = 60 * 60 * 1000; // 60 minutes
 const SCENARIO_TIMEOUT = 5 * 60 * 1000;
 const useMemoryBank = process.env.USE_MEMORY_BANK === 'true';
 
+// Removed safeAssistantMessage function as it's no longer needed with callLlm
+
 // Mother agent main loop
-export async function runMotherAgent(sessionId: string, error: string, context: string, language: string, filePath: string, repoPath: string) {
+export async function runMotherAgent(
+  sessionId: string,
+  error: string,
+  context: string,
+  language: string,
+  filePath: string,
+  repoPath: string,
+  signal: AbortSignal, // Added: Cancellation signal
+  scenarioPids: Set<number> // Added: Set to track scenario PIDs
+) {
   await log(sessionId, 'mother', 'info', 'Mother agent started', { repoPath });
   const projectId = getProjectId(repoPath);
-  const activeScenarios = new Set<string>();
+  let scenarioCounter = 0; // Simple counter for unique scenario IDs within the session
   const startTime = Date.now();
   const memoryBankPath = join(DEEBO_ROOT, 'memory-bank', projectId);
   let lastObservationCheck = 0;
@@ -39,19 +51,23 @@ export async function runMotherAgent(sessionId: string, error: string, context: 
     await log(sessionId, 'mother', 'info', 'OODA: observe', { repoPath });
     const { gitClient, filesystemClient } = await connectRequiredTools('mother', sessionId, repoPath);
 
-    // Setup LLM Client (OpenRouter via OpenAI SDK)
-    const openrouterApiKey = process.env.OPENROUTER_API_KEY;
-    const openrouterBaseUrl = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
+    // Read LLM configuration from environment variables
+    const motherProvider = process.env.MOTHER_HOST; // Read provider name from MOTHER_HOST
     const motherModel = process.env.MOTHER_MODEL;
+    const openrouterApiKey = process.env.OPENROUTER_API_KEY; // Still needed if provider is 'openrouter'
+    const geminiApiKey = process.env.GEMINI_API_KEY;
+    const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+    // const motherHost = process.env.MOTHER_HOST; // No longer needed as separate URL
 
-    if (!openrouterApiKey || !motherModel) {
-      throw new Error('OPENROUTER_API_KEY and MOTHER_MODEL environment variables are required for mother-agent');
-    }
-
-    const openai = new OpenAI({
-      apiKey: openrouterApiKey,
-      baseURL: openrouterBaseUrl,
-    });
+    // Create the config object to pass to callLlm
+    const llmConfig = {
+      provider: motherProvider, // Use the provider name from MOTHER_HOST
+      model: motherModel,
+      apiKey: openrouterApiKey, // Pass the OpenRouter key (used only if provider is 'openrouter')
+      // baseURL: motherHost, // Removed - OpenRouter URL is hardcoded in callLlm
+      geminiApiKey: geminiApiKey,
+      anthropicApiKey: anthropicApiKey
+    };
 
     // Initial conversation context
     const messages: ChatCompletionMessageParam[] = [{
@@ -390,7 +406,7 @@ IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for p
     }];
 
     // Check for new observations
-    const observations = await getAgentObservations(repoPath, sessionId, 'mother');
+    let observations = await getAgentObservations(repoPath, sessionId, 'mother'); // Changed const to let
     if (observations.length > 0) {
       messages.push(...observations.map(obs => ({
         role: 'user' as const,
@@ -398,32 +414,38 @@ IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for p
       })));
     }
 
-    // Initial LLM call
-    await log(sessionId, 'mother', 'debug', 'Sending to LLM', { model: motherModel, messages, repoPath });
-    let completion = await openai.chat.completions.create({
-      model: motherModel,
-      max_tokens: 4096,
-      messages: messages
-    });
-    await log(sessionId, 'mother', 'debug', 'Received from LLM', { response: completion.choices[0]?.message, repoPath });
+    // Initial LLM call using the new utility function with config
+    await log(sessionId, 'mother', 'debug', 'Sending to LLM', { model: llmConfig.model, provider: llmConfig.provider, messages, repoPath });
+    let replyText = await callLlm(messages, llmConfig);
+    if (!replyText) {
+      messages.push({ role: 'user', content: 'LLM returned empty or malformed response' });
+      await log(sessionId, 'mother', 'warn', 'Received empty/malformed response from LLM', { provider: llmConfig.provider, model: llmConfig.model, repoPath });
+    } else {
+      // Add the valid response to messages history
+      messages.push({ role: 'assistant', content: replyText });
+      await log(sessionId, 'mother', 'debug', 'Received from LLM', { response: { content: replyText }, repoPath });
+    }
 
     // ORIENT: Begin investigation loop
     await log(sessionId, 'mother', 'info', 'OODA: orient', { repoPath });
 
-    let assistantResponse: ChatCompletionMessage | null = completion.choices[0]?.message ?? null;
-
-    while (assistantResponse?.content && !assistantResponse.content.includes('<solution>')) {
+    // Loop while the last reply exists, doesn't contain the solution tag, AND cancellation hasn't been requested
+    while (replyText && !replyText.includes('<solution>') && !signal.aborted) { // Check signal in loop condition
       if (Date.now() - startTime > MAX_RUNTIME) {
+        await log(sessionId, 'mother', 'warn', 'Investigation exceeded maximum runtime', { repoPath });
         throw new Error('Investigation exceeded maximum runtime');
       }
 
-      // Add assistant's response to history
-      if (assistantResponse) {
-        messages.push(assistantResponse);
+      // Check for cancellation signal before processing response
+      if (signal.aborted) {
+        await log(sessionId, 'mother', 'info', 'Cancellation signal received, stopping loop.', { repoPath });
+        break; // Exit loop if cancelled
       }
 
-      // Ensure responseText gets the string content correctly, whether assistantResponse is the string or an object containing it.
-      const responseText = (typeof assistantResponse === 'string' ? assistantResponse : assistantResponse?.content) ?? '';
+      // The assistant's response (replyText) is already added to messages before the loop starts and after each LLM call inside the loop.
+
+      // Use the latest replyText directly
+      const responseText = replyText; 
 
       // Handle MULTIPLE MCP tools (if any) - Parsing from responseText
       const toolCalls = responseText.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
@@ -445,41 +467,30 @@ IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for p
         }
       });
 
-      // Abort if *any* call fails to parse
-      const invalid = parsedCalls.find(p => 'error' in p);
-      if (invalid) {
-        messages.push({
-          role: 'user',
-          content: `One of your tool calls was malformed and none were run. Error: ${invalid.error}`
-        });
-        continue;
-      }
-      
-      const validCalls = parsedCalls as { server: NonNullable<typeof gitClient>, tool: string, args: any }[];
-
-      // Only now, execute each one
-      for (const { server, tool, args } of validCalls) {
-        try {
-          const result = await server.callTool({ name: tool, arguments: args });
-          let resultStr;
-         // try {
-            resultStr = JSON.stringify(result);
-          // } catch (jsonErr) {
-          //   resultStr = `{"error": "Could not serialize tool result: ${jsonErr instanceof Error ? jsonErr.message : String(jsonErr)}"}`;
-          // }
-          
+      // Process each parsed call
+      for (const parsed of parsedCalls) {
+        if ('error' in parsed) {
           messages.push({
             role: 'user',
-            content: resultStr
+            content: `One of your tool calls was malformed and skipped. Error: ${parsed.error}`
           });
-        } catch (toolErr) {
-          // Handle tool call errors gracefully
+          continue;
+        }
+
+        try {
+          const result = await parsed.server.callTool({ name: parsed.tool, arguments: parsed.args });
           messages.push({
             role: 'user',
-            content: `Tool call failed: ${toolErr instanceof Error ? toolErr.message : String(toolErr)}`
+            content: JSON.stringify(result)
+          });
+        } catch (err) {
+          messages.push({
+            role: 'user',
+            content: `Tool call failed: ${err instanceof Error ? err.message : String(err)}`
           });
         }
       }
+
 
       // Handle Hypotheses → Scenario agents - Parsing from responseText
       if (responseText.includes('<hypothesis>')) {
@@ -497,13 +508,13 @@ ${responseText}
 `, 'activeContext');
         }
 
-        const scenarioOutputs = await Promise.all(hypotheses.map(async (hypothesis: string) => {
-          const scenarioId = `${sessionId}-${activeScenarios.size}`;
-          if (activeScenarios.has(scenarioId)) return '';
-          activeScenarios.add(scenarioId);
-          await new Promise(resolve => setTimeout(resolve, 100));
-          const branchName = await createScenarioBranch(repoPath, sessionId);
-          const child = spawn('node', [
+        const scenarioPromises = hypotheses.map(async (hypothesis: string) => {
+          const scenarioId = `${sessionId}-${scenarioCounter++}`; // Use counter for unique ID
+
+          await new Promise(resolve => setTimeout(resolve, 100)); // Small delay
+          const branchName = await createScenarioBranch(repoPath, sessionId); // Branch name generation
+
+          const scenarioArgs = [ // Define args for spawn
             join(DEEBO_ROOT, 'build/scenario-agent.js'),
             '--id', scenarioId,
             '--session', sessionId,
@@ -513,27 +524,47 @@ ${responseText}
             '--language', language,
             '--file', filePath || '',
             '--repo', repoPath,
-            '--branch', branchName // Add branch name to args
-          ]);
+            '--branch', branchName
+          ];
 
+          const child = spawn('node', scenarioArgs); // Spawn the process
           let output = '';
-            child.stdout.on('data', data => output += data);
-            child.stderr.on('data', data => output += data);
 
-            // Wait for process exit OR timeout
-            return new Promise<string>((resolve) => {
-              let resolved = false; // Prevent double resolution
+          // Track the PID in the shared Set
+          if (child.pid) {
+            scenarioPids.add(child.pid);
+            await log(sessionId, 'mother', 'info', `Spawned Scenario ${scenarioId} with PID ${child.pid}`, { repoPath, hypothesis, args: scenarioArgs });
+          } else {
+             await log(sessionId, 'mother', 'warn', `Spawned Scenario ${scenarioId} but PID was unavailable`, { repoPath, hypothesis, args: scenarioArgs });
+          }
 
-              // Resolve when the process exits
-              child.on('exit', (code, signal) => { // Added comma
+          child.stdout.on('data', data => output += data);
+          child.stderr.on('data', data => output += data);
+
+          // Wait for process exit OR timeout
+          return new Promise<string>((resolve) => {
+              let resolved = false;
+              const scenarioPid = child.pid; // Capture PID for cleanup logic
+
+              // Function to handle cleanup and resolution
+              const cleanupAndResolve = (exitInfo: string) => {
                 if (resolved) return;
                 resolved = true;
-                output += `\nScenario exited with code ${code}, signal ${signal}`;
+                if (scenarioPid) {
+                  scenarioPids.delete(scenarioPid); // Remove PID from registry
+                  log(sessionId, 'mother', 'debug', `Removed scenario PID ${scenarioPid} from registry`, { repoPath });
+                }
+                output += `\n${exitInfo}`;
                 resolve(output);
+              };
+
+              // Handle process exit
+              child.on('exit', (code, signal) => {
+                cleanupAndResolve(`Scenario ${scenarioId} (PID: ${scenarioPid}) exited with code ${code}, signal ${signal}`);
               });
 
-              // Capture process-level errors (also resolves)
-              child.on('error', err => { // Added comma
+              // Handle process spawn errors
+              child.on('error', err => {
                 if (resolved) return;
                 resolved = true;
                 output += `\nProcess spawn error: ${err}`;
@@ -544,19 +575,24 @@ ${responseText}
               child.stdout.on('error', err => { output += `\nStdout error: ${err}`; });
               child.stderr.on('error', err => { output += `\nStderr error: ${err}`; });
 
-              // Global safety timeout (resolves if exit/error didn't happen)
-              setTimeout(() => {
-                if (!resolved) {
-                  resolved = true;
-                  output += '\nScenario timeout';
-                  child.kill(); // Force kill
-                  resolve(output); // Resolve after timeout
-                }
+              // Set a timeout for the scenario
+              const timeoutHandle = setTimeout(() => {
+                 if (!resolved) {
+                    child.kill(); // Force kill the scenario on timeout
+                    cleanupAndResolve(`Scenario ${scenarioId} (PID: ${scenarioPid}) timed out after ${SCENARIO_TIMEOUT / 1000}s`);
+                 }
               }, SCENARIO_TIMEOUT);
-            });
-        }));
 
-        messages.push({ role: 'user', content: scenarioOutputs.join('\n') });
+              // Clear timeout if process exits or errors first
+              child.on('exit', () => clearTimeout(timeoutHandle));
+              child.on('error', () => clearTimeout(timeoutHandle));
+            });
+        });
+
+        // Wait for all spawned scenarios for this turn to complete
+        const scenarioOutputs = await Promise.all(scenarioPromises);
+
+        messages.push({ role: 'user', content: scenarioOutputs.join('\n\n---\n\n') }); // Add separator for readability
       }
 
       // Mother can optionally edit memory bank directly via filesystem-mcp. No forced writes.
@@ -569,43 +605,82 @@ ${responseText}
           role: 'user' as const,
           content: `Scientific observation: ${obs}`
         })));
+        observations = newObservations; // Update the baseline observation list
       }
 
-      // Make next LLM call
-      await log(sessionId, 'mother', 'debug', 'Sending to LLM', { model: motherModel, messages, repoPath });
-      completion = await openai.chat.completions.create({
-        model: motherModel,
-        max_tokens: 4096,
-        messages: messages
-      });
-      await log(sessionId, 'mother', 'debug', 'Received from LLM', { response: completion.choices[0]?.message, repoPath });
-      assistantResponse = completion.choices[0]?.message ?? null;
+      // Check for cancellation signal again before the next LLM call
+      if (signal.aborted) {
+        await log(sessionId, 'mother', 'info', 'Cancellation signal received before next LLM call.', { repoPath });
+        break; // Exit loop if cancelled
+      }
+
+      // Make next LLM call using the new utility function with config
+      await log(sessionId, 'mother', 'debug', 'Sending to LLM', { model: llmConfig.model, provider: llmConfig.provider, messages, repoPath });
+      replyText = await callLlm(messages, llmConfig); // Update replyText
+      if (!replyText) {
+        messages.push({ role: 'user', content: 'LLM returned empty or malformed response' });
+        await log(sessionId, 'mother', 'warn', 'Received empty/malformed response from LLM', { provider: llmConfig.provider, model: llmConfig.model, repoPath });
+        // replyText is already falsy, loop will terminate naturally
+      } else {
+        // Add the valid response to messages history
+        messages.push({ role: 'assistant', content: replyText });
+        await log(sessionId, 'mother', 'debug', 'Received from LLM', { response: { content: replyText }, provider: llmConfig.provider, model: llmConfig.model, repoPath });
+      }
 
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
-    // Structured record at the end (using last assistant response)
-    const finalContent = assistantResponse?.content ?? 'No final content received.';
+    // Determine final status based on whether loop was aborted or completed naturally
+    let finalStatusMessage: string;
+    if (signal.aborted) {
+      finalStatusMessage = 'Session cancelled by user request.';
+      await log(sessionId, 'mother', 'info', finalStatusMessage, { repoPath });
+    } else if (replyText?.includes('<solution>')) {
+      finalStatusMessage = 'Solution found or investigation concluded.';
+      await log(sessionId, 'mother', 'info', finalStatusMessage, { repoPath });
+    } else {
+      finalStatusMessage = 'Loop terminated unexpectedly (e.g., LLM error).';
+       await log(sessionId, 'mother', 'warn', finalStatusMessage, { repoPath });
+    }
+
+    const finalContent = replyText || finalStatusMessage; // Use last reply or status message
+
+    // Structured record at the end
     if (useMemoryBank) {
       await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - ${new Date().toISOString()}
-${error ? `Error: ${error}` : ''}
-${finalContent}
-Scenarios Run: ${activeScenarios.size}
+${error ? `Initial Error: ${error}` : ''}
+Final Status: ${finalStatusMessage}
+${finalContent.includes('<solution>') ? finalContent : `Last Response/Status: ${finalContent}`}
+Scenarios Spawned: ${scenarioCounter}
 Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress');
     }
-    await log(sessionId, 'mother', 'info', 'solution found', { repoPath });
-    return finalContent;
+
+    return finalContent; // Return the last reply or status
 
   } catch (err) {
     const caughtError = err instanceof Error ? err : new Error(String(err));
-    await log(sessionId, 'mother', 'error', `Failed: ${caughtError.message}`, { repoPath });
-    if (useMemoryBank) {
-      await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - ${new Date().toISOString()}
-  ${caughtError ? `Error: ${String(caughtError)}` : ''}
-  Failed: ${caughtError.message}
-  Scenarios Run: ${activeScenarios.size}
-  Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress');
-    }
-    throw caughtError;
+    // Check if the error was due to cancellation signal during an operation
+     if (signal.aborted) {
+       await log(sessionId, 'mother', 'info', `Operation aborted during execution: ${caughtError.message}`, { repoPath });
+       // Optionally update progress log for aborted state
+       if (useMemoryBank) {
+         await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - ABORTED - ${new Date().toISOString()}\nError during abort: ${caughtError.message}`, 'progress');
+       }
+       return 'Session cancelled during operation.'; // Return specific cancellation message
+     } else {
+       // Log and record other errors
+       await log(sessionId, 'mother', 'error', `Failed: ${caughtError.message}`, { repoPath, stack: caughtError.stack });
+       if (useMemoryBank) {
+         await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - FAILED - ${new Date().toISOString()}\nError: ${caughtError.message}\nStack: ${caughtError.stack}`, 'progress');
+       }
+       throw caughtError; // Re-throw unexpected errors
+     }
+  } finally {
+     // Ensure any remaining scenario PIDs are cleaned up if the mother agent exits unexpectedly
+     // (though the 'exit' handler should cover most cases)
+     if (scenarioPids.size > 0) {
+       await log(sessionId, 'mother', 'warn', `Mother agent exiting with ${scenarioPids.size} scenario PIDs still in registry.`, { pids: Array.from(scenarioPids) });
+       // Optionally attempt to kill them here, though 'cancel' is the primary mechanism
+     }
   }
 }

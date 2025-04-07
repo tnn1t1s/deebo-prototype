@@ -1,11 +1,23 @@
 import { log } from './util/logger.js';
 import { connectRequiredTools } from './util/mcp.js';
 import { writeReport } from './util/reports.js';  // System infrastructure for capturing output
-import OpenAI from 'openai';
+// import OpenAI from 'openai'; // Removed
 import { ChatCompletionMessageParam, ChatCompletionMessage } from 'openai/resources/chat/completions';
 import { writeObservation, getAgentObservations } from './util/observations.js';
+import { callLlm } from './util/agent-utils.js'; // Added
 
 const MAX_RUNTIME = 15 * 60 * 1000; // 15 minutes
+
+// Define LlmConfig interface (can be moved to a shared types file later if needed)
+interface LlmConfig {
+  provider?: string;
+  model?: string;
+  maxTokens?: number;
+  apiKey?: string; // Generic key, specific keys passed within (used for OpenRouter)
+  // baseURL?: string; // Removed - OpenRouter URL is hardcoded in agent-utils
+  geminiApiKey?: string;
+  anthropicApiKey?: string;
+}
 
 interface ScenarioArgs {
   id: string;
@@ -380,31 +392,39 @@ Hypothesis: ${args.hypothesis}`
       })));
     }
 
-    // Setup LLM Client (OpenRouter via OpenAI SDK)
-    const openrouterApiKey = process.env.OPENROUTER_API_KEY;
-    const openrouterBaseUrl = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
+    // Read LLM configuration from environment variables
+    const scenarioProvider = process.env.SCENARIO_HOST; // Read provider name from SCENARIO_HOST
     const scenarioModel = process.env.SCENARIO_MODEL;
+    const openrouterApiKey = process.env.OPENROUTER_API_KEY; // Still needed if provider is 'openrouter'
+    const geminiApiKey = process.env.GEMINI_API_KEY;
+    const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+    // const scenarioHost = process.env.SCENARIO_HOST; // No longer needed as separate URL
 
-    if (!openrouterApiKey || !scenarioModel) {
-      throw new Error('OPENROUTER_API_KEY and SCENARIO_MODEL environment variables are required for scenario-agent');
+    // Create the config object to pass to callLlm
+    const llmConfig: LlmConfig = {
+      provider: scenarioProvider, // Use the provider name from SCENARIO_HOST
+      model: scenarioModel,
+      apiKey: openrouterApiKey, // Pass the OpenRouter key (used only if provider is 'openrouter')
+      // baseURL: scenarioHost, // Removed - OpenRouter URL is hardcoded in agent-utils
+      geminiApiKey: geminiApiKey,
+      anthropicApiKey: anthropicApiKey
+    };
+
+    await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to LLM', { model: llmConfig.model, provider: llmConfig.provider, messages, repoPath: args.repoPath });
+    let replyText = await callLlm(messages, llmConfig);
+    if (!replyText) {
+      await log(args.session, `scenario-${args.id}`, 'warn', 'Received empty/malformed response from LLM', { repoPath: args.repoPath });
+      // Exit if the first call fails, as there's no response to process
+      await writeReport(args.repoPath, args.session, args.id, 'Initial LLM call returned empty response.');
+      console.log('Initial LLM call returned empty response.');
+      process.exit(1); 
+    } else {
+      messages.push({ role: 'assistant', content: replyText });
+      await log(args.session, `scenario-${args.id}`, 'debug', 'Received from LLM', { response: { content: replyText }, repoPath: args.repoPath });
     }
 
-    const openai = new OpenAI({
-      apiKey: openrouterApiKey,
-      baseURL: openrouterBaseUrl,
-    });
-
-    await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to LLM', { model: scenarioModel, messages, repoPath: args.repoPath });
-    let completion = await openai.chat.completions.create({
-      model: scenarioModel,
-      max_tokens: 4096,
-      messages: messages
-    });
-    await log(args.session, `scenario-${args.id}`, 'debug', 'Received from LLM', { response: completion.choices[0]?.message, repoPath: args.repoPath });
-
     // Check for report in initial response
-    const initialAssistantMessage = completion.choices[0]?.message;
-    const initialResponseText = initialAssistantMessage?.content ?? '';
+    const initialResponseText = replyText;
     const initialReportMatch = initialResponseText.match(/<report>\s*([\s\S]*?)\s*<\/report>/i);
     if (initialReportMatch) {
       const reportText = initialReportMatch[1].trim();
@@ -420,11 +440,8 @@ Hypothesis: ${args.hypothesis}`
         process.exit(1);
       }
 
-      let assistantResponse: ChatCompletionMessage | null = completion.choices[0]?.message ?? null;
-      if (assistantResponse) {
-          messages.push(assistantResponse); // Add assistant's response to history
-      }
-      const responseText = assistantResponse?.content ?? '';
+      // The assistant's response (replyText) is already added to messages history
+      const responseText = replyText; // Use the latest replyText
 
 
       // Handle MULTIPLE MCP tools (if any) - Parsing from responseText
@@ -508,13 +525,18 @@ Hypothesis: ${args.hypothesis}`
       }
 
       // Make next LLM call
-      await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to LLM', { model: scenarioModel, messages, repoPath: args.repoPath });
-      completion = await openai.chat.completions.create({
-        model: scenarioModel,
-        max_tokens: 4096,
-        messages: messages
-      });
-      await log(args.session, `scenario-${args.id}`, 'debug', 'Received from LLM', { response: completion.choices[0]?.message, repoPath: args.repoPath });
+      await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to LLM', { model: llmConfig.model, provider: llmConfig.provider, messages, repoPath: args.repoPath });
+      replyText = await callLlm(messages, llmConfig); // Update replyText
+      if (!replyText) {
+        await log(args.session, `scenario-${args.id}`, 'warn', 'Received empty/malformed response from LLM', { provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
+        // If the LLM fails mid-conversation, write a report and exit
+        await writeReport(args.repoPath, args.session, args.id, 'LLM returned empty response mid-investigation.');
+        console.log('LLM returned empty response mid-investigation.');
+        process.exit(1);
+      } else {
+        messages.push({ role: 'assistant', content: replyText });
+        await log(args.session, `scenario-${args.id}`, 'debug', 'Received from LLM', { response: { content: replyText }, provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
+      }
 
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
