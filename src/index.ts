@@ -13,13 +13,28 @@ import { promisify } from 'util';
 
 const execPromise = promisify(exec);
 
+// Helper to find session directory
+async function findSessionDir(sessionId: string): Promise<string | null> {
+  const memoryBank = join(DEEBO_ROOT, 'memory-bank');
+  const projects = await readdir(memoryBank);
+  
+  for (const project of projects) {
+    const sessionPath = join(memoryBank, project, 'sessions', sessionId);
+    try {
+      await access(sessionPath);
+      return sessionPath;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 // Registry to track active sessions and their associated processes/controllers
 const processRegistry = new Map<string, {
   motherController: AbortController;
   scenarioPids: Set<number>; // Store PIDs of spawned scenario agents
 }>();
-// Removed duplicate declaration below
-
 
 // Load environment variables from .env file
 config();
@@ -53,6 +68,7 @@ const server = new McpServer({
 // Register start tool - begins a debug session
 server.tool(
   "start",
+  "Begins a debug session",
   {
     error: z.string(),
     repoPath: z.string(),
@@ -60,7 +76,7 @@ server.tool(
     language: z.string().optional(),
     filePath: z.string().optional()
   },
-  async ({ error, repoPath, context, language, filePath }) => {
+  async ({ error, repoPath, context, language, filePath }, extra) => {
     const projectId = getProjectId(repoPath);
     const sessionId = `session-${Date.now()}`;
     await mkdir(join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'logs'), { recursive: true });
@@ -112,10 +128,11 @@ server.tool(
 // Register check tool - gets status of a debug session
 server.tool(
   "check",
+  "Gets status of a debug session",
   {
     sessionId: z.string()
   },
-  async ({ sessionId }) => {
+  async ({ sessionId }, extra) => {
     try {
       const sessionDir = await findSessionDir(sessionId);
       if (!sessionDir) {
@@ -132,14 +149,46 @@ server.tool(
       const motherLogPath = join(logsDir, 'mother.log');
       const motherLog = await readFile(motherLogPath, 'utf8');
       const motherLines = motherLog.split('\n').filter(Boolean);
-      
+
       if (!motherLines.length) return { content: [{ type: "text", text: 'Session initializing' }] };
 
       const firstEvent = JSON.parse(motherLines[0]);
-      const lastEvent = JSON.parse(motherLines[motherLines.length - 1]);
       const durationMs = Date.now() - new Date(firstEvent.timestamp).getTime();
-      const status = lastEvent.level === 'error' ? 'failed' :
-                    lastEvent.message?.includes('solution found') ? 'completed' : 'in_progress';
+
+      // Determine status by scanning for solution tag first, then check for errors
+      let status = 'in_progress'; // Default status
+      let solutionFoundInScan = false;
+      let lastValidEvent: any = null; // Store the last successfully parsed event
+
+      for (let i = motherLines.length - 1; i >= 0; i--) {
+        try {
+          const event = JSON.parse(motherLines[i]);
+          if (!lastValidEvent) lastValidEvent = event; // Capture the last valid event
+
+          const content = event.data?.response?.content || event.message || '';
+          if (content.includes('<solution>')) {
+            status = 'completed';
+            solutionFoundInScan = true;
+            break; // Found the solution tag
+          }
+          // Check for error status *after* checking for solution tag
+          if (event.level === 'error') {
+             status = 'failed';
+             // Don't break here; allow checking earlier messages for a potential solution
+             // that might have been logged before a subsequent error.
+          }
+        } catch (e) {
+          // Skip invalid JSON lines
+          continue;
+        }
+      }
+
+      // If status is still 'in_progress' after scan, check the last valid event's level
+      // This handles cases where the session ends without solution or explicit error log
+      if (status === 'in_progress' && lastValidEvent && lastValidEvent.level === 'error') {
+          status = 'failed';
+      }
+      // Note: If the loop completes and status is still 'in_progress', it remains 'in_progress'.
 
       // Count scenario statuses
       const reportsDir = join(sessionDir, 'reports');
@@ -157,7 +206,7 @@ server.tool(
 
       pulse += `--- Mother Agent ---\n`;
       pulse += `Status: ${status === 'in_progress' ? 'working' : status}\n`;
-      pulse += `Last Activity: ${lastEvent.timestamp}\n`;
+      pulse += `Last Activity: ${lastValidEvent ? lastValidEvent.timestamp : 'N/A'}\n`;
 
       // For completed sessions, find and show solution
       if (status === 'completed') {
@@ -191,23 +240,23 @@ server.tool(
         
         // No solution found message
         if (!foundSolution) {
-          pulse += `STATUS COMPLETE BUT NO SOLUTION FOUND\n`;
+          pulse += `STATUS COMPLETE BUT NO SOLUTION TAG FOUND IN LOGS\n`;
           pulse += `Check the mother.log file for more details.\n\n`;
         }
-      } else {
-        // For in-progress, just show current OODA stage - without reversing
-        for (let i = motherLines.length - 1; i >= 0; i--) {
-          try {
-            const event = JSON.parse(motherLines[i]);
-            if (event.message && event.message.includes('OODA:')) {
-              pulse += `Current Stage: ${event.message}\n\n`;
-              break;
-            }
-          } catch (e) {
-            // Skip invalid JSON lines
-            continue;
-          }
+      } else if (status === 'in_progress' || status === 'failed') {
+        // For in-progress or failed, show last known stage or last message
+        let stageMessage = 'No stage information found.';
+        if (lastValidEvent) { // Use the last valid event captured during status scan
+             stageMessage = lastValidEvent.message || JSON.stringify(lastValidEvent.data); // Show message or data
+             if (lastValidEvent.message && lastValidEvent.message.includes('OODA:')) {
+                 pulse += `Last Stage: ${lastValidEvent.message}\n\n`;
+             } else {
+                 pulse += `Last Log Message: ${stageMessage.substring(0, 100)}${stageMessage.length > 100 ? '...' : ''}\n\n`;
+             }
+        } else {
+             pulse += `Last Stage: ${stageMessage}\n\n`;
         }
+
       }
 
       pulse += `--- Scenario Agents (${totalScenarios} Total: ${totalScenarios - reportedScenarios} Running, ${reportedScenarios} Reported) ---\n\n`;
@@ -343,29 +392,13 @@ server.tool(
   }
 );
 
-// Helper to find session directory
-async function findSessionDir(sessionId: string): Promise<string | null> {
-  const memoryBank = join(DEEBO_ROOT, 'memory-bank');
-  const projects = await readdir(memoryBank);
-  
-  for (const project of projects) {
-    const sessionPath = join(memoryBank, project, 'sessions', sessionId);
-    try {
-      await access(sessionPath);
-      return sessionPath;
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
 server.tool(
   "cancel",
+  "Cancels a running debug session",
   {
     sessionId: z.string()
   },
-  async ({ sessionId }) => {
+  async ({ sessionId }, extra) => {
     // No need to sanitize ID when using the registry Map key
     const sessionEntry = processRegistry.get(sessionId);
 
@@ -442,12 +475,13 @@ server.tool(
 // Register add_observation tool
 server.tool(
   "add_observation",
+  "Adds an observation to the session log",
   {
     agentId: z.string(),
     observation: z.string(),
     sessionId: z.string()
   },
-  async ({ agentId, observation, sessionId }) => {
+  async ({ agentId, observation, sessionId }, extra) => {
     try {
       // Get session directory
       const sessionDir = await findSessionDir(sessionId);
