@@ -100,6 +100,7 @@ The memory bank allows Deebo to learn from its mistakes and personalize to your 
 Before you begin, ensure you have the following installed on your system:
 - **Git**: Required for cloning the repository.
 - **Node.js**: Version 18 or higher is recommended. This includes `npm`, which is needed for installing dependencies. You can download Node.js from [nodejs.org](https://nodejs.org/).
+- docs.txt in the root of this repository can be very helpful to paste into an LLM to ask for guidance when installing deebo
 
 ### 1. Clone the Repository
 
