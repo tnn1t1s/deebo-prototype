@@ -160,50 +160,42 @@ Add the Deebo server configuration to your MCP client's settings file.
     *   **Cline (VS Code Extension):** `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` (macOS), `~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` (Linux), `%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json` (Windows)
     *   **Claude Desktop:** `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS), `~/.config/Claude/claude_desktop_config.json` (Linux), `%APPDATA%\Claude\claude_desktop_config.json` (Windows)
 
-Add the following entry to the `mcpServers` object within that JSON file:
+Add the following entry to the `mcpServers` object within that JSON file. Remember to replace placeholder values like `/absolute/path/to/...` and API keys with your actual information.
 
 ```json
 {
   "mcpServers": {
-    // ... other servers might be here ...
-
-    "deebo-prototype": { // You can rename this key if desired, e.g., "deebo"
+    "deebo-prototype": {
       "autoApprove": [],
       "disabled": false,
-      "timeout": 30, // Default timeout for MCP calls to Deebo
+      "timeout": 30,
       "command": "node",
       "args": [
         "--experimental-specifier-resolution=node",
         "--experimental-modules",
         "--max-old-space-size=4096",
-        // IMPORTANT: Replace this with the ACTUAL absolute path to the built index.js
         "/absolute/path/to/deebo-prototype/build/index.js"
-        // Tip: Navigate to the 'deebo-prototype' directory in your terminal and run `pwd` to find the path prefix.
       ],
       "env": {
-       "NODE_ENV": "development", // Or "production"
-        "USE_MEMORY_BANK": "true", // Set to "false" to disable memory bank logging
+        "NODE_ENV": "development",
+        "USE_MEMORY_BANK": "true",
 
-        // --- Configure LLM Providers ---
-        // Choose the host ('openrouter', 'gemini', or 'anthropic') and model for each agent type.
         "MOTHER_HOST": "gemini",
-        "MOTHER_MODEL": "gemini-1.5-pro-latest", // Example model
+        "MOTHER_MODEL": "gemini-2.5-pro-preview-03-25",
 
         "SCENARIO_HOST": "anthropic",
-        "SCENARIO_MODEL": "claude-3-5-sonnet-20240620", // Example model
-
-        // --- API Keys ---
-        // IMPORTANT: Provide ONLY the API key(s) corresponding to the MOTHER_HOST and SCENARIO_HOST you selected above.
-        // Keys for unused providers can be omitted or left empty.
-        "OPENROUTER_API_KEY": "sk-or-v1-...", // Required if using 'openrouter'
-        "GEMINI_API_KEY": "AIzaSy...",       // Required if using 'gemini'
-        "ANTHROPIC_API_KEY": "sk-ant-..."     // Required if using 'anthropic'
+        "SCENARIO_MODEL": "claude-3-5-sonnet-20241022",
+        
+        "OPENROUTER_API_KEY": "sk-or-v1-...",
+        "GEMINI_API_KEY": "AIzaSy...",
+        "ANTHROPIC_API_KEY": "sk-ant-..."
       },
       "transportType": "stdio"
     }
   }
 }
 ```
+**Note:** Only provide the API key(s) corresponding to the `MOTHER_HOST` and `SCENARIO_HOST` you selected. Keys for unused providers can be omitted or left empty.
 
 **Important:** Restart your MCP client (Cline, Claude Desktop, etc.) after modifying the configuration file for the changes to take effect.
 
