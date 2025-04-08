@@ -160,6 +160,12 @@ Add the Deebo server configuration to your MCP client's settings file.
     *   **Cline (VS Code Extension):** `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` (macOS), `~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` (Linux), `%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json` (Windows)
     *   **Claude Desktop:** `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS), `~/.config/Claude/claude_desktop_config.json` (Linux), `%APPDATA%\Claude\claude_desktop_config.json` (Windows)
 
+    Note: you can definitely just edit Cline or Claude MCP settings through the GUI to add deebo. 
+    
+    Claude --> settings --> developer --> edit config
+
+    Cline --> hamburger menu in top right --> installed --> 'configure MCP servers'
+
 Add the following entry to the `mcpServers` object within that JSON file. Remember to replace placeholder values like `/absolute/path/to/...` and API keys with your actual information.
 
 ```json
@@ -185,7 +191,7 @@ Add the following entry to the `mcpServers` object within that JSON file. Rememb
 
         "SCENARIO_HOST": "anthropic",
         "SCENARIO_MODEL": "claude-3-5-sonnet-20241022",
-        
+
         "OPENROUTER_API_KEY": "sk-or-v1-...",
         "GEMINI_API_KEY": "AIzaSy...",
         "ANTHROPIC_API_KEY": "sk-ant-..."
