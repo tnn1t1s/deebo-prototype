@@ -294,6 +294,76 @@ I was thinking like a traditional programmer trying to add "smart" rules, comple
 Would you like me to explain what specific assumptions led me to this flawed thinking?
 
 
+=== notes/memory.txt ===
+
+
+✅ Deebo Memory Bank: Ground Truth
+
+📁 Layout
+
+memory-bank/<project-id>/
+├── activeContext.md      // writable scratchpad for Mother only
+├── progress.md           // updated by Mother at END of session
+└── sessions/
+    └── <session-id>/
+        ├── scenario-01-report.md
+        ├── scenario-02-report.md
+        └── ...
+
+the activeContext.md is like Mother's working memory/journal that helps her create increasingly well-informed scenario agents as the investigation progresses. She can learn from and build upon previous hypotheses and scenario results.
+progress.md is like the long-term state of the repo. like a growing reference doc
+⸻
+
+🤖 Scenario Agent Behavior
+	•	Stateless.
+	•	Does not know or care about the memory bank.
+	•	Just prints to stdout.
+	•	The system infra (like writeReport() or logger plumbing) captures this and dumps it into the session folder under memory-bank.
+
+Important: writeReport() is a utility that happens to write to memory-bank paths. The agent never references memory-bank directly. It just formats its output and logs it.
+
+⸻
+
+👩‍🍼 Mother Agent Behavior
+	•	Optionally informed of the memory bank (useMemoryBank).
+	•	Only mandatory behavior: append to progress.md at session end.
+	•	Can optionally read/write activeContext.md during OODA loop.
+	•	Never required to consult memory-bank during planning. It’s just available.
+
+⸻
+
+✳️ Clarifications
+	•	scenario-agent.ts is not “aware” of memory-bank — it does not contain paths or logic for it. It uses writeReport() as a dumb output function.
+	•	This means memory write is a side effect of infrastructure — not agent intent.
+	•	That’s what keeps agents stateless and composable.
+
+⸻
+
+
+
+
+=== config/tools.json ===
+{
+  "tools": {
+    "desktopCommander": {
+      "command": "npx",
+      "args": [
+        "@wonderwhy-er/desktop-commander"
+      ]
+    },
+    "git-mcp": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-git",
+        "--repository",
+        "{repoPath}"
+      ]
+    }
+  }
+}
+
+
+
 === src/index.ts ===
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -305,10 +375,17 @@ import { fileURLToPath } from 'url';
 import { runMotherAgent } from './mother-agent.js';
 import { getProjectId } from './util/sanitize.js';
 import { writeObservation } from './util/observations.js';
-import { exec, spawn } from 'child_process';
+import { exec, spawn, ChildProcess } from 'child_process';
 import { promisify } from 'util';
 
 const execPromise = promisify(exec);
+
+// Registry to track active sessions and their associated processes/controllers
+const processRegistry = new Map<string, {
+  motherController: AbortController;
+  scenarioPids: Set<number>; // Store PIDs of spawned scenario agents
+}>();
+// Removed duplicate declaration below
 
 
 // Load environment variables from .env file
@@ -355,15 +432,39 @@ server.tool(
     const sessionId = `session-${Date.now()}`;
     await mkdir(join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'logs'), { recursive: true });
     await mkdir(join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'reports'), { recursive: true });
-    // Run mother agent in background
+
+    // Create controller and PID set for this session
+    const motherController = new AbortController();
+    const scenarioPids = new Set<number>();
+
+    // Register the session
+    processRegistry.set(sessionId, {
+      motherController,
+      scenarioPids
+    });
+    // console.log(`Registered session ${sessionId}`); // Removed informational log
+
+    // Run mother agent in background, passing the signal and PID set
+    // Note: runMotherAgent signature needs to be updated in mother-agent.ts to accept these
     runMotherAgent(
       sessionId,
       error,
       context ?? "",
       language ?? "typescript",
       filePath ?? "",
-      repoPath
-    ).catch(err => console.error('Debug session failed:', err));
+      repoPath,
+      motherController.signal, // Pass the signal
+      scenarioPids // Pass the Set for tracking scenario PIDs
+    ).catch(err => {
+      console.error(`Debug session ${sessionId} failed during execution:`, err);
+      // Clean up registry if mother agent fails during execution
+      processRegistry.delete(sessionId);
+    }).finally(() => {
+      // Optional: Could also remove from registry on normal completion,
+      // but cancel needs to handle the case where it's still running.
+      // For now, only removing on error/cancel.
+      // console.log(`Mother agent promise settled for session ${sessionId}.`); // Removed internal log
+    });
 
     // Return session ID immediately
     return {
@@ -632,116 +733,112 @@ server.tool(
     sessionId: z.string()
   },
   async ({ sessionId }) => {
-    // Sanitize sessionId for shell
-    const sanitizedId = sessionId.replace(/[^a-zA-Z0-9-]/g, '');
-    
+    // No need to sanitize ID when using the registry Map key
+    const sessionEntry = processRegistry.get(sessionId);
+
+    if (!sessionEntry) {
+      return {
+        content: [{
+          type: "text",
+          text: `Session ${sessionId} not found in registry. It might have already completed or failed.`
+        }]
+      };
+    }
+
+    const { motherController, scenarioPids } = sessionEntry;
+    let killedScenarios = 0;
+    let failedKills = 0;
+
     try {
-      // First attempt: SIGTERM to all processes in session tree
-      const { stdout: pids } = await execPromise(`pgrep -f ${sanitizedId}`);
-      const pidList = pids.split('\n').filter(Boolean);
-      
-      for (const pid of pidList) {
+      // 1. Signal the Mother agent to stop its loop cooperatively
+      // console.log(`Signaling Mother Agent for session ${sessionId} to stop.`); // Removed informational log
+      motherController.abort();
+
+      // 2. Terminate any tracked Scenario agent processes
+      // console.log(`Terminating ${scenarioPids.size} tracked Scenario Agents for session ${sessionId}.`); // Removed informational log
+      for (const pid of scenarioPids) {
         try {
-          // Kill process and all its children
-          await execPromise(`pkill -15 -P ${pid}`);
-          process.kill(Number(pid), 'SIGTERM');
-        } catch (err) {
-          // Ignore errors - process might be gone
-        }
-      }
-
-      // Wait a moment for graceful shutdown
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      // Check if any processes survived
-      const { stdout: survivors } = await execPromise(`pgrep -f ${sanitizedId}`);
-      const survivorList = survivors.split('\n').filter(Boolean);
-
-      if (survivorList.length > 0) {
-        // Force kill survivors with SIGKILL
-        for (const pid of survivorList) {
-          try {
-            await execPromise(`pkill -9 -P ${pid}`);
-            process.kill(Number(pid), 'SIGKILL');
-          } catch (err) {
-            // Ignore errors
+          // Use SIGTERM first for graceful shutdown
+          process.kill(pid, 'SIGTERM');
+          killedScenarios++;
+          // console.log(`Sent SIGTERM to scenario PID ${pid}`); // Removed informational log
+        } catch (err: any) {
+          // Ignore errors if process is already gone (e.g., ESRCH)
+          if (err.code !== 'ESRCH') {
+            // console.warn(`Failed to send SIGTERM to scenario PID ${pid}: ${err.message}`); // Removed console.warn
+            failedKills++;
+          } else {
+            // Process already gone
           }
         }
       }
 
-      // Final check
-      const { stdout: final } = await execPromise(`pgrep -f ${sanitizedId}`);
-      const finalList = final.split('\n').filter(Boolean);
+      // Optional: Add a short delay and SIGKILL survivors if needed.
+      // For simplicity, we'll rely on SIGTERM for now.
 
-      if (finalList.length > 0) {
+      // 3. Clean up the registry entry *after* attempting kills
+      processRegistry.delete(sessionId);
+      // console.log(`Removed session ${sessionId} from process registry.`); // Removed informational log
+
+      return {
+          content: [{
+            type: "text",
+            text: `Cancellation request sent for session ${sessionId}:\n` +
+                  `- Mother agent signaled to stop.\n` +
+                  `- Targeted ${killedScenarios} scenario processes (includes already exited).\n` +
+                  `- ${failedKills} termination signals failed (excluding already exited).`
+          }]
+        };
+
+      } catch (err: any) {
+        // Handle potential errors during the cancellation process itself
+        const errorMessage = err.message || String(err);
+        // console.error(`Error during cancellation for session ${sessionId}: ${errorMessage}`); // Removed console.error
+        // Attempt to clean up registry even if cancellation had issues
+        processRegistry.delete(sessionId); // Ensure cleanup
         return {
           content: [{
             type: "text",
-            text: `WARNING: ${finalList.length} processes survived cancellation. Session may need manual cleanup.`
+            text: `Error during cancellation for session ${sessionId}: ${errorMessage}. Registry entry removed.`
           }]
         };
       }
-
-      return {
-        content: [{
-          type: "text",
-          text: `Successfully terminated all processes for session ${sanitizedId}`
-        }]
-      };
-
-    } catch (err) {
-      return {
-        content: [{
-          type: "text",
-          text: `Error during cancellation: ${err}. Session may need manual cleanup.`
-        }]
-      };
     }
-  }
-);
+  );
 
 // Register add_observation tool
 server.tool(
   "add_observation",
   {
     agentId: z.string(),
-    observation: z.string()
+    observation: z.string(),
+    sessionId: z.string()
   },
-  async ({ agentId, observation }) => {
+  async ({ agentId, observation, sessionId }) => {
     try {
-      // Find the active session
-      const memoryBank = join(DEEBO_ROOT, 'memory-bank');
-      const projects = await readdir(memoryBank);
-      
-      let sessionId = null;
-      let repoPath = null;
-      for (const project of projects) {
-        const sessionsDir = join(memoryBank, project, 'sessions');
-        const sessions = await readdir(sessionsDir);
-        // Look for most recent session
-        const sortedSessions = sessions.sort().reverse();
-        if (sortedSessions.length > 0) {
-          sessionId = sortedSessions[0];
-          // Get repoPath from agent log
-          const logFile = join(sessionsDir, sessionId, 'logs', `${agentId}.log`);
-          const agentLog = await readFile(logFile, 'utf8');
-          const firstLine = agentLog.split('\n')[0];
-          const firstEvent = JSON.parse(firstLine);
-          repoPath = firstEvent.data?.repoPath;
-          break;
-        }
+      // Get session directory
+      const sessionDir = await findSessionDir(sessionId);
+      if (!sessionDir) {
+        throw new Error('Session not found');
       }
 
-      if (!sessionId || !repoPath) {
-        throw new Error('No active session found');
+      // Get repoPath from agent log
+      const logFile = join(sessionDir, 'logs', `${agentId}.log`);
+      const agentLog = await readFile(logFile, 'utf8');
+      const firstLine = agentLog.split('\n')[0];
+      const firstEvent = JSON.parse(firstLine);
+      const repoPath = firstEvent.data?.repoPath;
+
+      if (!repoPath) {
+        throw new Error('Could not find repoPath in agent log');
       }
 
       await writeObservation(repoPath, sessionId, agentId, observation);
-      return { 
-        content: [{ 
-          type: "text", 
-          text: "Observation logged" 
-        }] 
+      return {
+        content: [{
+          type: "text",
+          text: "Observation logged"
+        }]
       };
     } catch (err) {
       throw new Error(`Observation write failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -787,10 +884,19 @@ const useMemoryBank = process.env.USE_MEMORY_BANK === 'true';
 // Removed safeAssistantMessage function as it's no longer needed with callLlm
 
 // Mother agent main loop
-export async function runMotherAgent(sessionId: string, error: string, context: string, language: string, filePath: string, repoPath: string) {
+export async function runMotherAgent(
+  sessionId: string,
+  error: string,
+  context: string,
+  language: string,
+  filePath: string,
+  repoPath: string,
+  signal: AbortSignal, // Added: Cancellation signal
+  scenarioPids: Set<number> // Added: Set to track scenario PIDs
+) {
   await log(sessionId, 'mother', 'info', 'Mother agent started', { repoPath });
   const projectId = getProjectId(repoPath);
-  const activeScenarios = new Set<string>();
+  let scenarioCounter = 0; // Simple counter for unique scenario IDs within the session
   const startTime = Date.now();
   const memoryBankPath = join(DEEBO_ROOT, 'memory-bank', projectId);
   let lastObservationCheck = 0;
@@ -801,19 +907,19 @@ export async function runMotherAgent(sessionId: string, error: string, context: 
     const { gitClient, filesystemClient } = await connectRequiredTools('mother', sessionId, repoPath);
 
     // Read LLM configuration from environment variables
-    const llmProvider = process.env.LLM_PROVIDER;
+    const motherProvider = process.env.MOTHER_HOST; // Read provider name from MOTHER_HOST
     const motherModel = process.env.MOTHER_MODEL;
-    const openrouterApiKey = process.env.OPENROUTER_API_KEY;
+    const openrouterApiKey = process.env.OPENROUTER_API_KEY; // Still needed if provider is 'openrouter'
     const geminiApiKey = process.env.GEMINI_API_KEY;
     const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-    const motherHost = process.env.MOTHER_HOST; // Used as baseURL for OpenRouter
+    // const motherHost = process.env.MOTHER_HOST; // No longer needed as separate URL
 
     // Create the config object to pass to callLlm
     const llmConfig = {
-      provider: llmProvider,
+      provider: motherProvider, // Use the provider name from MOTHER_HOST
       model: motherModel,
-      apiKey: openrouterApiKey, // Pass the OpenRouter key specifically
-      baseURL: motherHost,      // Pass the host/baseURL for OpenRouter
+      apiKey: openrouterApiKey, // Pass the OpenRouter key (used only if provider is 'openrouter')
+      // baseURL: motherHost, // Removed - OpenRouter URL is hardcoded in callLlm
       geminiApiKey: geminiApiKey,
       anthropicApiKey: anthropicApiKey
     };
@@ -1178,10 +1284,17 @@ IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for p
     // ORIENT: Begin investigation loop
     await log(sessionId, 'mother', 'info', 'OODA: orient', { repoPath });
 
-    // Loop while the last reply exists and doesn't contain the solution tag
-    while (replyText && !replyText.includes('<solution>')) {
+    // Loop while the last reply exists, doesn't contain the solution tag, AND cancellation hasn't been requested
+    while (replyText && !replyText.includes('<solution>') && !signal.aborted) { // Check signal in loop condition
       if (Date.now() - startTime > MAX_RUNTIME) {
+        await log(sessionId, 'mother', 'warn', 'Investigation exceeded maximum runtime', { repoPath });
         throw new Error('Investigation exceeded maximum runtime');
+      }
+
+      // Check for cancellation signal before processing response
+      if (signal.aborted) {
+        await log(sessionId, 'mother', 'info', 'Cancellation signal received, stopping loop.', { repoPath });
+        break; // Exit loop if cancelled
       }
 
       // The assistant's response (replyText) is already added to messages before the loop starts and after each LLM call inside the loop.
@@ -1250,13 +1363,13 @@ ${responseText}
 `, 'activeContext');
         }
 
-        const scenarioOutputs = await Promise.all(hypotheses.map(async (hypothesis: string) => {
-          const scenarioId = `${sessionId}-${activeScenarios.size}`;
-          if (activeScenarios.has(scenarioId)) return '';
-          activeScenarios.add(scenarioId);
-          await new Promise(resolve => setTimeout(resolve, 100));
-          const branchName = await createScenarioBranch(repoPath, sessionId);
-          const child = spawn('node', [
+        const scenarioPromises = hypotheses.map(async (hypothesis: string) => {
+          const scenarioId = `${sessionId}-${scenarioCounter++}`; // Use counter for unique ID
+
+          await new Promise(resolve => setTimeout(resolve, 100)); // Small delay
+          const branchName = await createScenarioBranch(repoPath, sessionId); // Branch name generation
+
+          const scenarioArgs = [ // Define args for spawn
             join(DEEBO_ROOT, 'build/scenario-agent.js'),
             '--id', scenarioId,
             '--session', sessionId,
@@ -1266,27 +1379,47 @@ ${responseText}
             '--language', language,
             '--file', filePath || '',
             '--repo', repoPath,
-            '--branch', branchName // Add branch name to args
-          ]);
+            '--branch', branchName
+          ];
 
+          const child = spawn('node', scenarioArgs); // Spawn the process
           let output = '';
-            child.stdout.on('data', data => output += data);
-            child.stderr.on('data', data => output += data);
 
-            // Wait for process exit OR timeout
-            return new Promise<string>((resolve) => {
-              let resolved = false; // Prevent double resolution
+          // Track the PID in the shared Set
+          if (child.pid) {
+            scenarioPids.add(child.pid);
+            await log(sessionId, 'mother', 'info', `Spawned Scenario ${scenarioId} with PID ${child.pid}`, { repoPath, hypothesis, args: scenarioArgs });
+          } else {
+             await log(sessionId, 'mother', 'warn', `Spawned Scenario ${scenarioId} but PID was unavailable`, { repoPath, hypothesis, args: scenarioArgs });
+          }
 
-              // Resolve when the process exits
-              child.on('exit', (code, signal) => { // Added comma
+          child.stdout.on('data', data => output += data);
+          child.stderr.on('data', data => output += data);
+
+          // Wait for process exit OR timeout
+          return new Promise<string>((resolve) => {
+              let resolved = false;
+              const scenarioPid = child.pid; // Capture PID for cleanup logic
+
+              // Function to handle cleanup and resolution
+              const cleanupAndResolve = (exitInfo: string) => {
                 if (resolved) return;
                 resolved = true;
-                output += `\nScenario exited with code ${code}, signal ${signal}`;
+                if (scenarioPid) {
+                  scenarioPids.delete(scenarioPid); // Remove PID from registry
+                  log(sessionId, 'mother', 'debug', `Removed scenario PID ${scenarioPid} from registry`, { repoPath });
+                }
+                output += `\n${exitInfo}`;
                 resolve(output);
+              };
+
+              // Handle process exit
+              child.on('exit', (code, signal) => {
+                cleanupAndResolve(`Scenario ${scenarioId} (PID: ${scenarioPid}) exited with code ${code}, signal ${signal}`);
               });
 
-              // Capture process-level errors (also resolves)
-              child.on('error', err => { // Added comma
+              // Handle process spawn errors
+              child.on('error', err => {
                 if (resolved) return;
                 resolved = true;
                 output += `\nProcess spawn error: ${err}`;
@@ -1297,19 +1430,24 @@ ${responseText}
               child.stdout.on('error', err => { output += `\nStdout error: ${err}`; });
               child.stderr.on('error', err => { output += `\nStderr error: ${err}`; });
 
-              // Global safety timeout (resolves if exit/error didn't happen)
-              setTimeout(() => {
-                if (!resolved) {
-                  resolved = true;
-                  output += '\nScenario timeout';
-                  child.kill(); // Force kill
-                  resolve(output); // Resolve after timeout
-                }
+              // Set a timeout for the scenario
+              const timeoutHandle = setTimeout(() => {
+                 if (!resolved) {
+                    child.kill(); // Force kill the scenario on timeout
+                    cleanupAndResolve(`Scenario ${scenarioId} (PID: ${scenarioPid}) timed out after ${SCENARIO_TIMEOUT / 1000}s`);
+                 }
               }, SCENARIO_TIMEOUT);
-            });
-        }));
 
-        messages.push({ role: 'user', content: scenarioOutputs.join('\n') });
+              // Clear timeout if process exits or errors first
+              child.on('exit', () => clearTimeout(timeoutHandle));
+              child.on('error', () => clearTimeout(timeoutHandle));
+            });
+        });
+
+        // Wait for all spawned scenarios for this turn to complete
+        const scenarioOutputs = await Promise.all(scenarioPromises);
+
+        messages.push({ role: 'user', content: scenarioOutputs.join('\n\n---\n\n') }); // Add separator for readability
       }
 
       // Mother can optionally edit memory bank directly via filesystem-mcp. No forced writes.
@@ -1323,6 +1461,12 @@ ${responseText}
           content: `Scientific observation: ${obs}`
         })));
         observations = newObservations; // Update the baseline observation list
+      }
+
+      // Check for cancellation signal again before the next LLM call
+      if (signal.aborted) {
+        await log(sessionId, 'mother', 'info', 'Cancellation signal received before next LLM call.', { repoPath });
+        break; // Exit loop if cancelled
       }
 
       // Make next LLM call using the new utility function with config
@@ -1341,29 +1485,58 @@ ${responseText}
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
-    // Structured record at the end (using last replyText)
-    const finalContent = replyText || 'LLM returned empty or broken reply';
+    // Determine final status based on whether loop was aborted or completed naturally
+    let finalStatusMessage: string;
+    if (signal.aborted) {
+      finalStatusMessage = 'Session cancelled by user request.';
+      await log(sessionId, 'mother', 'info', finalStatusMessage, { repoPath });
+    } else if (replyText?.includes('<solution>')) {
+      finalStatusMessage = 'Solution found or investigation concluded.';
+      await log(sessionId, 'mother', 'info', finalStatusMessage, { repoPath });
+    } else {
+      finalStatusMessage = 'Loop terminated unexpectedly (e.g., LLM error).';
+       await log(sessionId, 'mother', 'warn', finalStatusMessage, { repoPath });
+    }
+
+    const finalContent = replyText || finalStatusMessage; // Use last reply or status message
+
+    // Structured record at the end
     if (useMemoryBank) {
       await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - ${new Date().toISOString()}
-${error ? `Error: ${error}` : ''}
-${finalContent}
-Scenarios Run: ${activeScenarios.size}
+${error ? `Initial Error: ${error}` : ''}
+Final Status: ${finalStatusMessage}
+${finalContent.includes('<solution>') ? finalContent : `Last Response/Status: ${finalContent}`}
+Scenarios Spawned: ${scenarioCounter}
 Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress');
     }
-    await log(sessionId, 'mother', 'info', 'solution found', { repoPath });
-    return finalContent;
+
+    return finalContent; // Return the last reply or status
 
   } catch (err) {
     const caughtError = err instanceof Error ? err : new Error(String(err));
-    await log(sessionId, 'mother', 'error', `Failed: ${caughtError.message}`, { repoPath });
-    if (useMemoryBank) {
-      await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - ${new Date().toISOString()}
-  ${caughtError ? `Error: ${String(caughtError)}` : ''}
-  Failed: ${caughtError.message}
-  Scenarios Run: ${activeScenarios.size}
-  Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress');
-    }
-    throw caughtError;
+    // Check if the error was due to cancellation signal during an operation
+     if (signal.aborted) {
+       await log(sessionId, 'mother', 'info', `Operation aborted during execution: ${caughtError.message}`, { repoPath });
+       // Optionally update progress log for aborted state
+       if (useMemoryBank) {
+         await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - ABORTED - ${new Date().toISOString()}\nError during abort: ${caughtError.message}`, 'progress');
+       }
+       return 'Session cancelled during operation.'; // Return specific cancellation message
+     } else {
+       // Log and record other errors
+       await log(sessionId, 'mother', 'error', `Failed: ${caughtError.message}`, { repoPath, stack: caughtError.stack });
+       if (useMemoryBank) {
+         await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - FAILED - ${new Date().toISOString()}\nError: ${caughtError.message}\nStack: ${caughtError.stack}`, 'progress');
+       }
+       throw caughtError; // Re-throw unexpected errors
+     }
+  } finally {
+     // Ensure any remaining scenario PIDs are cleaned up if the mother agent exits unexpectedly
+     // (though the 'exit' handler should cover most cases)
+     if (scenarioPids.size > 0) {
+       await log(sessionId, 'mother', 'warn', `Mother agent exiting with ${scenarioPids.size} scenario PIDs still in registry.`, { pids: Array.from(scenarioPids) });
+       // Optionally attempt to kill them here, though 'cancel' is the primary mechanism
+     }
   }
 }
 
@@ -1385,8 +1558,8 @@ interface LlmConfig {
   provider?: string;
   model?: string;
   maxTokens?: number;
-  apiKey?: string; 
-  baseURL?: string; 
+  apiKey?: string; // Generic key, specific keys passed within (used for OpenRouter)
+  // baseURL?: string; // Removed - OpenRouter URL is hardcoded in agent-utils
   geminiApiKey?: string;
   anthropicApiKey?: string;
 }
@@ -1765,19 +1938,19 @@ Hypothesis: ${args.hypothesis}`
     }
 
     // Read LLM configuration from environment variables
-    const llmProvider = process.env.LLM_PROVIDER;
+    const scenarioProvider = process.env.SCENARIO_HOST; // Read provider name from SCENARIO_HOST
     const scenarioModel = process.env.SCENARIO_MODEL;
-    const openrouterApiKey = process.env.OPENROUTER_API_KEY;
+    const openrouterApiKey = process.env.OPENROUTER_API_KEY; // Still needed if provider is 'openrouter'
     const geminiApiKey = process.env.GEMINI_API_KEY;
     const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-    const scenarioHost = process.env.SCENARIO_HOST; // Used as baseURL for OpenRouter
+    // const scenarioHost = process.env.SCENARIO_HOST; // No longer needed as separate URL
 
     // Create the config object to pass to callLlm
     const llmConfig: LlmConfig = {
-      provider: llmProvider,
+      provider: scenarioProvider, // Use the provider name from SCENARIO_HOST
       model: scenarioModel,
-      apiKey: openrouterApiKey, // Pass the OpenRouter key specifically
-      baseURL: scenarioHost,    // Pass the host/baseURL for OpenRouter
+      apiKey: openrouterApiKey, // Pass the OpenRouter key (used only if provider is 'openrouter')
+      // baseURL: scenarioHost, // Removed - OpenRouter URL is hardcoded in agent-utils
       geminiApiKey: geminiApiKey,
       anthropicApiKey: anthropicApiKey
     };
@@ -2125,73 +2298,98 @@ export async function createScenarioBranch(repoPath: string, sessionId: string):
 
 
 
-=== config/tools.json ===
-{
-  "tools": {
-    "desktopCommander": {
-      "command": "npx",
-      "args": [
-        "@wonderwhy-er/desktop-commander"
-      ]
-    },
-    "git-mcp": {
-      "command": "uvx",
-      "args": [
-        "mcp-server-git",
-        "--repository",
-        "{repoPath}"
-      ]
-    }
-  }
+=== src/util/agent-utils.ts ===
+import { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
+import { GoogleGenerativeAI, Content, Part } from "@google/generative-ai";
+import Anthropic from "@anthropic-ai/sdk"; // Import the default export
+import { MessageParam } from "@anthropic-ai/sdk/resources/messages.mjs"; // Import the specific type
+import OpenAI from "openai";
+import { ChatModel } from 'openai/resources';
+
+// Define an interface for the configuration passed from agents
+interface LlmConfig {
+  provider?: string;
+  model?: string;
+  maxTokens?: number;
+  apiKey?: string; // Generic key, specific keys passed within (used for OpenRouter)
+  // baseURL?: string; // Removed - OpenRouter URL will be hardcoded
+  geminiApiKey?: string;
+  anthropicApiKey?: string;
 }
 
+export async function callLlm(
+  messages: ChatCompletionMessageParam[],
+  config: LlmConfig
+): Promise<string> {
+  const {
+    provider,
+    model,
+    maxTokens = 4096,
+    apiKey, // Keep generic apiKey for OpenRouter case
+    // baseURL, // Removed
+    geminiApiKey,
+    anthropicApiKey
+  } = config;
 
+  const lowerCaseProvider = provider?.toLowerCase();
 
-=== notes/memory.txt ===
+  if (lowerCaseProvider === 'openrouter') {
+    if (!apiKey) throw new Error("OpenRouter API key is required for 'openrouter' provider.");
+    const openai = new OpenAI({
+      apiKey: apiKey,
+      baseURL: 'https://openrouter.ai/api/v1', // Hardcoded OpenRouter URL
+    });
+    const completion = await openai.chat.completions.create({
+      model: (model || 'openai/gpt-4o') as ChatModel, // Use provided model or default
+      max_tokens: maxTokens,
+      messages
+    });
+    return completion.choices?.[0]?.message?.content || '';
+  }
 
+  if (lowerCaseProvider === 'gemini') {
+    if (!geminiApiKey) throw new Error("Gemini API key is required for 'gemini' provider.");
+    const gemini = new GoogleGenerativeAI(geminiApiKey);
+    const model_name = model || 'gemini-1.5-pro'; // Use provided model or default
+    const genModel = gemini.getGenerativeModel({ model: model_name });
 
-✅ Deebo Memory Bank: Ground Truth
+    // Correctly map messages to Gemini's Content[] format
+    const geminiHistory: Content[] = messages.map(m => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content as string }] as Part[] // Ensure parts is an array of Part
+    }));
 
-📁 Layout
+    const result = await genModel.generateContent({
+      contents: geminiHistory,
+      generationConfig: {
+        maxOutputTokens: maxTokens
+      }
+    });
+    const response = await result.response;
+    return response.text() || '';
+  }
 
-memory-bank/<project-id>/
-├── activeContext.md      // writable scratchpad for Mother only
-├── progress.md           // updated by Mother at END of session
-└── sessions/
-    └── <session-id>/
-        ├── scenario-01-report.md
-        ├── scenario-02-report.md
-        └── ...
+  if (lowerCaseProvider === 'anthropic') {
+    if (!anthropicApiKey) throw new Error("Anthropic API key is required for 'anthropic' provider.");
+    const anthropic = new Anthropic({ apiKey: anthropicApiKey });
+    // Correctly map messages to Anthropic's MessageParam[] format with explicit roles
+    const anthropicMessages: MessageParam[] = messages.map(m => ({
+      role: (m.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
+      content: m.content as string
+    }));
 
-the activeContext.md is like Mother's working memory/journal that helps her create increasingly well-informed scenario agents as the investigation progresses. She can learn from and build upon previous hypotheses and scenario results.
-progress.md is like the long-term state of the repo. like a growing reference doc
-⸻
+    const raw = await anthropic.messages.create({
+      model: (model || 'claude-3-sonnet-20240229') as any, // Use provided model or default
+      max_tokens: maxTokens,
+      messages: anthropicMessages,
+    });
+    // Check if the first content block is a TextBlock before accessing text
+    const firstContent = raw.content[0];
+    return firstContent && firstContent.type === 'text' ? firstContent.text : '';
+  }
 
-🤖 Scenario Agent Behavior
-	•	Stateless.
-	•	Does not know or care about the memory bank.
-	•	Just prints to stdout.
-	•	The system infra (like writeReport() or logger plumbing) captures this and dumps it into the session folder under memory-bank.
-
-Important: writeReport() is a utility that happens to write to memory-bank paths. The agent never references memory-bank directly. It just formats its output and logs it.
-
-⸻
-
-👩‍🍼 Mother Agent Behavior
-	•	Optionally informed of the memory bank (useMemoryBank).
-	•	Only mandatory behavior: append to progress.md at session end.
-	•	Can optionally read/write activeContext.md during OODA loop.
-	•	Never required to consult memory-bank during planning. It’s just available.
-
-⸻
-
-✳️ Clarifications
-	•	scenario-agent.ts is not “aware” of memory-bank — it does not contain paths or logic for it. It uses writeReport() as a dumb output function.
-	•	This means memory write is a side effect of infrastructure — not agent intent.
-	•	That’s what keeps agents stateless and composable.
-
-⸻
-
+  throw new Error(`Unsupported provider '${lowerCaseProvider}'. Set LLM_PROVIDER env var to 'openrouter', 'gemini', or 'anthropic'`);
+}
 
 
 

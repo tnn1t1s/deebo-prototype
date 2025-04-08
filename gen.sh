@@ -6,6 +6,8 @@ OUTPUT_FILE="core-files.txt"
 # Core files to concatenate
 FILES=(
   "notes/RULES.TXT"
+  "notes/memory.txt"
+  "config/tools.json"
   "src/index.ts"
   "src/mother-agent.ts"
   "src/scenario-agent.ts"
@@ -17,8 +19,6 @@ FILES=(
   "src/util/observations.ts"
   "src/util/branch-manager.ts"
   "src/util/agent-utils.ts"
-  "config/tools.json"
-  "notes/memory.txt"
 )
 
 # Clear the output file if it exists

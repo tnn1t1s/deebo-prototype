@@ -95,6 +95,12 @@ The memory bank allows Deebo to learn from its mistakes and personalize to your 
 
 ## 📦 Installation
 
+### Prerequisites
+
+Before you begin, ensure you have the following installed on your system:
+- **Git**: Required for cloning the repository.
+- **Node.js**: Version 18 or higher is recommended. This includes `npm`, which is needed for installing dependencies. You can download Node.js from [nodejs.org](https://nodejs.org/).
+
 ### 1. Clone the Repository
 
 ```bash
@@ -104,14 +110,42 @@ cd deebo-prototype
 
 ### 2. Install Required MCP Tools
 
+Deebo relies on other MCP servers for interacting with Git and the filesystem.
+
+**a) Install `uv` (includes `uvx`)**
+
+`uv` is a fast Python package installer and resolver. We recommend installing it using the official script or `pipx`:
+
+*   **Using the standalone installer (Recommended for macOS/Linux):**
+    ```bash
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    # Ensure ~/.local/bin is in your PATH (the script usually handles this)
+    ```
+*   **Using `pipx` (Recommended for isolated installation):**
+    ```bash
+    pip install pipx
+    pipx ensurepath
+    pipx install uv
+    ```
+    (See the [uv installation docs](https://github.com/astral-sh/uv#installation) for Windows and other methods.)
+
+**b) Install `mcp-server-git` using `uvx`**
+
 ```bash
-pip install uvx  # or pipx install uvx
 uvx install mcp-server-git
 ```
+(Alternatively, if `uvx` fails, you could try `pip install mcp-server-git`.)
 
-`desktop-commander` runs via `npx` — no install required.
+**c) Setup `desktop-commander`**
 
-### 3. Install and Build
+Deebo uses `desktop-commander` for filesystem operations and running commands. Ensure it's installed and configured as an MCP server for your client (like Cline or Claude Desktop) by running its setup command:
+
+```bash
+npx @wonderwhy-er/desktop-commander@latest setup
+```
+This command installs `desktop-commander` (if needed) and automatically adds its configuration to your MCP client's settings. If you're on Mac though you probably don't even need to install it explicitly, it will just install at runtime from tools/config.json.
+
+### 3. Install Deebo Dependencies and Build
 
 ```bash
 npm install
@@ -120,33 +154,58 @@ npm run build
 
 ### 4. Register Deebo as an MCP Server
 
-Add this to your mcpServers config (e.g., in Cline):
+Add the Deebo server configuration to your MCP client's settings file.
+
+*   **Configuration File Locations (Examples):**
+    *   **Cline (VS Code Extension):** `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` (macOS), `~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` (Linux), `%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json` (Windows)
+    *   **Claude Desktop:** `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS), `~/.config/Claude/claude_desktop_config.json` (Linux), `%APPDATA%\Claude\claude_desktop_config.json` (Windows)
+
+Add the following entry to the `mcpServers` object within that JSON file:
 
 ```json
 {
   "mcpServers": {
-    "deebo": {
+    // ... other servers might be here ...
+
+    "deebo-prototype": { // You can rename this key if desired, e.g., "deebo"
       "autoApprove": [],
       "disabled": false,
-      "timeout": 30,
+      "timeout": 30, // Default timeout for MCP calls to Deebo
       "command": "node",
       "args": [
         "--experimental-specifier-resolution=node",
         "--experimental-modules",
         "--max-old-space-size=4096",
+        // IMPORTANT: Replace this with the ACTUAL absolute path to the built index.js
         "/absolute/path/to/deebo-prototype/build/index.js"
+        // Tip: Navigate to the 'deebo-prototype' directory in your terminal and run `pwd` to find the path prefix.
       ],
       "env": {
-        "OPENROUTER_API_KEY": "your-key",
-        "MOTHER_MODEL": "anthropic/claude-3.5-sonnet",
-        "SCENARIO_MODEL": "anthropic/claude-3.5-sonnet",
-        "USE_MEMORY_BANK": "true"
+       "NODE_ENV": "development", // Or "production"
+        "USE_MEMORY_BANK": "true", // Set to "false" to disable memory bank logging
+
+        // --- Configure LLM Providers ---
+        // Choose the host ('openrouter', 'gemini', or 'anthropic') and model for each agent type.
+        "MOTHER_HOST": "gemini",
+        "MOTHER_MODEL": "gemini-1.5-pro-latest", // Example model
+
+        "SCENARIO_HOST": "anthropic",
+        "SCENARIO_MODEL": "claude-3-5-sonnet-20240620", // Example model
+
+        // --- API Keys ---
+        // IMPORTANT: Provide ONLY the API key(s) corresponding to the MOTHER_HOST and SCENARIO_HOST you selected above.
+        // Keys for unused providers can be omitted or left empty.
+        "OPENROUTER_API_KEY": "sk-or-v1-...", // Required if using 'openrouter'
+        "GEMINI_API_KEY": "AIzaSy...",       // Required if using 'gemini'
+        "ANTHROPIC_API_KEY": "sk-ant-..."     // Required if using 'anthropic'
       },
       "transportType": "stdio"
     }
   }
 }
 ```
+
+**Important:** Restart your MCP client (Cline, Claude Desktop, etc.) after modifying the configuration file for the changes to take effect.
 
 ## 💡 How It Works
 

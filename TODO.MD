@@ -15,10 +15,10 @@ X = implemented, tested, complete (afaik)
 
 These are blocking. They affect correctness, portability, or public usability.
 - [ ] update memory bank literally only controls progress.md LOL at least extend it to all non-logs files
-- make observations tool more clear how to use
-- describe deebo tool usage clearly for llm assistants
-- Use lightweight XML parser (e.g., fast-xml-parser) that tolerates irregularities
-- add readme instructions for windows
+- [ ] make observations tool more clear how to use
+- [ ] describe deebo tool usage clearly for llm assistants
+- [ ] Use lightweight XML parser (e.g., fast-xml-parser) that tolerates irregularities
+- [ ] add readme instructions for windows
 ---
 
 ## ⚙️ PRIORITY 2 – CLEANUP / INFRA REFACTOR
