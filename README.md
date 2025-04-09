@@ -187,11 +187,11 @@ Add the following entry to the `mcpServers` object within that JSON file. Rememb
         "NODE_ENV": "development",
         "USE_MEMORY_BANK": "true",
 
-        "MOTHER_HOST": "gemini",
-        "MOTHER_MODEL": "gemini-2.5-pro-preview-03-25",
+        "MOTHER_HOST": "openrouter",
+        "MOTHER_MODEL": "anthropic/claude-3.5-sonnet",
 
-        "SCENARIO_HOST": "anthropic",
-        "SCENARIO_MODEL": "claude-3-5-sonnet-20241022",
+        "SCENARIO_HOST": "openrouter",
+        "SCENARIO_MODEL": "anthropic/claude-3.5-sonnet",
 
         "OPENROUTER_API_KEY": "sk-or-v1-...",
         "GEMINI_API_KEY": "AIzaSy...",
