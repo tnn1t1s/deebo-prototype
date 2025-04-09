@@ -393,8 +393,8 @@ server.tool(
 );
 
 server.tool(
-  "add_observation",
-  "Adds an external observation to an agent in the debugging session. This allows other tools or human insights to be incorporated into the ongoing investigation. Observations are logged and considered by the agent in subsequent reasoning steps.",
+  "cancel",
+  "Terminates all processes related to a debugging session. This will stop the mother agent and all scenario agents, releasing system resources. Use this when you have your solution or want to abandon the debugging process.",
   {
     agentId: z.string().describe("ID of the agent to receive the observation (e.g., 'mother' or 'scenario-session-1712268439123-2')"),
     observation: z.string().describe("The observation content - insights, test results, or guidance to help the investigation"),
@@ -477,7 +477,7 @@ server.tool(
 // Register add_observation tool
 server.tool(
   "add_observation",
-  "Adds an observation to the session log",
+  "Adds an external observation to an agent in the debugging session. This allows other tools or human insights to be incorporated into the ongoing investigation. Observations are logged and considered by the agent in subsequent reasoning steps.",
   {
     agentId: z.string(),
     observation: z.string(),
