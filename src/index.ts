@@ -292,7 +292,6 @@ server.tool(
 
         pulse += `* Scenario: ${scenarioId}\n`;
         pulse += `  Status: Reported\n`;
-        pulse += `  Hypothesis: "${hypothesis}"\n`;
 
         if (status === 'completed') {
           // Show summary for completed scenarios in completed sessions
@@ -300,16 +299,39 @@ server.tool(
             const reportRaw = await readFile(join(reportsDir, `${scenarioId}.json`), 'utf8');
             const report = JSON.parse(reportRaw);
             
-            // Handle report as string or object
+            // Extract key information from report
             const reportStr = typeof report === 'string' ? report : JSON.stringify(report, null, 2);
-            // Limit to first few lines
-            const reportLines = reportStr.split('\n').slice(0, 5);
+            const lines = reportStr.split('\n');
+            
+            // Find CONFIRMED status and INVESTIGATION section
+            let confirmed = 'Unknown';
+            let investigationLines: string[] = [];
+            let inInvestigation = false;
+            
+            for (let i = 0; i < lines.length; i++) {
+              const line = lines[i].trim();
+              if (line.startsWith('CONFIRMED:')) {
+                confirmed = line.split(':')[1].trim();
+              }
+              if (line === 'INVESTIGATION:') {
+                inInvestigation = true;
+                continue;
+              }
+              if (inInvestigation && line && !line.startsWith('CONCLUSION:')) {
+                investigationLines.push(line);
+              }
+              if (line.startsWith('CONCLUSION:')) {
+                break;
+              }
+            }
             
             pulse += `  Outcome Summary:\n`;
             pulse += `  <<<<<<< OUTCOME ${scenarioId}\n`;
-            pulse += `  ${reportLines.join('\n  ')}\n`;
-            if (reportStr.split('\n').length > 5) {
-              pulse += `  [...more lines...]\n`;
+            pulse += `  HYPOTHESIS: ${hypothesis}\n\n`;
+            pulse += `  CONFIRMED: ${confirmed}\n\n`;
+            if (investigationLines.length > 0) {
+              pulse += `  INVESTIGATION:\n`;
+              pulse += `  ${investigationLines.join('\n  ')}\n`;
             }
             pulse += `  ======= OUTCOME ${scenarioId} END >>>>>>>\n`;
           } catch (e) {
