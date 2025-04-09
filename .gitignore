@@ -33,3 +33,4 @@ logs/
 *.log
 reports/
 memory-bank/
+venv/

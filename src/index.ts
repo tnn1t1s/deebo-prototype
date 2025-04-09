@@ -68,13 +68,13 @@ const server = new McpServer({
 // Register start tool - begins a debug session
 server.tool(
   "start",
-  "Begins a debug session",
+  "Begins an autonomous debugging session that investigates software bugs through multiple competing hypotheses. This tool launches a mother agent that analyzes errors, generates diverse hypotheses about potential causes, and spawns isolated scenario agents to test each hypothesis in separate git branches. The mother agent coordinates the investigation, evaluates scenario reports, and synthesizes a validated solution when sufficient evidence is found.",
   {
-    error: z.string(),
-    repoPath: z.string(),
-    context: z.string().optional(),
-    language: z.string().optional(),
-    filePath: z.string().optional()
+    error: z.string().describe("The error message or description of the bug to investigate"),
+    repoPath: z.string().describe("Absolute path to the git repository containing the code to debug"),
+    context: z.string().optional().describe("Additional context like code snippets, previous attempts, or relevant information"),
+    language: z.string().optional().describe("Programming language of the code being debugged (e.g., 'typescript', 'python')"),
+    filePath: z.string().optional().describe("Relative path to the specific file containing the bug, if known")
   },
   async ({ error, repoPath, context, language, filePath }, extra) => {
     const projectId = getProjectId(repoPath);
@@ -128,9 +128,9 @@ server.tool(
 // Register check tool - gets status of a debug session
 server.tool(
   "check",
-  "Gets status of a debug session",
+  "Retrieves the current status of a debugging session, providing a detailed pulse report. For in-progress sessions, the pulse includes the mother agent's current stage in the OODA loop, running scenario agents with their hypotheses, and any preliminary findings. For completed sessions, the pulse contains the final solution with a comprehensive explanation, relevant code changes, and outcome summaries from all scenario agents that contributed to the solution. Use this tool to monitor ongoing progress or retrieve the final validated fix.",
   {
-    sessionId: z.string()
+    sessionId: z.string().describe("The session ID returned by the start tool when the debugging session was initiated")
   },
   async ({ sessionId }, extra) => {
     try {
@@ -393,10 +393,12 @@ server.tool(
 );
 
 server.tool(
-  "cancel",
-  "Cancels a running debug session",
+  "add_observation",
+  "Adds an external observation to an agent in the debugging session. This allows other tools or human insights to be incorporated into the ongoing investigation. Observations are logged and considered by the agent in subsequent reasoning steps.",
   {
-    sessionId: z.string()
+    agentId: z.string().describe("ID of the agent to receive the observation (e.g., 'mother' or 'scenario-session-1712268439123-2')"),
+    observation: z.string().describe("The observation content - insights, test results, or guidance to help the investigation"),
+    sessionId: z.string().describe("The session ID returned by the start tool when the debugging session was initiated")
   },
   async ({ sessionId }, extra) => {
     // No need to sanitize ID when using the registry Map key

@@ -3,7 +3,7 @@ NOTE: this document was created because I was very frustrated with re-explaining
 rules.txt
 
 Welcome to Deebo. This document defines how code and suggestions should be made within this project.
-
+this document is entirely pragmatic, not dogmatic. don't make illogical advice just because rules.txt is harsh. it is harsh to protect the beautiful codebase of deebo. 
 PHILOSOPHY
 
 Deebo is not a normal software project. It's an agentic system designed to create and coordinate intelligent behavior. Everything is built around a clear separation of roles, a deep trust in the LLM, and hostility toward premature structure.

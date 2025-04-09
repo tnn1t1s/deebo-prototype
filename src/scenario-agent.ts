@@ -124,8 +124,6 @@ git-mcp (use for ALL git operations):
   Example: { "repo_path": "${args.repoPath}" }
 - git_log: Show recent commit history
   Example: { "repo_path": "${args.repoPath}" }
-- git_checkout: Switch to a different branch
-  Example: { "repo_path": "${args.repoPath}", "branch_name": "${args.branch}" }
 - git_show: Show contents of a specific commit
   Example: { "repo_path": "${args.repoPath}", "revision": "HEAD" }
 
