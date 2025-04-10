@@ -202,6 +202,7 @@ Add the following entry to the `mcpServers` object within that JSON file. Rememb
   }
 }
 ```
+Note: the settings in ```config/tools.json``` are for the tools that Deebo agents themselves use. If you notice errors when you try to start a Deebo session (check by going to Cline MCP settings --> Installed --> should be red text above the Deebo MCP server) 
 **Note:** Only provide the API key(s) corresponding to the `MOTHER_HOST` and `SCENARIO_HOST` you selected. Keys for unused providers can be omitted or left empty.
 
 **Important:** Restart your MCP client (Cline, Claude Desktop, etc.) after modifying the configuration file for the changes to take effect.
