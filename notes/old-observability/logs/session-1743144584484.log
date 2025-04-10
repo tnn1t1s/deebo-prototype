@@ -1,3 +1,0 @@
-{"timestamp":"2025-03-28T06:49:44.484Z","agent":"mother","level":"info","message":"Mother agent started","data":{"error":"Race condition in task cache management","language":"typescript"}}
-{"timestamp":"2025-03-28T06:49:44.485Z","agent":"mother","level":"info","message":"OODA transition","data":{"state":"observe"}}
-{"timestamp":"2025-03-28T06:49:44.741Z","agent":"mother","level":"error","message":"Mother agent failed","data":{"error":"MCP error -32000: Connection closed"}}

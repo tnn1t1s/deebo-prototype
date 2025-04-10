@@ -1,4 +1,0 @@
-{"timestamp":"2025-03-28T05:52:35.832Z","agent":"test","level":"info","message":"Test scenario started"}
-{"timestamp":"2025-03-28T05:52:35.834Z","agent":"test","level":"info","message":"Connecting to tools"}
-{"timestamp":"2025-03-28T05:52:36.930Z","agent":"test","level":"info","message":"Gathering results"}
-{"timestamp":"2025-03-28T05:52:36.931Z","agent":"test","level":"info","message":"Test scenario completed"}

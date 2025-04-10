@@ -1,4 +1,0 @@
-{"timestamp":"2025-03-29T07:32:28.066Z","agent":"mother","level":"info","message":"Mother agent started","data":{"error":"Race condition in task cache management","language":"typescript","retryCount":0}}
-{"timestamp":"2025-03-29T07:32:28.066Z","agent":"mother","level":"info","message":"OODA transition","data":{"state":"observe"}}
-{"timestamp":"2025-03-29T07:32:28.067Z","agent":"mother","level":"info","message":"Connecting to git-mcp..."}
-{"timestamp":"2025-03-29T07:32:28.068Z","agent":"mother","level":"error","message":"Mother agent failed","data":{"error":"spawn uvx ENOENT"}}

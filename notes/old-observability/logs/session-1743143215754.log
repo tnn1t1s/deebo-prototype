@@ -1,3 +1,0 @@
-{"timestamp":"2025-03-28T06:26:55.754Z","agent":"mother","level":"info","message":"Mother agent started","data":{"error":"Race condition in task cache management","language":"typescript"}}
-{"timestamp":"2025-03-28T06:26:55.755Z","agent":"mother","level":"info","message":"OODA transition","data":{"state":"observe"}}
-{"timestamp":"2025-03-28T06:26:55.756Z","agent":"mother","level":"error","message":"Mother agent failed","data":{"error":{"code":"ERR_IMPORT_ATTRIBUTE_MISSING"}}}
