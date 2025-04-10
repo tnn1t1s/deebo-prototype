@@ -2,7 +2,7 @@
 
 Deebo is an autonomous debugging system built for integration into coding agent workflows using the Model Context Protocol (MCP). It acts as a delegated tool that can investigate software bugs, run experiments in isolated Git branches, and report validated fixes, asynchronously by generating hypotheses in parallel, without human intervention.
 
-If you'd like to see a run, I recommend memory-bank/7d4cacd8ed6f/sessions/session-1743739554230. Deebo working on Deebo's codebase!
+If you'd like to see a run, I recommend [memory-bank/7d4cacd8ed6f/sessions/session-1743739554230](https://github.com/snagasuri/deebo-prototype/tree/main/memory-bank/7d4cacd8ed6f/sessions/session-1743739554230). Deebo working on Deebo's codebase!
 
 ## 🔧 What is Deebo?
 
