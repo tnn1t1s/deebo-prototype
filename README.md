@@ -1,6 +1,6 @@
 # Deebo: Autonomous Debugging Agent MCP Server
 
-Deebo is an autonomous debugging system built for integration into coding agent workflows using the Model Context Protocol (MCP). It generates and validates hypotheses in parallel, then synthesizes information for the best fix. It acts as a delegated tool that can investigate software bugs, run experiments in isolated environments, and report validated fixes, asynchronously, without human intervention.
+Deebo is an autonomous debugging system built for integration into coding agent workflows using the Model Context Protocol (MCP). It acts as a delegated tool that can investigate software bugs, run experiments in isolated environments, and report validated fixes, asynchronously by generating hypotheses in parallel, without human intervention.
 
 If you'd like to see a run, I recommend memory-bank/7d4cacd8ed6f/sessions/session-1743739554230. Deebo working on Deebo's codebase!
 
