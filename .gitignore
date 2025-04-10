@@ -34,4 +34,5 @@ logs/
 reports/
 memory-bank/
 venv/
-notes/
+notes/todo.md
+TODO.md
