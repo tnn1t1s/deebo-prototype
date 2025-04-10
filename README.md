@@ -167,7 +167,7 @@ Add the Deebo server configuration to your MCP client's settings file.
 
     Cline --> hamburger menu in top right --> installed --> 'configure MCP servers'
 
-Add the following entry to the `mcpServers` object within that JSON file. Remember to replace placeholder values like `/absolute/path/to/...` and API keys with your actual information.
+Deebo supports any combination of OpenRouter, Anthropic, and Gemini models. You can switch them out just by replacing 'openrouter' with 'anthropic' or 'gemini' and update the model choice accordingly. See src/util/agent-utils.ts for more information. Add the following entry to the `mcpServers` object within that JSON file. Remember to replace placeholder values like `/absolute/path/to/...` and API keys with your actual information.
 
 ```json
 {
