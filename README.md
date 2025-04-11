@@ -4,6 +4,8 @@ Deebo is an autonomous debugging system built for integration into coding agent 
 
 Here’s [some logs of Deebo grokking the test53 linearizer failure $100 tinygrad bug bounty](https://github.com/snagasuri/deebo-prototype/tree/master/memory-bank/9bd38e9840d3/sessions/session-1744006973678) by spawning 17 scenario agents and coming up with 2 valid fixes. check out [progress.md](https://github.com/snagasuri/deebo-prototype/blob/master/memory-bank/9bd38e9840d3/progress.md) for just the solution Deebo came up with.
 
+**need help installing? dm me on twitter: @sriramenn**
+
 ## 🔧 What is Deebo?
 
 Deebo is a fully MCP-compatible agent system that your coding agent (e.g., Claude Desktop, Cline, Cursor, etc.) can call when it encounters a bug it can’t fix confidently.
