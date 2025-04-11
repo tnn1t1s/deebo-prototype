@@ -150,3 +150,71 @@ If setCachedTasks and invalidateTaskCache are using different cache key generati
 Please share any additional context about when this race condition is most commonly observed. Does it happen under specific conditions like high load or particular API patterns?
 
 ==================
+
+==================
+AUTOMATED HYPOTHESIS RECORD
+Timestamp: 2025-04-10T02:49:33.547Z
+Error: Race condition in task cache management
+
+I'll start investigating this race condition issue right away. Let me first check the context files and then analyze the code.
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>read_file</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/Cline/MCP/deebo-prototype/memory-bank/af72caf9ed17/activeContext.md"
+    }
+  </arguments>
+</use_mcp_tool>
+
+Let me also see the full taskService.ts file:
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>read_file</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/task-manager/src/services/taskService.ts"
+    }
+  </arguments>
+</use_mcp_tool>
+
+Based on the initial error message and code snippet, I can already form my first hypothesis:
+
+<hypothesis>
+The race condition is occurring because setCachedTasks() is being called asynchronously with .catch() but not being awaited, while the function returns immediately. This could cause:
+1. The cache update to complete after another operation has already started
+2. Multiple concurrent calls potentially overwriting each other's cache entries
+3. Cache invalidation happening while the cache is still being written
+</hypothesis>
+
+Let me search for related cache invalidation code:
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>search_code</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/task-manager/src/services",
+      "pattern": "invalidateTaskCache",
+      "filePattern": "*.ts",
+      "contextLines": 5,
+      "ignoreCase": false
+    }
+  </arguments>
+</use_mcp_tool>
+
+I'll generate a more specific hypothesis after seeing the implementation of the invalidation code. However, for immediate investigation, I would:
+
+1. Look for the implementation of setCachedTasks and invalidateTaskCache
+2. Check where and how invalidateTaskCache is called
+3. Examine the cacheKey generation to understand potential conflict points
+
+Would you please provide:
+1. The implementation of setCachedTasks function?
+2. Any error logs or stack traces you have from when this race condition occurs?
+
+This will help me refine my hypothesis and propose a specific solution.
+
+==================
