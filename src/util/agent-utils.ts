@@ -646,6 +646,7 @@ CONFIDENCE: [High/Medium/Low]
 </report>`;
 }
 
+
 export async function callLlm(
   messages: ChatCompletionMessageParam[],
   config: LlmConfig
