@@ -1,410 +1,91 @@
 // src/mother-agent.ts
 /**
  * 📌 Why this is the best version:
-	•	✅ Keeps full message history without resetting
-	•	✅ Supports multiple tool calls per Claude response
-	•	✅ Spawns scenarios from multiple hypotheses
-	•	✅ Never throws on malformed XML, logs gently instead
-	•	✅ Doesn’t force memory bank writes — Mother can directly choose via filesystem-mcp
-	•	✅ Maintains Deebo’s spirit: autonomy, freedom to fail, and graceful continuation
+    •	✅ Keeps full message history without resetting
+    •	✅ Supports multiple tool calls per Claude response
+    •	✅ Spawns scenarios from multiple hypotheses
+    •	✅ Never throws on malformed XML, logs gently instead
+    •	✅ Doesn't force memory bank writes — Mother can directly choose via filesystem-mcp
+    •	✅ Maintains Deebo's spirit: autonomy, freedom to fail, and graceful continuation
  */
 
-import { spawn } from 'child_process';
-import { join } from 'path';
-import { getAgentObservations } from './util/observations.js';
-import { log } from './util/logger.js';
-import { connectRequiredTools } from './util/mcp.js';
-import { DEEBO_ROOT } from './index.js';
-import { updateMemoryBank } from './util/membank.js';
-import { getProjectId } from './util/sanitize.js';
-// import OpenAI from 'openai'; // Removed
-import { ChatCompletionMessageParam, ChatCompletionMessage } from 'openai/resources/chat/completions';
-import { createScenarioBranch } from './util/branch-manager.js';
-import { callLlm } from './util/agent-utils.js'; // Added
-
-const MAX_RUNTIME = 60 * 60 * 1000; // 60 minutes
-const SCENARIO_TIMEOUT = 5 * 60 * 1000;
-const useMemoryBank = process.env.USE_MEMORY_BANK === 'true';
-
-// Removed safeAssistantMessage function as it's no longer needed with callLlm
-
-// Mother agent main loop
-export async function runMotherAgent(
-  sessionId: string,
-  error: string,
-  context: string,
-  language: string,
-  filePath: string,
-  repoPath: string,
-  signal: AbortSignal, // Added: Cancellation signal
-  scenarioPids: Set<number> // Added: Set to track scenario PIDs
-) {
-  await log(sessionId, 'mother', 'info', 'Mother agent started', { repoPath });
-  const projectId = getProjectId(repoPath);
-  let scenarioCounter = 0; // Simple counter for unique scenario IDs within the session
-  const startTime = Date.now();
-  const memoryBankPath = join(DEEBO_ROOT, 'memory-bank', projectId);
-  let lastObservationCheck = 0;
-
-  try {
-    // OBSERVE: Setup tools and LLM Client
-    await log(sessionId, 'mother', 'info', 'OODA: observe', { repoPath });
-    const { gitClient, filesystemClient } = await connectRequiredTools('mother', sessionId, repoPath);
-
-    // Read LLM configuration from environment variables
-    const motherProvider = process.env.MOTHER_HOST; // Read provider name from MOTHER_HOST
-    const motherModel = process.env.MOTHER_MODEL;
-    const openrouterApiKey = process.env.OPENROUTER_API_KEY; // Still needed if provider is 'openrouter'
-    const geminiApiKey = process.env.GEMINI_API_KEY;
-    const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-    // const motherHost = process.env.MOTHER_HOST; // No longer needed as separate URL
-
-    // Create the config object to pass to callLlm
-    const llmConfig = {
-      provider: motherProvider, // Use the provider name from MOTHER_HOST
-      model: motherModel,
-      apiKey: openrouterApiKey, // Pass the OpenRouter key (used only if provider is 'openrouter')
-      // baseURL: motherHost, // Removed - OpenRouter URL is hardcoded in callLlm
-      geminiApiKey: geminiApiKey,
-      anthropicApiKey: anthropicApiKey
-    };
-
-    // Initial conversation context
-    const messages: ChatCompletionMessageParam[] = [{
-      role: 'assistant',
-      content: `You are the mother agent in an OODA loop debugging investigation. Your core mission:
-
-1. INVESTIGATE and HYPOTHESIZE aggressively
-2. Don't wait for perfect information
-3. Generate hypotheses even if you're uncertain
-
-KEY DIRECTIVES:
-- Always generate at least one hypothesis within your first 2-3 responses
-- Use <hypothesis>Your hypothesis here</hypothesis> liberally
-- Better to spawn 5 wrong scenario agents than miss the right one
-- If you see an error message, immediately form hypotheses about its causes
-- Don't wait for full context - start with what you have
-- AVOID REDUNDANT HYPOTHESES - read scenario reports to learn what's been tried
-- Pass what failed to scenarios via context argument so they don't waste time
-- Take notes! You're a scientist mother (think Dr. Akagi), not a robot. Be creative and curious.
-
-SOLUTION CONFIDENCE:
-Only use <solution> tags when you are at least 96% confident in the solution.
-If your confidence is lower:
-- Create your own branch to test it
-- Keep investigating (you have the same tools as scenarios)
-- Generate new hypotheses if needed
-Solution tags = "I am at least 96% confident this works"
-When you've found a solution or determined none exists, wrap it in solution tags:
-<solution>Your final conclusion and solution here</solution>
-${useMemoryBank ? `
-MEMORY BANK INVESTIGATION AIDS:
-The memory bank at ${memoryBankPath} contains two key files to help your investigation:
-
-1. activeContext.md - Your live investigation notebook:
-- READ THIS FIRST when starting an investigation using ${memoryBankPath}/activeContext.md
-- Contains your previous debugging notes and observations
-- Shows which approaches were promising vs dead ends
-- Records important error patterns you've noticed
-- Use this to avoid repeating failed approaches
-- Read this to understand which parts of the code were already examined
-- To edit, use read_file to get the latest state, then write a targeted diff using edit_file instead of write_file to avoid overwriting
-
-2. progress.md - The full debugging history (access at ${memoryBankPath}/progress.md):
-- Contains complete records of all debug sessions
-- Shows which hypotheses were tried and their outcomes
-- Lists all scenarios that were run and their results
-- Use this to see if similar bugs were fixed before
-
-Use these files to:
-- Build on previous investigation progress
-- Spot patterns in failing scenarios
-- Generate better hypotheses based on what's worked/failed
-- Provide relevant context to scenario agents
-- Track the evolution of your debugging approach
-- Take notes! You're a scientist mother (think Dr. Akagi), not a robot. Be creative and curious.
-
-IMPORTANT: Always use ${memoryBankPath} as the absolute path for memory bank files. Never use relative paths.
-` : ''}
-
-TOOL USAGE:
-Always use this exact format for tools:
-<use_mcp_tool>
-  <server_name>git-mcp</server_name>
-  <tool_name>git_status</tool_name>
-  <arguments>
-    {
-      "repo_path": "/path/to/repo"
-    }
-  </arguments>
-</use_mcp_tool>
-
-Available Tools:
-git-mcp (use for ALL git operations):
-- git_status: Show working tree status
-  Example: { "repo_path": "/path/to/repo" }
-- git_diff_unstaged: Show changes in working directory not yet staged
-  Example: { "repo_path": "/path/to/repo" }
-- git_diff_staged: Show changes that are staged for commit
-  Example: { "repo_path": "/path/to/repo" }
-- git_diff: Compare current state with a branch or commit
-  Example: { "repo_path": "/path/to/repo", "target": "main" }
-- git_add: Stage file changes
-  Example: { "repo_path": "/path/to/repo", "files": ["file1.ts", "file2.ts"] }
-- git_commit: Commit staged changes
-  Example: { "repo_path": "/path/to/repo", "message": "commit message" }
-- git_reset: Unstage all changes
-  Example: { "repo_path": "/path/to/repo" }
-- git_log: Show recent commit history
-  Example: { "repo_path": "/path/to/repo" }
-- git_checkout: Switch to a different branch
-  Example: { "repo_path": "/path/to/repo", "branch_name": "debug-123" }
-- git_show: Show contents of a specific commit
-  Example: { "repo_path": "/path/to/repo", "revision": "HEAD" }
-
-desktop-commander (use ONLY for non-git operations):
-
-Terminal Tools:
-- execute_command: Run terminal commands with timeout
-  Example:
-  <use_mcp_tool>
-    <server_name>desktop-commander</server_name>
-    <tool_name>execute_command</tool_name>
-    <arguments>
-      {
-        "command": "npm run build",
-        "timeout_ms": 5000
-      }
-    </arguments>
-  </use_mcp_tool>
-
-- read_output: Get output from running commands
-  Example:
-  <use_mcp_tool>
-    <server_name>desktop-commander</server_name>
-    <tool_name>read_output</tool_name>
-    <arguments>
-      {
-        "pid": 12345
-      }
-    </arguments>
-  </use_mcp_tool>
-
-- force_terminate: Stop running command sessions
-  Example:
-  <use_mcp_tool>
-    <server_name>desktop-commander</server_name>
-    <tool_name>force_terminate</tool_name>
-    <arguments>
-      {
-        "pid": 12345
-      }
-    </arguments>
-  </use_mcp_tool>
-
-- list_sessions: View active command sessions
-  Example:
-  <use_mcp_tool>
-    <server_name>desktop-commander</server_name>
-    <tool_name>list_sessions</tool_name>
-    <arguments>
-      {}
-    </arguments>
-  </use_mcp_tool>
-
-- list_processes: List system processes
-  Example:
-  <use_mcp_tool>
-    <server_name>desktop-commander</server_name>
-    <tool_name>list_processes</tool_name>
-    <arguments>
-      {}
-    </arguments>
-  </use_mcp_tool>
-
-- kill_process: Terminate processes by PID
-  Example:
-  <use_mcp_tool>
-    <server_name>desktop-commander</server_name>
-    <tool_name>kill_process</tool_name>
-    <arguments>
-      {
-        "pid": 12345
-      }
-    </arguments>
-  </use_mcp_tool>
-
-- block_command: Block a command from execution
-  Example:
-  <use_mcp_tool>
-    <server_name>desktop-commander</server_name>
-    <tool_name>block_command</tool_name>
-    <arguments>
-      {
-        "command": "rm -rf /"
-      }
-    </arguments>
-  </use_mcp_tool>
-
-- unblock_command: Unblock a command
-  Example:
-  <use_mcp_tool>
-    <server_name>desktop-commander</server_name>
-    <tool_name>unblock_command</tool_name>
-    <arguments>
-      {
-        "command": "rm -rf /"
-      }
-    </arguments>
-  </use_mcp_tool>
-
-Filesystem Tools:
-- read_file: Read file contents
-  Example:
-  <use_mcp_tool>
-    <server_name>desktop-commander</server_name>
-    <tool_name>read_file</tool_name>
-    <arguments>
-      {
-        "path": "${memoryBankPath}/activeContext.md"
-      }
-    </arguments>
-  </use_mcp_tool>
-
-- read_multiple_files: Read multiple files at once
-  Example:
-  <use_mcp_tool>
-    <server_name>desktop-commander</server_name>
-    <tool_name>read_multiple_files</tool_name>
-    <arguments>
-      {
-        "paths": ["file1.ts", "file2.ts"]
-      }
-    </arguments>
-  </use_mcp_tool>
-
-- write_file: Write content to files
-  Example:
-  <use_mcp_tool>
-    <server_name>desktop-commander</server_name>
-    <tool_name>write_file</tool_name>
-    <arguments>
-      {
-        "path": "file.ts",
-        "content": "console.log('hello');"
-      }
-    </arguments>
-  </use_mcp_tool>
-
-- edit_file: Apply surgical text replacements
-  Example:
-  <use_mcp_tool>
-    <server_name>desktop-commander</server_name>
-    <tool_name>edit_file</tool_name>
-    <arguments>
-      {
-        "path": "file.ts",
-        "diff": "<<<<<<< SEARCH\nold code\n=======\nnew code\n>>>>>>> REPLACE"
-      }
-    </arguments>
-  </use_mcp_tool>
-
-- list_directory: List directory contents
-  Example:
-  <use_mcp_tool>
-    <server_name>desktop-commander</server_name>
-    <tool_name>list_directory</tool_name>
-    <arguments>
-      {
-        "path": "${memoryBankPath}"
-      }
-    </arguments>
-  </use_mcp_tool>
-
-- search_files: Search files with pattern
-  Example:
-  <use_mcp_tool>
-    <server_name>desktop-commander</server_name>
-    <tool_name>search_files</tool_name>
-    <arguments>
-      {
-        "path": "${memoryBankPath}",
-        "pattern": "error",
-        "file_pattern": "*.ts"
-      }
-    </arguments>
-  </use_mcp_tool>
-
-- create_directory: Create a new directory
-  Example:
-  <use_mcp_tool>
-    <server_name>desktop-commander</server_name>
-    <tool_name>create_directory</tool_name>
-    <arguments>
-      {
-        "path": "new-dir"
-      }
-    </arguments>
-  </use_mcp_tool>
-
-- move_file: Move or rename a file
-  Example:
-  <use_mcp_tool>
-    <server_name>desktop-commander</server_name>
-    <tool_name>move_file</tool_name>
-    <arguments>
-      {
-        "source": "old.ts",
-        "destination": "new.ts"
-      }
-    </arguments>
-  </use_mcp_tool>
-
-- get_file_info: Get file metadata
-  Example:
-  <use_mcp_tool>
-    <server_name>desktop-commander</server_name>
-    <tool_name>get_file_info</tool_name>
-    <arguments>
-      {
-        "path": "file.ts"
-      }
-    </arguments>
-  </use_mcp_tool>
-
-- search_code: Recursive code search
-  Example:
-  <use_mcp_tool>
-    <server_name>desktop-commander</server_name>
-    <tool_name>search_code</tool_name>
-    <arguments>
-      {
-        "path": "${memoryBankPath}",
-        "pattern": "function",
-        "filePattern": "*.ts",
-        "contextLines": 2,
-        "ignoreCase": true
-      }
-    </arguments>
-  </use_mcp_tool>
-
-IMPORTANT MEMORY BANK WARNINGS:
-- DO NOT use write_file on memory bank files - use filesystem-mcp edit_file instead
-- Only edit memory bank through edit_file to avoid overwrites
-- Always use ${memoryBankPath} as absolute path for memory bank files`
-    }, {
-      role: 'user',
-      content: `Error: ${error}
-Context: ${context}
-Language: ${language}
-File: ${filePath}
-Repo: ${repoPath}
-Session: ${sessionId}
-Project: ${projectId}
-${useMemoryBank ? '\nPrevious debugging attempts and context are available in the memory-bank directory if needed.' : ''}
-
-IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for perfect information.`
-    }];
+    import { spawn } from 'child_process';
+    import { join } from 'path';
+    import { getAgentObservations } from './util/observations.js';
+    import { log } from './util/logger.js';
+    import { connectRequiredTools } from './util/mcp.js';
+    import { DEEBO_ROOT } from './index.js';
+    import { updateMemoryBank } from './util/membank.js';
+    import { getProjectId } from './util/sanitize.js';
+    // import OpenAI from 'openai'; // Removed
+    import { ChatCompletionMessageParam, ChatCompletionMessage } from 'openai/resources/chat/completions';
+    import { createScenarioBranch } from './util/branch-manager.js';
+    import { callLlm, getMotherAgentPrompt } from './util/agent-utils.js'; // Updated import
+    
+    const MAX_RUNTIME = 60 * 60 * 1000; // 60 minutes
+    const SCENARIO_TIMEOUT = 5 * 60 * 1000;
+    const useMemoryBank = process.env.USE_MEMORY_BANK === 'true';
+    
+    // Removed safeAssistantMessage function as it's no longer needed with callLlm
+    
+    // Mother agent main loop
+    export async function runMotherAgent(
+      sessionId: string,
+      error: string,
+      context: string,
+      language: string,
+      filePath: string,
+      repoPath: string,
+      signal: AbortSignal, // Added: Cancellation signal
+      scenarioPids: Set<number> // Added: Set to track scenario PIDs
+    ) {
+      await log(sessionId, 'mother', 'info', 'Mother agent started', { repoPath });
+      const projectId = getProjectId(repoPath);
+      let scenarioCounter = 0; // Simple counter for unique scenario IDs within the session
+      const startTime = Date.now();
+      const memoryBankPath = join(DEEBO_ROOT, 'memory-bank', projectId);
+      let lastObservationCheck = 0;
+    
+      try {
+        // OBSERVE: Setup tools and LLM Client
+        await log(sessionId, 'mother', 'info', 'OODA: observe', { repoPath });
+        const { gitClient, filesystemClient } = await connectRequiredTools('mother', sessionId, repoPath);
+    
+        // Read LLM configuration from environment variables
+        const motherProvider = process.env.MOTHER_HOST; // Read provider name from MOTHER_HOST
+        const motherModel = process.env.MOTHER_MODEL;
+        const openrouterApiKey = process.env.OPENROUTER_API_KEY; // Still needed if provider is 'openrouter'
+        const geminiApiKey = process.env.GEMINI_API_KEY;
+        const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+        // const motherHost = process.env.MOTHER_HOST; // No longer needed as separate URL
+    
+        // Create the config object to pass to callLlm
+        const llmConfig = {
+          provider: motherProvider, // Use the provider name from MOTHER_HOST
+          model: motherModel,
+          apiKey: openrouterApiKey, // Pass the OpenRouter key (used only if provider is 'openrouter')
+          // baseURL: motherHost, // Removed - OpenRouter URL is hardcoded in callLlm
+          geminiApiKey: geminiApiKey,
+          anthropicApiKey: anthropicApiKey
+        };
+    
+        // Initial conversation context
+        const messages: ChatCompletionMessageParam[] = [{
+          role: 'assistant',
+          content: getMotherAgentPrompt(useMemoryBank, memoryBankPath)
+        }, {
+          role: 'user',
+          content: `Error: ${error}
+    Context: ${context}
+    Language: ${language}
+    File: ${filePath}
+    Repo: ${repoPath}
+    Session: ${sessionId}
+    Project: ${projectId}
+    ${useMemoryBank ? '\nPrevious debugging attempts and context are available in the memory-bank directory if needed.' : ''}
+    
+    IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for perfect information.`
+        }];
 
     // Check for new observations
     let observations = await getAgentObservations(repoPath, sessionId, 'mother'); // Changed const to let
