@@ -32,7 +32,7 @@ Deebo acts as a single MCP server and exposes four tools:
 | `cancel`         | Terminates all processes for a given debugging session                         |
 | `add_observation`| Logs external observations for an agent (e.g., from another tool like Cline) |
 
-## 🚀 Usage
+## 🚀 Usage (this part is for LLMs, not humans) 
 
 ### Start a Session
 
