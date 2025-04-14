@@ -134,6 +134,8 @@ Deebo relies on other MCP servers for interacting with Git and the filesystem.
     ```
     (See the [uv installation docs](https://github.com/astral-sh/uv#installation) for Windows and other methods.)
 
+**in config/tools.json, the executable may not expand the full path of npx or uvx on Windows for example, so you may have to include the absolute path (like "command": "/Users/sriram/.local/bin/uvx" and similar for your npx path, if you're getting ENOENT or spawn errors)**
+
 **b) Install `mcp-server-git` using `uvx`**
 
 ```bash
