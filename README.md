@@ -1,5 +1,27 @@
 # Deebo: Autonomous Debugging Agent MCP Server
 
+Deebo is an autonomous debugging system for coding agents (Claude Desktop, Cline, Cursor, etc.) that investigates software bugs, runs experiments in isolated Git branches, and reports validated fixes—fully agentic, parallel, and hands-off.
+
+---
+
+## 🚀 Quickstart (Maximally Simple Install)
+
+1. **Download the precompiled Deebo and desktop-commander binaries for your OS from [Releases](https://github.com/snagasuri/deebo-prototype/releases).**
+2. **Install uv/uvx (for git-mcp):**
+   ```bash
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   ```
+3. **Install git-mcp via uvx:**
+   ```bash
+   uvx mcp-server-git --help
+   ```
+   (This will auto-install mcp-server-git and its dependencies.)
+4. **Run the Deebo binary.**
+5. **Configure your MCP client (Cline, Claude, etc.) to use Deebo and the included config/tools.json.**
+6. **Paste your API keys when prompted.**
+7. **Done. No npm, no pip, no manual config editing.**
+
+---
 Deebo is an autonomous debugging system built for integration into coding agent workflows using the Model Context Protocol (MCP). It acts as a delegated tool that can investigate software bugs, run experiments in isolated Git branches, and report validated fixes, asynchronously by generating hypotheses in parallel, without human intervention. 
 
 Deebo is basically Cursor, Cline, Claude, Windsurf, ChatGPT (soon), Devin, etc. AI agent's best friend and teammate. They work together to iterate pragmatically towards useful solutions to tricky problems in your codebase. 
@@ -27,67 +49,52 @@ Coding agents are not necessarily great at debugging, as their primary purpose i
 
 ## 🛠️ Exposed MCP Tools
 
-Deebo acts as a single MCP server and exposes four tools:
-
+Deebo exposes four tools:
 | Tool             | Description                                                          |
 | ---------------- | -------------------------------------------------------------------- |
 | `start`          | Begins a debugging session                                           |
-| `check`          | Returns current status of debugging session                   |
-| `cancel`         | Terminates all processes for a given debugging session                         |
-| `add_observation`| Logs external observations for an agent (e.g., from another tool like Cline) |
+| `check`          | Returns current status of debugging session                          |
+| `cancel`         | Terminates all processes for a given debugging session               |
+| `add_observation`| Logs external observations for an agent                              |
 
-## 🚀 Usage (this part is for LLMs, not humans) 
-
-### Start a Session
-
-```xml
-<deebo>
-  <start
-    error="ReferenceError: x is not defined"
-    repoPath="/my/project/path"
-    context="// suspect function below\nfunction handleClick() { ... }"
-    filePath="src/ui/buttons.ts"
-    language="typescript"
-  />
-</deebo>
-```
-
-### Check Session Status
-
-```xml
-<deebo>
-  <check sessionId="session-1712268439123" />
-</deebo>
-```
-
-This returns a human-readable session pulse, including:
-- Mother agent’s current status
-- Running vs. completed scenario agents
-- Reported hypotheses
-- Any <solution> found
-
-### Cancel Session
-
-```xml
-<deebo>
-  <cancel sessionId="session-1712268439123" />
-</deebo>
-```
-
-### Add Observation (e.g., from Cline)
-
-```xml
-<deebo>
-  <add_observation
-    agentId="scenario-session-1712268439123-2"
-    observation="The error disappears if we disable memoization"
-  />
-</deebo>
-```
+---
 
 ## 🧠 Memory Bank (Optional)
 
 If USE_MEMORY_BANK=true is set, Deebo enables structured memory logging:
+- `activeContext.md`: Editable live journal for the Mother agent
+- `progress.md`: Summarized results of completed debug sessions
+- `sessions/<id>/reports/`: Structured scenario agent reports
+- `sessions/<id>/logs/`: Raw logs from Mother and scenarios
+- `sessions/<id>/observations/`: Logs of external observations
+
+---
+
+## 📦 Installation (Advanced/Manual)
+
+If you want to build from source or develop:
+1. Clone the repo:
+   ```bash
+   git clone https://github.com/snagasuri/deebo-prototype.git
+   cd deebo-prototype
+   ```
+2. Install Node.js (v18+), npm, and Python 3.10+.
+3. Build Deebo:
+   ```bash
+   npm install
+   npm run build
+   ```
+4. (Optional) Install desktop-commander:
+   ```bash
+   npx @wonderwhy-er/desktop-commander@latest setup
+   ```
+5. (Optional) Install git-mcp:
+   ```bash
+   uvx mcp-server-git --help
+   ```
+6. Register Deebo as an MCP server in your client config.
+
+---
 
 | File | Description |
 |------|-------------|
@@ -217,34 +224,31 @@ Deebo supports any combination of OpenRouter, Anthropic, and Gemini models. You 
 
 ## 💡 How It Works
 
-### Architecture
-- **Mother Agent**: Coordinates the investigation, spawns scenarios, and writes solutions.
-- **Scenario Agents**: Each investigates a single hypothesis in its own Git branch and reports findings via <report>.
-- **Process Isolation**: All agents run as Node.js subprocesses with timeout enforcement and independent lifecycles.
+- **Mother Agent:** Coordinates the investigation, spawns scenarios, and writes solutions.
+- **Scenario Agents:** Each investigates a single hypothesis in its own Git branch and reports findings.
+- **Process Isolation:** All agents run as subprocesses with timeout enforcement and independent lifecycles.
+- **Tooling:** All Git and FS operations are performed via MCP tools (git-mcp, desktop-commander).
 
-### Tooling
-- **git-mcp**: Git operations (branching, diffs, logs)
-- **desktopCommander**: File I/O, terminal commands, directories
-
-Deebo agents are clients themselves- they use the git-mcp and desktopCommander MCP servers to investigate. 
-
+---
 
 ## ✅ Why Use Deebo?
 
-Deebo is ideal when you want to offload bug investigations to a self-directed agent that:
-- Runs real experiments in your codebase
-- Uses Git branches for full isolation
-- Handles failure gracefully — multiple agents can run in parallel
-- Returns validated fixes (not just guesses)
-- Scales horizontally — plug into any Claude/MCP-compatible agent
+- Offload bug investigations to a self-directed agent
+- Real experiments in your codebase, full Git isolation
+- Handles failure gracefully, runs multiple agents in parallel
+- Returns validated fixes, not just guesses
+- Scales horizontally—plug into any Claude/MCP-compatible agent
 
+---
 
 ## 🔒 Design Principles
 
-- **Tool-isolated**: All mutations are done via MCP tools (no raw fs/git calls inside agents)
-- **Stateless scenario agents**: No shared memory; pure function behavior
-- **Raw logs, not opinionated UIs**: Human-readable, tailable logs and reports
-- **Designed for delegation**: Meant to be called by other agents like Claude, not manually
+- **Tool-isolated:** All mutations are done via MCP tools (no raw fs/git calls inside agents)
+- **Stateless scenario agents:** No shared memory; pure function behavior
+- **Raw logs, not opinionated UIs:** Human-readable, tailable logs and reports
+- **Designed for delegation:** Meant to be called by other agents like Claude, not manually
+
+---
 
 ## 📜 License
 
