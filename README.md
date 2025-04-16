@@ -99,6 +99,7 @@ If USE_MEMORY_BANK=true is set, Deebo enables structured memory logging:
 
 The memory bank allows Deebo to learn from its mistakes and personalize to your codebase over time. You can also utilize the context field when starting a debugging session with Deebo if there's specific information that Deebo would benefit from, and you can also add observations to specific agents mid-session if guidance is necessary.
 
+So basically, the memory bank paths are like memory-bank/{codebaseHash}/{session-id-hash}/mother.log, scenario-agent-0.log, scenario-agent-1.log, etc
 ## 📦 Installation
 
 ### Prerequisites
