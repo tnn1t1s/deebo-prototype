@@ -12,7 +12,7 @@ Here’s [some logs of Deebo grokking the test53 linearizer failure $100 tinygra
 
 ## 🔧 What is Deebo?
 
-Deebo is a fully MCP-compatible agent system that your coding agent (e.g., Claude Desktop, Cline, Cursor, etc.) can call when it encounters a bug it can’t fix confidently.
+Deebo is a fully MCP-compatible agent system that your coding agent (e.g., Claude Desktop, Cline, Cursor, Windsurf, etc.) can call when it encounters a bug it can’t fix confidently.
 
 Instead of relying on a single step or suggestion, Deebo:
 
