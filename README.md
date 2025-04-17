@@ -1,27 +1,5 @@
 # Deebo: Autonomous Debugging Agent MCP Server
 
-Deebo is an autonomous debugging system for coding agents (Claude Desktop, Cline, Cursor, etc.) that investigates software bugs, runs experiments in isolated Git branches, and reports validated fixes—fully agentic, parallel, and hands-off.
-
----
-
-## 🚀 Quickstart (Maximally Simple Install)
-
-1. **Download the precompiled Deebo and desktop-commander binaries for your OS from [Releases](https://github.com/snagasuri/deebo-prototype/releases).**
-2. **Install uv/uvx (for git-mcp):**
-   ```bash
-   curl -LsSf https://astral.sh/uv/install.sh | sh
-   ```
-3. **Install git-mcp via uvx:**
-   ```bash
-   uvx mcp-server-git --help
-   ```
-   (This will auto-install mcp-server-git and its dependencies.)
-4. **Run the Deebo binary.**
-5. **Configure your MCP client (Cline, Claude, etc.) to use Deebo and the included config/tools.json.**
-6. **Paste your API keys when prompted.**
-7. **Done. No npm, no pip, no manual config editing.**
-
----
 Deebo is an autonomous debugging system built for integration into coding agent workflows using the Model Context Protocol (MCP). It acts as a delegated tool that can investigate software bugs, run experiments in isolated Git branches, and report validated fixes, asynchronously by generating hypotheses in parallel, without human intervention. 
 
 Deebo is basically Cursor, Cline, Claude, Windsurf, ChatGPT (soon), Devin, etc. AI agent's best friend and teammate. They work together to iterate pragmatically towards useful solutions to tricky problems in your codebase. 
