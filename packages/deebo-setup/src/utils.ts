@@ -29,7 +29,12 @@ export async function checkPrerequisites(): Promise<void> {
 
 export async function findConfigPaths(): Promise<{cline?: string, claude?: string}> {
   const home = homedir();
-  const paths = {
+  const isWindows = process.platform === 'win32';
+  
+  const paths = isWindows ? {
+    cline: join(process.env.APPDATA || '', 'Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
+    claude: join(process.env.APPDATA || '', 'Claude/claude_desktop_config.json')
+  } : {
     cline: join(home, 'Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
     claude: join(home, 'Library/Application Support/Claude/claude_desktop_config.json')
   };

@@ -1,10 +1,10 @@
 {
   "name": "deebo-doctor",
-  "version": "1.0.5",
+  "version": "1.0.7",
   "description": "Health check tool for Deebo debugging system",
   "type": "module",
   "bin": {
-    "deebo-doctor": "./build/index.js"
+    "deebo-doctor": "build/index.js"
   },
   "scripts": {
     "build": "tsc",
