@@ -11,6 +11,35 @@ import { writeObservation } from './util/observations.js';
 import { exec, spawn, ChildProcess } from 'child_process';
 import { promisify } from 'util';
 
+// Function to find tool paths during initialization
+async function findToolPaths() {
+  const npxPath = (await execPromise('which npx')).stdout.trim();
+  const uvxPath = (await execPromise('which uvx')).stdout.trim();
+
+  // Store paths in env for mcp.ts to use
+  process.env.DEEBO_NPX_PATH = npxPath;
+  process.env.DEEBO_UVX_PATH = uvxPath;
+
+  // Write tools.json with placeholders
+  const toolsConfig = {
+    tools: {
+      desktopCommander: {
+        command: "{npxPath}",
+        args: ["@wonderwhy-er/desktop-commander"]
+      },
+      "git-mcp": {
+        command: "{uvxPath}",
+        args: ["mcp-server-git", "--repository", "{repoPath}"]
+      }
+    }
+  };
+
+  await writeFile(join(DEEBO_ROOT, 'config', 'tools.json'), 
+    JSON.stringify(toolsConfig, null, 2));
+
+  return { npxPath, uvxPath };
+}
+
 const execPromise = promisify(exec);
 
 // Helper to find session directory
@@ -58,6 +87,9 @@ export const DEEBO_ROOT = join(__dirname, '..');
 
 // Create required directories
 await mkdir(join(DEEBO_ROOT, 'memory-bank'), { recursive: true });
+
+// Find and configure tool paths
+await findToolPaths();
 
 // Create MCP server
 const server = new McpServer({

@@ -1,13 +1,13 @@
 {
   "tools": {
     "desktopCommander": {
-      "command": "npx",
+      "command": "{npxPath}",
       "args": [
         "@wonderwhy-er/desktop-commander"
       ]
     },
     "git-mcp": {
-      "command": "uvx",
+      "command": "{uvxPath}",
       "args": [
         "mcp-server-git",
         "--repository",
