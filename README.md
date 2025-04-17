@@ -1,172 +1,88 @@
-# Deebo: Autonomous Debugging Agent MCP Server
+# Deebo: Your AI Agent's Debugging Partner
 
-Deebo is an autonomous debugging system built for integration into coding agent workflows using the Model Context Protocol (MCP). It acts as a delegated tool that can investigate software bugs, run experiments in isolated Git branches, and report validated fixes, asynchronously by generating hypotheses in parallel, without human intervention. 
+Deebo is an autonomous debugging system that works alongside AI coding agents (Claude, Cline, Cursor, etc.) to solve complex bugs. It runs parallel experiments in isolated Git branches and delivers validated fixes—no human intervention needed.
 
-Deebo is basically Cursor, Cline, Claude, Windsurf, ChatGPT (soon), Devin, etc. AI agent's best friend and teammate. They work together to iterate pragmatically towards useful solutions to tricky problems in your codebase. 
+Here's [an example of Deebo solving the test53 linearizer failure $100 tinygrad bug bounty](https://github.com/snagasuri/deebo-prototype/tree/master/memory-bank/9bd38e9840d3/sessions/session-1744006973678) by spawning 17 scenario agents and coming up with 2 valid fixes. Check out [progress.md](https://github.com/snagasuri/deebo-prototype/blob/master/memory-bank/9bd38e9840d3/progress.md) for just the solution.
 
-Here’s [some logs of Deebo grokking the test53 linearizer failure $100 tinygrad bug bounty](https://github.com/snagasuri/deebo-prototype/tree/master/memory-bank/9bd38e9840d3/sessions/session-1744006973678) by spawning 17 scenario agents and coming up with 2 valid fixes. check out [progress.md](https://github.com/snagasuri/deebo-prototype/blob/master/memory-bank/9bd38e9840d3/progress.md) for just the solution Deebo came up with.
+## 🚀 Quick Install (for Cline/Claude Desktop users)
 
-**note: the readme is intentionally verbose for LLM agents to help you install easier. I would strongly recommend copying and pasting this readme into chatGPT or have your coding agent read this file and walk you through the process.**
+```bash
+npx deebo-setup
+```
+That's it! Follow the prompts to configure your API key and you're ready to go.
 
-## need help installing? dm me on twitter: @sriramenn
+Need help? DM me on Twitter: [@sriramenn](https://twitter.com/sriramenn)
 
-## 🔧 What is Deebo?
+<details>
+<summary>🔍 What exactly does Deebo do?</summary>
 
-Deebo is a fully MCP-compatible agent system that your coding agent (e.g., Claude Desktop, Cline, Cursor, Windsurf, etc.) can call when it encounters a bug it can’t fix confidently.
+Deebo is your AI agent's debugging partner. When your agent encounters a tricky bug, Deebo:
 
-Instead of relying on a single step or suggestion, Deebo:
-
-- Spawns multiple subprocesses (“scenario agents”) to test competing hypotheses
-- Runs each scenario in a dedicated Git branch
+- Spawns multiple "scenario agents" to test different hypotheses in parallel
+- Runs each experiment in an isolated Git branch
 - Validates or falsifies each approach
 - Returns structured reports and solutions
-- Optionally logs session history and context to a memory bank
+- Optionally logs session history for learning
 
-Coding agents are not necessarily great at debugging, as their primary purpose is generating working end-to-end apps. Deebo gives your agent the ability to offload tricky bugs that would otherwise require several turns of chat to resolve, allowing you to focus more on shipping.
+Instead of going back and forth with your AI agent about bugs, let Deebo handle the investigation while you focus on building features.
 
-
-## 🛠️ Exposed MCP Tools
-
-Deebo exposes four tools:
+### Exposed MCP Tools
 | Tool             | Description                                                          |
 | ---------------- | -------------------------------------------------------------------- |
 | `start`          | Begins a debugging session                                           |
 | `check`          | Returns current status of debugging session                          |
 | `cancel`         | Terminates all processes for a given debugging session               |
 | `add_observation`| Logs external observations for an agent                              |
+</details>
 
----
+<details>
+<summary>🛠️ Manual Installation (for other setups)</summary>
 
-## 🧠 Memory Bank (Optional)
+If you're not using Cline or Claude Desktop, follow these steps:
 
-If USE_MEMORY_BANK=true is set, Deebo enables structured memory logging:
+1. Clone the repo:
+   ```bash
+   git clone https://github.com/snagasuri/deebo-prototype.git
+   cd deebo-prototype
+   ```
+
+2. Install dependencies:
+   ```bash
+   npm install
+   npm run build
+   ```
+
+3. Install required MCP tools:
+   ```bash
+   # Install uv/uvx
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   
+   # Install git-mcp
+   uvx mcp-server-git --help
+   
+   # Install desktop-commander
+   npx @wonderwhy-er/desktop-commander@latest setup
+   ```
+
+4. Configure your MCP client to use Deebo (see Technical Details section for configuration format)
+</details>
+
+<details>
+<summary>📚 Technical Details</summary>
+
+### Memory Bank
+If `USE_MEMORY_BANK=true` is set, Deebo enables structured memory logging:
 - `activeContext.md`: Editable live journal for the Mother agent
 - `progress.md`: Summarized results of completed debug sessions
 - `sessions/<id>/reports/`: Structured scenario agent reports
 - `sessions/<id>/logs/`: Raw logs from Mother and scenarios
 - `sessions/<id>/observations/`: Logs of external observations
 
----
-
-## 📦 Installation (Advanced/Manual)
-
-If you want to build from source or develop:
-1. Clone the repo:
-   ```bash
-   git clone https://github.com/snagasuri/deebo-prototype.git
-   cd deebo-prototype
-   ```
-2. Install Node.js (v18+), npm, and Python 3.10+.
-3. Build Deebo:
-   ```bash
-   npm install
-   npm run build
-   ```
-4. (Optional) Install desktop-commander:
-   ```bash
-   npx @wonderwhy-er/desktop-commander@latest setup
-   ```
-5. (Optional) Install git-mcp:
-   ```bash
-   uvx mcp-server-git --help
-   ```
-6. Register Deebo as an MCP server in your client config.
-
----
-
-| File | Description |
-|------|-------------|
-| `activeContext.md` | Editable live journal for the Mother agent |
-| `progress.md` | Summarized results of completed debug sessions |
-| `sessions/<id>/reports/` | Structured scenario agent reports |
-| `sessions/<id>/logs/` | Raw logs from Mother and scenarios |
-| `sessions/<id>/observations/` | Logs of external observations from tools like Cline |
-
-The memory bank allows Deebo to learn from its mistakes and personalize to your codebase over time. You can also utilize the context field when starting a debugging session with Deebo if there's specific information that Deebo would benefit from, and you can also add observations to specific agents mid-session if guidance is necessary.
-
-So basically, the memory bank paths are like memory-bank/{codebaseHash}/{session-id-hash}/mother.log, scenario-agent-0.log, scenario-agent-1.log, etc
-## 📦 Installation
-
-### Prerequisites
-
-Before you begin, ensure you have the following installed on your system:
-- **Git**: Required for cloning the repository.
-- **Node.js**: Version 18 or higher is recommended. This includes `npm`, which is needed for installing dependencies. You can download Node.js from [nodejs.org](https://nodejs.org/).
-- docs.txt in the root of this repository can be very helpful to paste into an LLM to ask for guidance when installing deebo
-
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/snagasuri/deebo-prototype.git
-cd deebo-prototype
-```
-
-### 2. Install Required MCP Tools
-
-Deebo relies on other MCP servers for interacting with Git and the filesystem.
-
-**a) Install `uv` (includes `uvx`)**
-
-`uv` is a fast Python package installer and resolver. We recommend installing it using the official script or `pipx`:
-
-*   **Using the standalone installer (Recommended for macOS/Linux):**
-    ```bash
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    # Ensure ~/.local/bin is in your PATH (the script usually handles this)
-    ```
-*   **Using `pipx` (Recommended for isolated installation):**
-    ```bash
-    pip install pipx
-    pipx ensurepath
-    pipx install uv
-    ```
-    (See the [uv installation docs](https://github.com/astral-sh/uv#installation) for Windows and other methods.)
-
-**in config/tools.json, the executable may not expand the full path of npx or uvx on Windows for example, so you may have to include the absolute path (like "command": "/Users/sriram/.local/bin/uvx" and similar for your npx path, if you're getting ENOENT or spawn errors)**
-
-**b) Install `mcp-server-git` using `uvx`**
-
-```bash
-uvx install mcp-server-git
-```
-(Alternatively, if `uvx` fails, you could try `pip install mcp-server-git`.)
-
-**c) Setup `desktop-commander`**
-
-Deebo uses `desktop-commander` for filesystem operations and running commands. Ensure it's installed and configured as an MCP server for your client (like Cline or Claude Desktop) by running its setup command:
-
-```bash
-npx @wonderwhy-er/desktop-commander@latest setup
-```
-This command installs `desktop-commander` (if needed) and automatically adds its configuration to your MCP client's settings. If you're on Mac though you probably don't even need to install it explicitly, it will just install at runtime from tools/config.json.
-
-### 3. Install Deebo Dependencies and Build
-
-```bash
-npm install
-npm run build
-```
-
-### 4. Register Deebo as an MCP Server
-
-Add the Deebo server configuration to your MCP client's settings file.
-
-*   **Configuration File Locations (Examples):**
-    *   **Cline (VS Code Extension):** `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` (macOS), `~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` (Linux), `%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json` (Windows)
-    *   **Claude Desktop:** `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS), `~/.config/Claude/claude_desktop_config.json` (Linux), `%APPDATA%\Claude\claude_desktop_config.json` (Windows)
-
-    Note: you can definitely just edit Cline or Claude MCP settings through the GUI to add deebo. 
-    
-    Claude --> settings --> developer --> edit config
-
-    Cline --> hamburger menu in top right --> installed --> 'configure MCP servers'
-
-Deebo supports any combination of OpenRouter, Anthropic, and Gemini models. You can switch them out just by replacing 'openrouter' with 'anthropic' or 'gemini' and update the model choice accordingly. See src/util/agent-utils.ts for more information. Add the following entry to the `mcpServers` object within that JSON file. Remember to replace placeholder values like `/absolute/path/to/...` and API keys with your actual information.
-
+### MCP Configuration
 ```json
 {
   "mcpServers": {
-    "deebo-prototype": {
+    "deebo": {
       "autoApprove": [],
       "disabled": false,
       "timeout": 30,
@@ -175,58 +91,89 @@ Deebo supports any combination of OpenRouter, Anthropic, and Gemini models. You 
         "--experimental-specifier-resolution=node",
         "--experimental-modules",
         "--max-old-space-size=4096",
-        "/absolute/path/to/deebo-prototype/build/index.js"
+        "/absolute/path/to/deebo/build/index.js"
       ],
       "env": {
         "NODE_ENV": "development",
         "USE_MEMORY_BANK": "true",
-
         "MOTHER_HOST": "openrouter",
         "MOTHER_MODEL": "anthropic/claude-3.5-sonnet",
-
         "SCENARIO_HOST": "openrouter",
         "SCENARIO_MODEL": "anthropic/claude-3.5-sonnet",
-
-        "OPENROUTER_API_KEY": "sk-or-v1-...",
-        "GEMINI_API_KEY": "AIzaSy...",
-        "ANTHROPIC_API_KEY": "sk-ant-..."
+        "OPENROUTER_API_KEY": "sk-or-v1-..."
       },
       "transportType": "stdio"
     }
   }
 }
 ```
-**Note:** the settings in ```config/tools.json``` are for the tools that Deebo agents themselves use. If you notice errors when you try to start a Deebo session (check by going to Cline MCP settings --> Installed --> should be red text above the Deebo MCP server). Only provide the API key(s) corresponding to the `MOTHER_HOST` and `SCENARIO_HOST` you selected. Keys for unused providers can be omitted or left empty.
 
-**Important:** Restart your MCP client (Cline, Claude Desktop, etc.) after modifying the configuration file for the changes to take effect.
+### Design Principles
+- **Tool-isolated:** All mutations via MCP tools (no raw fs/git calls)
+- **Stateless scenarios:** No shared memory between agents
+- **Raw logs:** Human-readable, tailable logs and reports
+- **Delegation-first:** Built to be called by other agents, not humans
+</details>
 
-## 💡 How It Works
+<details>
+<summary>🔧 Development Guide</summary>
 
-- **Mother Agent:** Coordinates the investigation, spawns scenarios, and writes solutions.
-- **Scenario Agents:** Each investigates a single hypothesis in its own Git branch and reports findings.
-- **Process Isolation:** All agents run as subprocesses with timeout enforcement and independent lifecycles.
-- **Tooling:** All Git and FS operations are performed via MCP tools (git-mcp, desktop-commander).
+### Prerequisites
+- **Git**: For version control
+- **Node.js**: v18+ (includes npm)
+- **Python**: 3.10+ (for git-mcp)
 
----
+### Configuration Files
+- **Cline:** `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json`
+- **Claude Desktop:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 
-## ✅ Why Use Deebo?
+### LLM Support
+Deebo supports OpenRouter, Anthropic, and Gemini models. Configure via environment variables:
+- `MOTHER_HOST`: LLM provider for mother agent
+- `SCENARIO_HOST`: LLM provider for scenario agents
+- `[PROVIDER]_API_KEY`: API key for chosen provider
 
-- Offload bug investigations to a self-directed agent
-- Real experiments in your codebase, full Git isolation
-- Handles failure gracefully, runs multiple agents in parallel
-- Returns validated fixes, not just guesses
-- Scales horizontally—plug into any Claude/MCP-compatible agent
+See `src/util/agent-utils.ts` for supported models and configuration details.
+</details>
 
----
+<details>
+<summary>📖 For LLM Agents</summary>
 
-## 🔒 Design Principles
+This section contains detailed information to help LLM agents understand and work with Deebo:
 
-- **Tool-isolated:** All mutations are done via MCP tools (no raw fs/git calls inside agents)
-- **Stateless scenario agents:** No shared memory; pure function behavior
-- **Raw logs, not opinionated UIs:** Human-readable, tailable logs and reports
-- **Designed for delegation:** Meant to be called by other agents like Claude, not manually
+### Architecture
+- **Mother Agent:** Coordinates investigation, spawns scenarios, writes solutions
+- **Scenario Agents:** Each tests one hypothesis in an isolated Git branch
+- **Process Isolation:** All agents run as subprocesses with timeout enforcement
+- **MCP Tools:** All Git/FS operations through git-mcp and desktop-commander
 
----
+### Memory Bank Structure
+Memory bank paths follow the pattern:
+```
+memory-bank/{codebaseHash}/{session-id-hash}/
+  ├── mother.log
+  ├── scenario-agent-0.log
+  ├── scenario-agent-1.log
+  └── ...
+```
+
+The memory bank allows Deebo to learn from past sessions and personalize to your codebase. Use the context field when starting a debug session to provide relevant information, and add observations mid-session if needed.
+
+### Tool Usage Examples
+```xml
+<deebo>
+  <start
+    error="ReferenceError: x is not defined"
+    repoPath="/my/project/path"
+    context="// suspect function below\nfunction handleClick() { ... }"
+    filePath="src/ui/buttons.ts"
+    language="typescript"
+  />
+</deebo>
+```
+
+See the full [MCP Tools documentation](docs/mcp-tools.md) for more examples.
+</details>
 
 ## 📜 License
 
