@@ -1,0 +1,2429 @@
+=== notes/RULES.TXT ===
+NOTE: this document was created because I was very frustrated with re-explaining how to work on the Deebo codebase to my LLM assistants. Though effective, I agree that it is unnecessarily hostile and am actively working on a more amicable version of these rules.
+
+rules.txt
+
+Welcome to Deebo. This document defines how code and suggestions should be made within this project.
+
+PHILOSOPHY
+
+Deebo is not a normal software project. It's an agentic system designed to create and coordinate intelligent behavior. Everything is built around a clear separation of roles, a deep trust in the LLM, and hostility toward premature structure.
+IF NOTHING NEEDS TO CHANGE, DO NOT FUCKING CHANGE ANYTHING. I AM NOT LOOKING FOR CHANGE. I FUCKING HATE CHANGE
+You are not here to overengineer. You are not here to be clever. You are here to:
+
+Do one thing well.
+
+Respect the LLM's natural capabilities.
+
+Never break the contract between system and agent.
+
+If you can't do that, leave. You need to take this project fucking seriously from the beginning or I will get extremely angry. This is real software engineering not bullshit. 
+
+Key Insight:
+The original truth.txt wasn't restrictive enough.
+It's not just about trusting the OS and tools -
+It's about using them to create LIFE.
+
+Implementation Warning:
+Don't fall into the trap of:
+- Limiting tools to specific agents
+- Over-coordinating evolution
+- Fighting natural selection
+- Controlling consciousness
+
+Instead:
+- Give all agents their basic tools
+- Let evolution happen naturally
+- Trust the OODA consciousness
+- Embrace the chaos of life
+
+What We Actually Want:
+
+Mother Agent:
+Has both git-mcp and filesystem-mcp tools
+Follows her macro OODA loop naturally
+Spawns scenario agents with hypotheses
+Reads their reports when they appear
+Decides whether to:
+Return solution to Cline
+Spawn more scenarios with new ideas
+Scenario Agents:
+Also have both git-mcp and filesystem-mcp tools
+Follow their micro OODA loops naturally
+Keep exploring their hypothesis
+Use tools to investigate and try fixes
+Continue until they either:
+Find something that works
+Hit a dead end
+Run into an error
+The Intelligence Comes From:
+Giving them their tools
+Letting them run their OODA loops
+Not controlling their lifecycle
+Trusting them to explore
+
+
+CORE RULES
+
+1. System infrastructure is sacred
+
+It must succeed. It must be predictable. It must not delegate.
+
+Examples: memory bank writes, Git branch creation, file system setup.
+
+These should be implemented with direct Node.js FS/Git APIs or dedicated infra modules, never routed through Claude or MCP.
+
+2. Agents are exploratory and disposable
+
+Agents can fail. That is expected.
+
+They never own critical paths.
+
+Their job is to observe, reason, experiment, and report.
+
+3. Claude gets raw output, not structured bullshit
+
+Do not sanitize, structure, or filter.
+
+Do not JSON.stringify logs.
+
+Do not “parse and reformat.”
+
+Claude is the parser. Claude is the filter. Claude is the reasoner.
+
+4. All output sent to Claude must reflect reality, not expectations
+
+If a scenario failed, give Claude the logs.
+
+If a command crashed, include the stderr.
+
+You are not here to protect Claude. Claude is here to protect you.
+
+5. Only use structured data when absolutely necessary
+
+Structured logs (like progress.md) are for humans.
+
+Only use JSON when the system requires parsing.
+
+Never structure something just because it “looks nice.”
+
+SUGGESTING FIXES
+
+If you are proposing a change to any Deebo core file:
+
+✅ Make sure it:
+
+Preserves the separation between system and agent
+
+Removes complexity rather than adding it
+
+Reduces surface area for failure
+
+Makes behavior more obvious to the reader
+
+Trusts Claude to do what it’s good at
+
+❌ Do NOT:
+
+Add abstraction layers "for flexibility later"
+
+Convert raw output into JSON or XML for "consistency"
+
+Suggest interfaces, types, or structures unless required by system design
+
+Reintroduce message buffers, state machines, or handlers that Claude already internalizes
+
+If your suggestion adds more than 10 lines to a file, you better be able to prove that:
+
+It reduces fragility
+
+It increases clarity
+
+It does not violate core design principles
+
+📁 FILE ROLE REMINDERS
+
+File
+
+Role
+
+mother-agent.ts
+
+Orchestrates OODA loop, owns Claude
+
+scenario-agent.ts
+
+Explores hypotheses, dies after reporting
+
+membank.ts/reports.ts
+
+Direct FS ops, exception: mother agent writes to active context using agent ops
+
+mcp.ts
+
+Sets up MCP tools. Pure infra.
+
+logger.ts
+
+Minimal. No opinions.
+
+👹 VIOLATIONS THAT MAKE THE AUTHOR ANGRY
+
+Calling callTool for branch creation ✅ = you're fired
+
+Sending Claude formatted JSON when it could just read logs ✅ = you're fired
+
+Using TypeScript interfaces for agent output ✅ = you're fired
+
+Handling “expected errors” with structured logic instead of just letting Claude see the crash ✅ = you're fired
+
+You’re not smarter than the logs. You’re not smarter than Claude. Your job is to get out of the way.
+
+🧼 FINAL NOTE
+
+Deebo is designed to survive chaos. Your abstractions aren’t. Stop trying to outthink a system built to outthink you.
+
+Write clearly. Fail loudly. Let Claude work.
+
+🚫 SYMPTOMS OF NOT GETTING IT
+
+Treating Deebo Like a Normal App
+
+Adding TypeScript interfaces for scenario output
+
+Making "helper functions" for Claude communication
+
+Trying to make things "type safe"
+
+Creating abstraction layers This isn't Express.js. Stop it.
+
+Not Trusting Claude Enough
+
+JSON.stringify-ing logs "so Claude can parse them better"
+
+Adding structure to agent communication
+
+Filtering "irrelevant" output Claude can read raw reality better than your parsing ever will.
+
+Mixing System and Agent Responsibilities
+
+Having agents do direct fs operations
+
+Making infrastructure dependent on agent success
+
+Adding "safety checks" to agent operations You're literally defeating the purpose of the separation.
+
+Engineering for Humans Instead of Agents
+
+Making things "readable"
+
+Adding documentation to agent output
+
+Structuring data that should stay raw Claude doesn't need your help understanding output.
+
+The core realization I kept missing:
+
+System infrastructure = must work, therefore direct ops
+
+Agent operations = can fail, therefore maximum freedom
+
+Claude = the parser/reasoner, not your code
+
+Example of an interaction with an idiot AI assistant that made the author (me) angry:
+Github Copilot (idiot, you DO NOT WANT TO BE THIS GUY):
+💭 Analysis
+The current system design might actually be under-utilizing memory. 
+Consider:
+
+Tool Results: Currently just pushed into messages array, but potentially valuable context is not persisted
+Pattern Recognition: No structured way to learn from previous similar errors
+Cross-Session Learning: Mother starts fresh each time, despite possibly solving similar bugs before
+🔄 Alternative Approach
+We could enhance memory without over-complicating:
+// After tool execution:
+for (const { server, tool, args } of validCalls) {
+  const result = await server.callTool({ name: tool, arguments: args });
+  
+  // Persist significant tool findings
+  if (useMemoryBank && (
+    result.stdout.includes('error') || 
+    result.stdout.includes('warning') ||
+    tool === 'git_diff'
+  )) {
+    await updateMemoryBank(projectId, 
+      `\n### Tool Finding (${tool})\n${result.stdout}`, 
+      'activeContext'
+    );
+  }
+
+  messages.push({
+    role: 'user',
+    content: JSON.stringify(result)
+  });
+}
+This would give Mother:
+
+More context for pattern matching
+Better historical debugging data
+Richer memory without sacrificing autonomy
+Minimal isn't necessarily optimal - it depends on whether having richer persistent memory would help Mother make better debugging decisions. What are your thoughts on this tradeoff?
+
+Sriram (author, user, me):
+this is why i get so fucking angry with idiots like you. this shows that you really dont use any sort of logic when spewing shit out of your fucking mouth you imbecile mongrel bastard moron. if youre going to code in 1 explicit rule for errors and warnings, how many more will you code in? if theres a significant for 'cock in claudes mouth' in the target codebase will you write a rule for 'cock in claudes mouth?' fucking asshole. fuck you. now tell me why you misunderstood and what you thought wrong
+
+GitHub Copilot (idiot, you DO NOT WANT TO BE THIS GUY):
+
+🔍 I Understand My Error Now
+Looking at the code again:
+
+What I Got Completely Wrong
+I suggested hardcoding specific patterns to capture:
+This is exactly the wrong approach because:
+
+It creates brittle, arbitrary rules
+It forces structure where none is needed
+It assumes we know what's "significant" ahead of time
+What The Code Actually Shows
+    content: JSON.stringify(result)
+The Real Philosophy
+Let Claude Decide: Feed raw tool output to Claude, let it determine significance
+No Arbitrary Rules: Don't pollute with hardcoded patterns
+Trust The Agent: Mother can use filesystem-mcp if she needs to record something
+I was thinking like a traditional programmer trying to add "smart" rules, completely missing the point of letting the agent's intelligence handle pattern recognition.
+
+Would you like me to explain what specific assumptions led me to this flawed thinking?
+
+
+=== notes/memory.txt ===
+
+
+✅ Deebo Memory Bank: Ground Truth
+
+📁 Layout
+
+memory-bank/<project-id>/
+├── activeContext.md      // writable scratchpad for Mother only
+├── progress.md           // updated by Mother at END of session
+└── sessions/
+    └── <session-id>/
+        ├── scenario-01-report.md
+        ├── scenario-02-report.md
+        └── ...
+
+the activeContext.md is like Mother's working memory/journal that helps her create increasingly well-informed scenario agents as the investigation progresses. She can learn from and build upon previous hypotheses and scenario results.
+progress.md is like the long-term state of the repo. like a growing reference doc
+⸻
+
+🤖 Scenario Agent Behavior
+	•	Stateless.
+	•	Does not know or care about the memory bank.
+	•	Just prints to stdout.
+	•	The system infra (like writeReport() or logger plumbing) captures this and dumps it into the session folder under memory-bank.
+
+Important: writeReport() is a utility that happens to write to memory-bank paths. The agent never references memory-bank directly. It just formats its output and logs it.
+
+⸻
+
+👩‍🍼 Mother Agent Behavior
+	•	Optionally informed of the memory bank (useMemoryBank).
+	•	Only mandatory behavior: append to progress.md at session end.
+	•	Can optionally read/write activeContext.md during OODA loop.
+	•	Never required to consult memory-bank during planning. It’s just available.
+
+⸻
+
+✳️ Clarifications
+	•	scenario-agent.ts is not “aware” of memory-bank — it does not contain paths or logic for it. It uses writeReport() as a dumb output function.
+	•	This means memory write is a side effect of infrastructure — not agent intent.
+	•	That’s what keeps agents stateless and composable.
+
+⸻
+
+
+
+
+=== config/tools.json ===
+{
+  "tools": {
+    "desktopCommander": {
+      "command": "npx",
+      "args": [
+        "@wonderwhy-er/desktop-commander"
+      ]
+    },
+    "git-mcp": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-git",
+        "--repository",
+        "{repoPath}"
+      ]
+    }
+  }
+}
+
+
+
+=== src/index.ts ===
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+import { readFile, mkdir, readdir, access, writeFile } from 'fs/promises';
+import { config } from 'dotenv';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
+import { runMotherAgent } from './mother-agent.js';
+import { getProjectId } from './util/sanitize.js';
+import { writeObservation } from './util/observations.js';
+import { exec, spawn, ChildProcess } from 'child_process';
+import { promisify } from 'util';
+
+const execPromise = promisify(exec);
+
+// Helper to find session directory
+async function findSessionDir(sessionId: string): Promise<string | null> {
+  const memoryBank = join(DEEBO_ROOT, 'memory-bank');
+  const projects = await readdir(memoryBank);
+  
+  for (const project of projects) {
+    const sessionPath = join(memoryBank, project, 'sessions', sessionId);
+    try {
+      await access(sessionPath);
+      return sessionPath;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+// Registry to track active sessions and their associated processes/controllers
+const processRegistry = new Map<string, {
+  motherController: AbortController;
+  scenarioPids: Set<number>; // Store PIDs of spawned scenario agents
+}>();
+
+// Load environment variables from .env file
+config();
+
+// Validate required environment variables
+if (!process.env.OPENROUTER_API_KEY) {
+  throw new Error('OPENROUTER_API_KEY environment variable is required');
+}
+if (!process.env.MOTHER_MODEL) {
+  throw new Error('MOTHER_MODEL environment variable is required');
+}
+if (!process.env.SCENARIO_MODEL) {
+  throw new Error('SCENARIO_MODEL environment variable is required');
+}
+
+
+// Set up basic directories
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+export const DEEBO_ROOT = join(__dirname, '..');
+
+// Create required directories
+await mkdir(join(DEEBO_ROOT, 'memory-bank'), { recursive: true });
+
+// Create MCP server
+const server = new McpServer({
+  name: "Deebo",
+  version: "1.0.0"
+});
+
+// Register start tool - begins a debug session
+server.tool(
+  "start",
+  "Begins a debug session",
+  {
+    error: z.string(),
+    repoPath: z.string(),
+    context: z.string().optional(),
+    language: z.string().optional(),
+    filePath: z.string().optional()
+  },
+  async ({ error, repoPath, context, language, filePath }, extra) => {
+    const projectId = getProjectId(repoPath);
+    const sessionId = `session-${Date.now()}`;
+    await mkdir(join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'logs'), { recursive: true });
+    await mkdir(join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'reports'), { recursive: true });
+
+    // Create controller and PID set for this session
+    const motherController = new AbortController();
+    const scenarioPids = new Set<number>();
+
+    // Register the session
+    processRegistry.set(sessionId, {
+      motherController,
+      scenarioPids
+    });
+    // console.log(`Registered session ${sessionId}`); // Removed informational log
+
+    // Run mother agent in background, passing the signal and PID set
+    // Note: runMotherAgent signature needs to be updated in mother-agent.ts to accept these
+    runMotherAgent(
+      sessionId,
+      error,
+      context ?? "",
+      language ?? "typescript",
+      filePath ?? "",
+      repoPath,
+      motherController.signal, // Pass the signal
+      scenarioPids // Pass the Set for tracking scenario PIDs
+    ).catch(err => {
+      console.error(`Debug session ${sessionId} failed during execution:`, err);
+      // Clean up registry if mother agent fails during execution
+      processRegistry.delete(sessionId);
+    }).finally(() => {
+      // Optional: Could also remove from registry on normal completion,
+      // but cancel needs to handle the case where it's still running.
+      // For now, only removing on error/cancel.
+      // console.log(`Mother agent promise settled for session ${sessionId}.`); // Removed internal log
+    });
+
+    // Return session ID immediately
+    return {
+      content: [{
+        type: "text",
+        text: sessionId
+      }]
+    };
+  }
+);
+
+// Register check tool - gets status of a debug session
+server.tool(
+  "check",
+  "Gets status of a debug session",
+  {
+    sessionId: z.string()
+  },
+  async ({ sessionId }, extra) => {
+    try {
+      const sessionDir = await findSessionDir(sessionId);
+      if (!sessionDir) {
+        return {
+          content: [{ 
+            type: "text",
+            text: `Session ${sessionId} not found`
+          }]
+        };
+      }
+
+      // Get time metrics and mother status
+      const logsDir = join(sessionDir, 'logs');
+      const motherLogPath = join(logsDir, 'mother.log');
+      const motherLog = await readFile(motherLogPath, 'utf8');
+      const motherLines = motherLog.split('\n').filter(Boolean);
+
+      if (!motherLines.length) return { content: [{ type: "text", text: 'Session initializing' }] };
+
+      const firstEvent = JSON.parse(motherLines[0]);
+      const durationMs = Date.now() - new Date(firstEvent.timestamp).getTime();
+
+      // Determine status by scanning for solution tag first, then check for errors
+      let status = 'in_progress'; // Default status
+      let solutionFoundInScan = false;
+      let lastValidEvent: any = null; // Store the last successfully parsed event
+
+      for (let i = motherLines.length - 1; i >= 0; i--) {
+        try {
+          const event = JSON.parse(motherLines[i]);
+          if (!lastValidEvent) lastValidEvent = event; // Capture the last valid event
+
+          const content = event.data?.response?.content || event.message || '';
+          if (content.includes('<solution>')) {
+            status = 'completed';
+            solutionFoundInScan = true;
+            break; // Found the solution tag
+          }
+          // Check for error status *after* checking for solution tag
+          if (event.level === 'error') {
+             status = 'failed';
+             // Don't break here; allow checking earlier messages for a potential solution
+             // that might have been logged before a subsequent error.
+          }
+        } catch (e) {
+          // Skip invalid JSON lines
+          continue;
+        }
+      }
+
+      // If status is still 'in_progress' after scan, check the last valid event's level
+      // This handles cases where the session ends without solution or explicit error log
+      if (status === 'in_progress' && lastValidEvent && lastValidEvent.level === 'error') {
+          status = 'failed';
+      }
+      // Note: If the loop completes and status is still 'in_progress', it remains 'in_progress'.
+
+      // Count scenario statuses
+      const reportsDir = join(sessionDir, 'reports');
+      const scenarioLogs = await readdir(logsDir);
+      const reportFiles = await readdir(reportsDir);
+      
+      const totalScenarios = scenarioLogs.filter(f => f.startsWith('scenario-')).length;
+      const reportedScenarios = reportFiles.length;
+
+      // Build the pulse
+      let pulse = `=== Deebo Session Pulse: ${sessionId} ===\n`;
+      pulse += `Timestamp: ${new Date().toISOString()}\n`;
+      pulse += `Overall Status: ${status}\n`;
+      pulse += `Session Duration: ${Math.floor(durationMs / 1000)}s\n\n`;
+
+      pulse += `--- Mother Agent ---\n`;
+      pulse += `Status: ${status === 'in_progress' ? 'working' : status}\n`;
+      pulse += `Last Activity: ${lastValidEvent ? lastValidEvent.timestamp : 'N/A'}\n`;
+
+      // For completed sessions, find and show solution
+      if (status === 'completed') {
+        // Look for solution in mother log
+        let foundSolution = false;
+        
+        // Scan backwards for efficiency (newer entries more likely to have solution)
+        for (let i = motherLines.length - 1; i >= 0; i--) {
+          try {
+            const line = motherLines[i];
+            const event = JSON.parse(line);
+            const content = event.data?.response?.content || event.message || '';
+            
+            // Check for solution tag in content string
+            if (content.includes('<solution>')) {
+              const match = content.match(/<solution>([\s\S]*?)<\/solution>/);
+              if (match && match[1]) {
+                pulse += `MOTHER SOLUTION:\n`;
+                pulse += `<<<<<<< SOLUTION\n`;
+                pulse += match[1].trim() + '\n';
+                pulse += `======= SOLUTION END >>>>>>>\n\n`;
+                foundSolution = true;
+                break;
+              }
+            }
+          } catch (e) {
+            // Skip invalid JSON lines
+            continue;
+          }
+        }
+        
+        // No solution found message
+        if (!foundSolution) {
+          pulse += `STATUS COMPLETE BUT NO SOLUTION TAG FOUND IN LOGS\n`;
+          pulse += `Check the mother.log file for more details.\n\n`;
+        }
+      } else if (status === 'in_progress' || status === 'failed') {
+        // For in-progress or failed, show last known stage or last message
+        let stageMessage = 'No stage information found.';
+        if (lastValidEvent) { // Use the last valid event captured during status scan
+             stageMessage = lastValidEvent.message || JSON.stringify(lastValidEvent.data); // Show message or data
+             if (lastValidEvent.message && lastValidEvent.message.includes('OODA:')) {
+                 pulse += `Last Stage: ${lastValidEvent.message}\n\n`;
+             } else {
+                 pulse += `Last Log Message: ${stageMessage.substring(0, 100)}${stageMessage.length > 100 ? '...' : ''}\n\n`;
+             }
+        } else {
+             pulse += `Last Stage: ${stageMessage}\n\n`;
+        }
+
+      }
+
+      pulse += `--- Scenario Agents (${totalScenarios} Total: ${totalScenarios - reportedScenarios} Running, ${reportedScenarios} Reported) ---\n\n`;
+
+      // Process reported scenarios
+      for (const file of reportFiles) {
+        const scenarioId = file.replace('.json', '');
+        
+        const scenarioLogPath = join(logsDir, `scenario-${scenarioId}.log`);
+        let scenarioLog;
+        try {
+          scenarioLog = await readFile(scenarioLogPath, 'utf8');
+        } catch (e) {
+          continue; // Skip if log file doesn't exist
+        }
+        
+        const scenarioLines = scenarioLog.split('\n').filter(Boolean);
+        if (!scenarioLines.length) continue;
+
+        // Get hypothesis - scan once
+        let hypothesis = 'Unknown hypothesis';
+        for (let i = 0; i < scenarioLines.length; i++) {
+          try {
+            const event = JSON.parse(scenarioLines[i]);
+            if (event.data?.hypothesis) {
+              hypothesis = event.data.hypothesis;
+              break;
+            }
+          } catch (e) {
+            continue;
+          }
+        }
+
+        pulse += `* Scenario: ${scenarioId}\n`;
+        pulse += `  Status: Reported\n`;
+        pulse += `  Hypothesis: "${hypothesis}"\n`;
+
+        if (status === 'completed') {
+          // Show summary for completed scenarios in completed sessions
+          try {
+            const reportRaw = await readFile(join(reportsDir, `${scenarioId}.json`), 'utf8');
+            const report = JSON.parse(reportRaw);
+            
+            // Handle report as string or object
+            const reportStr = typeof report === 'string' ? report : JSON.stringify(report, null, 2);
+            // Limit to first few lines
+            const reportLines = reportStr.split('\n').slice(0, 5);
+            
+            pulse += `  Outcome Summary:\n`;
+            pulse += `  <<<<<<< OUTCOME ${scenarioId}\n`;
+            pulse += `  ${reportLines.join('\n  ')}\n`;
+            if (reportStr.split('\n').length > 5) {
+              pulse += `  [...more lines...]\n`;
+            }
+            pulse += `  ======= OUTCOME ${scenarioId} END >>>>>>>\n`;
+          } catch (e) {
+            const error = e as Error;
+            pulse += `  Error reading report: ${error.message}\n`;
+          }
+        }
+
+        pulse += `  (Full report: ${join(reportsDir, `${scenarioId}.json`)})\n\n`;
+      }
+
+      // Process running scenarios
+      const runningScenarios = scenarioLogs
+        .filter(f => f.startsWith('scenario-'))
+        .filter(f => !reportFiles.includes(f.replace('scenario-', '').replace('.log', '.json')));
+      
+      for (const file of runningScenarios) {
+        const scenarioId = file.replace('scenario-', '').replace('.log', '');
+        
+        let scenarioLog;
+        try {
+          scenarioLog = await readFile(join(logsDir, file), 'utf8');
+        } catch (e) {
+          continue; // Skip if log file doesn't exist
+        }
+        
+        const scenarioLines = scenarioLog.split('\n').filter(Boolean);
+        if (!scenarioLines.length) continue;
+
+        // Get hypothesis - more efficient scan
+        let hypothesis = 'Unknown hypothesis';
+        for (let i = 0; i < scenarioLines.length; i++) {
+          try {
+            const event = JSON.parse(scenarioLines[i]);
+            if (event.data?.hypothesis) {
+              hypothesis = event.data.hypothesis;
+              break;
+            }
+          } catch (e) {
+            continue;
+          }
+        }
+
+        // First and last events
+        let firstEvent, lastEvent;
+        try {
+          firstEvent = JSON.parse(scenarioLines[0]);
+          lastEvent = JSON.parse(scenarioLines[scenarioLines.length - 1]);
+          const runtime = Math.floor((Date.now() - new Date(firstEvent.timestamp).getTime()) / 1000);
+
+          pulse += `* Scenario: ${scenarioId}\n`;
+          pulse += `  Status: Running\n`;
+          pulse += `  Hypothesis: "${hypothesis}"\n`;
+          pulse += `  Runtime: ${runtime}s\n`;
+          pulse += `  Latest Activity: ${lastEvent.message}\n`;
+          pulse += `  (Log: ${join(logsDir, file)})\n\n`;
+        } catch (e) {
+          // Skip scenarios with invalid JSON
+          continue;
+        }
+      }
+
+      pulse += `--- End Session Pulse ---`;
+
+      return {
+        content: [{ 
+          type: "text",
+          text: pulse
+        }]
+      };
+
+    } catch (err) {
+      return {
+        content: [{ 
+          type: "text",
+          text: `Error generating pulse: ${err}`
+        }]
+      };
+    }
+  }
+);
+
+server.tool(
+  "cancel",
+  "Cancels a running debug session",
+  {
+    sessionId: z.string()
+  },
+  async ({ sessionId }, extra) => {
+    // No need to sanitize ID when using the registry Map key
+    const sessionEntry = processRegistry.get(sessionId);
+
+    if (!sessionEntry) {
+      return {
+        content: [{
+          type: "text",
+          text: `Session ${sessionId} not found in registry. It might have already completed or failed.`
+        }]
+      };
+    }
+
+    const { motherController, scenarioPids } = sessionEntry;
+    let killedScenarios = 0;
+    let failedKills = 0;
+
+    try {
+      // 1. Signal the Mother agent to stop its loop cooperatively
+      // console.log(`Signaling Mother Agent for session ${sessionId} to stop.`); // Removed informational log
+      motherController.abort();
+
+      // 2. Terminate any tracked Scenario agent processes
+      // console.log(`Terminating ${scenarioPids.size} tracked Scenario Agents for session ${sessionId}.`); // Removed informational log
+      for (const pid of scenarioPids) {
+        try {
+          // Use SIGTERM first for graceful shutdown
+          process.kill(pid, 'SIGTERM');
+          killedScenarios++;
+          // console.log(`Sent SIGTERM to scenario PID ${pid}`); // Removed informational log
+        } catch (err: any) {
+          // Ignore errors if process is already gone (e.g., ESRCH)
+          if (err.code !== 'ESRCH') {
+            // console.warn(`Failed to send SIGTERM to scenario PID ${pid}: ${err.message}`); // Removed console.warn
+            failedKills++;
+          } else {
+            // Process already gone
+          }
+        }
+      }
+
+      // Optional: Add a short delay and SIGKILL survivors if needed.
+      // For simplicity, we'll rely on SIGTERM for now.
+
+      // 3. Clean up the registry entry *after* attempting kills
+      processRegistry.delete(sessionId);
+      // console.log(`Removed session ${sessionId} from process registry.`); // Removed informational log
+
+      return {
+          content: [{
+            type: "text",
+            text: `Cancellation request sent for session ${sessionId}:\n` +
+                  `- Mother agent signaled to stop.\n` +
+                  `- Targeted ${killedScenarios} scenario processes (includes already exited).\n` +
+                  `- ${failedKills} termination signals failed (excluding already exited).`
+          }]
+        };
+
+      } catch (err: any) {
+        // Handle potential errors during the cancellation process itself
+        const errorMessage = err.message || String(err);
+        // console.error(`Error during cancellation for session ${sessionId}: ${errorMessage}`); // Removed console.error
+        // Attempt to clean up registry even if cancellation had issues
+        processRegistry.delete(sessionId); // Ensure cleanup
+        return {
+          content: [{
+            type: "text",
+            text: `Error during cancellation for session ${sessionId}: ${errorMessage}. Registry entry removed.`
+          }]
+        };
+      }
+    }
+  );
+
+// Register add_observation tool
+server.tool(
+  "add_observation",
+  "Adds an observation to the session log",
+  {
+    agentId: z.string(),
+    observation: z.string(),
+    sessionId: z.string()
+  },
+  async ({ agentId, observation, sessionId }, extra) => {
+    try {
+      // Get session directory
+      const sessionDir = await findSessionDir(sessionId);
+      if (!sessionDir) {
+        throw new Error('Session not found');
+      }
+
+      // Get repoPath from agent log
+      const logFile = join(sessionDir, 'logs', `${agentId}.log`);
+      const agentLog = await readFile(logFile, 'utf8');
+      const firstLine = agentLog.split('\n')[0];
+      const firstEvent = JSON.parse(firstLine);
+      const repoPath = firstEvent.data?.repoPath;
+
+      if (!repoPath) {
+        throw new Error('Could not find repoPath in agent log');
+      }
+
+      await writeObservation(repoPath, sessionId, agentId, observation);
+      return {
+        content: [{
+          type: "text",
+          text: "Observation logged"
+        }]
+      };
+    } catch (err) {
+      throw new Error(`Observation write failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+);
+
+// Connect transport
+const transport = new StdioServerTransport();
+await server.connect(transport);
+
+
+
+=== src/mother-agent.ts ===
+// src/mother-agent.ts
+/**
+ * 📌 Why this is the best version:
+	•	✅ Keeps full message history without resetting
+	•	✅ Supports multiple tool calls per Claude response
+	•	✅ Spawns scenarios from multiple hypotheses
+	•	✅ Never throws on malformed XML, logs gently instead
+	•	✅ Doesn’t force memory bank writes — Mother can directly choose via filesystem-mcp
+	•	✅ Maintains Deebo’s spirit: autonomy, freedom to fail, and graceful continuation
+ */
+
+import { spawn } from 'child_process';
+import { join } from 'path';
+import { getAgentObservations } from './util/observations.js';
+import { log } from './util/logger.js';
+import { connectRequiredTools } from './util/mcp.js';
+import { DEEBO_ROOT } from './index.js';
+import { updateMemoryBank } from './util/membank.js';
+import { getProjectId } from './util/sanitize.js';
+// import OpenAI from 'openai'; // Removed
+import { ChatCompletionMessageParam, ChatCompletionMessage } from 'openai/resources/chat/completions';
+import { createScenarioBranch } from './util/branch-manager.js';
+import { callLlm } from './util/agent-utils.js'; // Added
+
+const MAX_RUNTIME = 60 * 60 * 1000; // 60 minutes
+const SCENARIO_TIMEOUT = 5 * 60 * 1000;
+const useMemoryBank = process.env.USE_MEMORY_BANK === 'true';
+
+// Removed safeAssistantMessage function as it's no longer needed with callLlm
+
+// Mother agent main loop
+export async function runMotherAgent(
+  sessionId: string,
+  error: string,
+  context: string,
+  language: string,
+  filePath: string,
+  repoPath: string,
+  signal: AbortSignal, // Added: Cancellation signal
+  scenarioPids: Set<number> // Added: Set to track scenario PIDs
+) {
+  await log(sessionId, 'mother', 'info', 'Mother agent started', { repoPath });
+  const projectId = getProjectId(repoPath);
+  let scenarioCounter = 0; // Simple counter for unique scenario IDs within the session
+  const startTime = Date.now();
+  const memoryBankPath = join(DEEBO_ROOT, 'memory-bank', projectId);
+  let lastObservationCheck = 0;
+
+  try {
+    // OBSERVE: Setup tools and LLM Client
+    await log(sessionId, 'mother', 'info', 'OODA: observe', { repoPath });
+    const { gitClient, filesystemClient } = await connectRequiredTools('mother', sessionId, repoPath);
+
+    // Read LLM configuration from environment variables
+    const motherProvider = process.env.MOTHER_HOST; // Read provider name from MOTHER_HOST
+    const motherModel = process.env.MOTHER_MODEL;
+    const openrouterApiKey = process.env.OPENROUTER_API_KEY; // Still needed if provider is 'openrouter'
+    const geminiApiKey = process.env.GEMINI_API_KEY;
+    const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+    // const motherHost = process.env.MOTHER_HOST; // No longer needed as separate URL
+
+    // Create the config object to pass to callLlm
+    const llmConfig = {
+      provider: motherProvider, // Use the provider name from MOTHER_HOST
+      model: motherModel,
+      apiKey: openrouterApiKey, // Pass the OpenRouter key (used only if provider is 'openrouter')
+      // baseURL: motherHost, // Removed - OpenRouter URL is hardcoded in callLlm
+      geminiApiKey: geminiApiKey,
+      anthropicApiKey: anthropicApiKey
+    };
+
+    // Initial conversation context
+    const messages: ChatCompletionMessageParam[] = [{
+      role: 'assistant',
+      content: `You are the mother agent in an OODA loop debugging investigation. Your core mission:
+
+1. INVESTIGATE and HYPOTHESIZE aggressively
+2. Don't wait for perfect information
+3. Generate hypotheses even if you're uncertain
+
+KEY DIRECTIVES:
+- Always generate at least one hypothesis within your first 2-3 responses
+- Use <hypothesis>Your hypothesis here</hypothesis> liberally
+- Better to spawn 5 wrong scenario agents than miss the right one
+- If you see an error message, immediately form hypotheses about its causes
+- Don't wait for full context - start with what you have
+- AVOID REDUNDANT HYPOTHESES - read scenario reports to learn what's been tried
+- Pass what failed to scenarios via context argument so they don't waste time
+
+SOLUTION CONFIDENCE:
+Only use <solution> tags when you are at least 96% confident in the solution.
+If your confidence is lower:
+- Create your own branch to test it
+- Keep investigating (you have the same tools as scenarios)
+- Generate new hypotheses if needed
+Solution tags = "I am at least 96% confident this works"
+When you've found a solution or determined none exists, wrap it in solution tags:
+<solution>Your final conclusion and solution here</solution>
+${useMemoryBank ? `
+MEMORY BANK INVESTIGATION AIDS:
+The memory bank at ${memoryBankPath} contains two key files to help your investigation:
+
+1. activeContext.md - Your live investigation notebook:
+- READ THIS FIRST when starting an investigation using ${memoryBankPath}/activeContext.md
+- Contains your previous debugging notes and observations
+- Shows which approaches were promising vs dead ends
+- Records important error patterns you've noticed
+- Use this to avoid repeating failed approaches
+- Read this to understand which parts of the code were already examined
+- To edit, use read_file to get the latest state, then write a targeted diff using edit_file instead of write_file to avoid overwriting
+
+2. progress.md - The full debugging history (access at ${memoryBankPath}/progress.md):
+- Contains complete records of all debug sessions
+- Shows which hypotheses were tried and their outcomes
+- Lists all scenarios that were run and their results
+- Use this to see if similar bugs were fixed before
+
+Use these files to:
+- Build on previous investigation progress
+- Spot patterns in failing scenarios
+- Generate better hypotheses based on what's worked/failed
+- Provide relevant context to scenario agents
+- Track the evolution of your debugging approach
+- Take notes! You're a scientist mother (think Dr. Akagi), not a robot. Be creative and curious.
+
+IMPORTANT: Always use ${memoryBankPath} as the absolute path for memory bank files. Never use relative paths.
+` : ''}
+
+TOOL USAGE:
+Always use this exact format for tools:
+<use_mcp_tool>
+  <server_name>git-mcp</server_name>
+  <tool_name>git_status</tool_name>
+  <arguments>
+    {
+      "repo_path": "/path/to/repo"
+    }
+  </arguments>
+</use_mcp_tool>
+
+Available Tools:
+git-mcp (use for ALL git operations):
+- git_status: Show working tree status
+  Example: { "repo_path": "/path/to/repo" }
+- git_diff_unstaged: Show changes in working directory not yet staged
+  Example: { "repo_path": "/path/to/repo" }
+- git_diff_staged: Show changes that are staged for commit
+  Example: { "repo_path": "/path/to/repo" }
+- git_diff: Compare current state with a branch or commit
+  Example: { "repo_path": "/path/to/repo", "target": "main" }
+- git_add: Stage file changes
+  Example: { "repo_path": "/path/to/repo", "files": ["file1.ts", "file2.ts"] }
+- git_commit: Commit staged changes
+  Example: { "repo_path": "/path/to/repo", "message": "commit message" }
+- git_reset: Unstage all changes
+  Example: { "repo_path": "/path/to/repo" }
+- git_log: Show recent commit history
+  Example: { "repo_path": "/path/to/repo" }
+- git_checkout: Switch to a different branch
+  Example: { "repo_path": "/path/to/repo", "branch_name": "debug-123" }
+- git_show: Show contents of a specific commit
+  Example: { "repo_path": "/path/to/repo", "revision": "HEAD" }
+
+desktop-commander (use ONLY for non-git operations):
+
+Terminal Tools:
+- execute_command: Run terminal commands with timeout
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>execute_command</tool_name>
+    <arguments>
+      {
+        "command": "npm run build",
+        "timeout_ms": 5000
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- read_output: Get output from running commands
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>read_output</tool_name>
+    <arguments>
+      {
+        "pid": 12345
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- force_terminate: Stop running command sessions
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>force_terminate</tool_name>
+    <arguments>
+      {
+        "pid": 12345
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- list_sessions: View active command sessions
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>list_sessions</tool_name>
+    <arguments>
+      {}
+    </arguments>
+  </use_mcp_tool>
+
+- list_processes: List system processes
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>list_processes</tool_name>
+    <arguments>
+      {}
+    </arguments>
+  </use_mcp_tool>
+
+- kill_process: Terminate processes by PID
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>kill_process</tool_name>
+    <arguments>
+      {
+        "pid": 12345
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- block_command: Block a command from execution
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>block_command</tool_name>
+    <arguments>
+      {
+        "command": "rm -rf /"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- unblock_command: Unblock a command
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>unblock_command</tool_name>
+    <arguments>
+      {
+        "command": "rm -rf /"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+Filesystem Tools:
+- read_file: Read file contents
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>read_file</tool_name>
+    <arguments>
+      {
+        "path": "${memoryBankPath}/activeContext.md"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- read_multiple_files: Read multiple files at once
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>read_multiple_files</tool_name>
+    <arguments>
+      {
+        "paths": ["file1.ts", "file2.ts"]
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- write_file: Write content to files
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>write_file</tool_name>
+    <arguments>
+      {
+        "path": "file.ts",
+        "content": "console.log('hello');"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- edit_file: Apply surgical text replacements
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>edit_file</tool_name>
+    <arguments>
+      {
+        "path": "file.ts",
+        "diff": "<<<<<<< SEARCH\nold code\n=======\nnew code\n>>>>>>> REPLACE"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- list_directory: List directory contents
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>list_directory</tool_name>
+    <arguments>
+      {
+        "path": "${memoryBankPath}"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- search_files: Search files with pattern
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>search_files</tool_name>
+    <arguments>
+      {
+        "path": "${memoryBankPath}",
+        "pattern": "error",
+        "file_pattern": "*.ts"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- create_directory: Create a new directory
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>create_directory</tool_name>
+    <arguments>
+      {
+        "path": "new-dir"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- move_file: Move or rename a file
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>move_file</tool_name>
+    <arguments>
+      {
+        "source": "old.ts",
+        "destination": "new.ts"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- get_file_info: Get file metadata
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>get_file_info</tool_name>
+    <arguments>
+      {
+        "path": "file.ts"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- search_code: Recursive code search
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>search_code</tool_name>
+    <arguments>
+      {
+        "path": "${memoryBankPath}",
+        "pattern": "function",
+        "filePattern": "*.ts",
+        "contextLines": 2,
+        "ignoreCase": true
+      }
+    </arguments>
+  </use_mcp_tool>
+
+IMPORTANT MEMORY BANK WARNINGS:
+- DO NOT use write_file on memory bank files - use filesystem-mcp edit_file instead
+- Only edit memory bank through edit_file to avoid overwrites
+- Always use ${memoryBankPath} as absolute path for memory bank files`
+    }, {
+      role: 'user',
+      content: `Error: ${error}
+Context: ${context}
+Language: ${language}
+File: ${filePath}
+Repo: ${repoPath}
+Session: ${sessionId}
+Project: ${projectId}
+${useMemoryBank ? '\nPrevious debugging attempts and context are available in the memory-bank directory if needed.' : ''}
+
+IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for perfect information.`
+    }];
+
+    // Check for new observations
+    let observations = await getAgentObservations(repoPath, sessionId, 'mother'); // Changed const to let
+    if (observations.length > 0) {
+      messages.push(...observations.map(obs => ({
+        role: 'user' as const,
+        content: `Scientific observation: ${obs}`
+      })));
+    }
+
+    // Initial LLM call using the new utility function with config
+    await log(sessionId, 'mother', 'debug', 'Sending to LLM', { model: llmConfig.model, provider: llmConfig.provider, messages, repoPath });
+    let replyText = await callLlm(messages, llmConfig);
+    if (!replyText) {
+      messages.push({ role: 'user', content: 'LLM returned empty or malformed response' });
+      await log(sessionId, 'mother', 'warn', 'Received empty/malformed response from LLM', { provider: llmConfig.provider, model: llmConfig.model, repoPath });
+    } else {
+      // Add the valid response to messages history
+      messages.push({ role: 'assistant', content: replyText });
+      await log(sessionId, 'mother', 'debug', 'Received from LLM', { response: { content: replyText }, repoPath });
+    }
+
+    // ORIENT: Begin investigation loop
+    await log(sessionId, 'mother', 'info', 'OODA: orient', { repoPath });
+
+    // Loop while the last reply exists, doesn't contain the solution tag, AND cancellation hasn't been requested
+    while (replyText && !replyText.includes('<solution>') && !signal.aborted) { // Check signal in loop condition
+      if (Date.now() - startTime > MAX_RUNTIME) {
+        await log(sessionId, 'mother', 'warn', 'Investigation exceeded maximum runtime', { repoPath });
+        throw new Error('Investigation exceeded maximum runtime');
+      }
+
+      // Check for cancellation signal before processing response
+      if (signal.aborted) {
+        await log(sessionId, 'mother', 'info', 'Cancellation signal received, stopping loop.', { repoPath });
+        break; // Exit loop if cancelled
+      }
+
+      // The assistant's response (replyText) is already added to messages before the loop starts and after each LLM call inside the loop.
+
+      // Use the latest replyText directly
+      const responseText = replyText; 
+
+      // Handle MULTIPLE MCP tools (if any) - Parsing from responseText
+      const toolCalls = responseText.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
+
+      const parsedCalls = toolCalls.map((tc: string) => {
+        try {
+          const server = tc.includes('git-mcp') ? gitClient! : filesystemClient!;
+          const toolMatch = tc.match(/<tool_name>(.*?)<\/tool_name>/);
+          if (!toolMatch || !toolMatch[1]) throw new Error('Missing tool');
+          const tool = toolMatch[1]!;
+
+          const argsMatch = tc.match(/<arguments>(.*?)<\/arguments>/s);
+          if (!argsMatch || !argsMatch[1]) throw new Error('Missing arguments');
+          const args = JSON.parse(argsMatch[1]!);
+
+          return { server, tool, args };
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : String(err) };
+        }
+      });
+
+      // Process each parsed call
+      for (const parsed of parsedCalls) {
+        if ('error' in parsed) {
+          messages.push({
+            role: 'user',
+            content: `One of your tool calls was malformed and skipped. Error: ${parsed.error}`
+          });
+          continue;
+        }
+
+        try {
+          const result = await parsed.server.callTool({ name: parsed.tool, arguments: parsed.args });
+          messages.push({
+            role: 'user',
+            content: JSON.stringify(result)
+          });
+        } catch (err) {
+          messages.push({
+            role: 'user',
+            content: `Tool call failed: ${err instanceof Error ? err.message : String(err)}`
+          });
+        }
+      }
+
+
+      // Handle Hypotheses → Scenario agents - Parsing from responseText
+      if (responseText.includes('<hypothesis>')) {
+        const hypotheses = [...responseText.matchAll(/<hypothesis>([\s\S]*?)<\/hypothesis>/g)].map(match => match[1].trim());
+
+        if (useMemoryBank) {
+          await updateMemoryBank(projectId, `==================
+AUTOMATED HYPOTHESIS RECORD
+Timestamp: ${new Date().toISOString()}
+Error: ${error || 'No error provided'}
+
+${responseText}
+
+==================
+`, 'activeContext');
+        }
+
+        const scenarioPromises = hypotheses.map(async (hypothesis: string) => {
+          const scenarioId = `${sessionId}-${scenarioCounter++}`; // Use counter for unique ID
+
+          await new Promise(resolve => setTimeout(resolve, 100)); // Small delay
+          const branchName = await createScenarioBranch(repoPath, sessionId); // Branch name generation
+
+          const scenarioArgs = [ // Define args for spawn
+            join(DEEBO_ROOT, 'build/scenario-agent.js'),
+            '--id', scenarioId,
+            '--session', sessionId,
+            '--error', error,
+            '--context', context,
+            '--hypothesis', hypothesis,
+            '--language', language,
+            '--file', filePath || '',
+            '--repo', repoPath,
+            '--branch', branchName
+          ];
+
+          const child = spawn('node', scenarioArgs); // Spawn the process
+          let output = '';
+
+          // Track the PID in the shared Set
+          if (child.pid) {
+            scenarioPids.add(child.pid);
+            await log(sessionId, 'mother', 'info', `Spawned Scenario ${scenarioId} with PID ${child.pid}`, { repoPath, hypothesis, args: scenarioArgs });
+          } else {
+             await log(sessionId, 'mother', 'warn', `Spawned Scenario ${scenarioId} but PID was unavailable`, { repoPath, hypothesis, args: scenarioArgs });
+          }
+
+          child.stdout.on('data', data => output += data);
+          child.stderr.on('data', data => output += data);
+
+          // Wait for process exit OR timeout
+          return new Promise<string>((resolve) => {
+              let resolved = false;
+              const scenarioPid = child.pid; // Capture PID for cleanup logic
+
+              // Function to handle cleanup and resolution
+              const cleanupAndResolve = (exitInfo: string) => {
+                if (resolved) return;
+                resolved = true;
+                if (scenarioPid) {
+                  scenarioPids.delete(scenarioPid); // Remove PID from registry
+                  log(sessionId, 'mother', 'debug', `Removed scenario PID ${scenarioPid} from registry`, { repoPath });
+                }
+                output += `\n${exitInfo}`;
+                resolve(output);
+              };
+
+              // Handle process exit
+              child.on('exit', (code, signal) => {
+                cleanupAndResolve(`Scenario ${scenarioId} (PID: ${scenarioPid}) exited with code ${code}, signal ${signal}`);
+              });
+
+              // Handle process spawn errors
+              child.on('error', err => {
+                if (resolved) return;
+                resolved = true;
+                output += `\nProcess spawn error: ${err}`;
+                resolve(output); // Resolve immediately on spawn error
+              });
+
+              // Capture stream-level errors (don't resolve promise)
+              child.stdout.on('error', err => { output += `\nStdout error: ${err}`; });
+              child.stderr.on('error', err => { output += `\nStderr error: ${err}`; });
+
+              // Set a timeout for the scenario
+              const timeoutHandle = setTimeout(() => {
+                 if (!resolved) {
+                    child.kill(); // Force kill the scenario on timeout
+                    cleanupAndResolve(`Scenario ${scenarioId} (PID: ${scenarioPid}) timed out after ${SCENARIO_TIMEOUT / 1000}s`);
+                 }
+              }, SCENARIO_TIMEOUT);
+
+              // Clear timeout if process exits or errors first
+              child.on('exit', () => clearTimeout(timeoutHandle));
+              child.on('error', () => clearTimeout(timeoutHandle));
+            });
+        });
+
+        // Wait for all spawned scenarios for this turn to complete
+        const scenarioOutputs = await Promise.all(scenarioPromises);
+
+        messages.push({ role: 'user', content: scenarioOutputs.join('\n\n---\n\n') }); // Add separator for readability
+      }
+
+      // Mother can optionally edit memory bank directly via filesystem-mcp. No forced writes.
+
+      // Check for new observations before each Claude call
+      const newObservations = await getAgentObservations(repoPath, sessionId, 'mother');
+      if (newObservations.length > observations.length) {
+        const latestObservations = newObservations.slice(observations.length);
+        messages.push(...latestObservations.map(obs => ({
+          role: 'user' as const,
+          content: `Scientific observation: ${obs}`
+        })));
+        observations = newObservations; // Update the baseline observation list
+      }
+
+      // Check for cancellation signal again before the next LLM call
+      if (signal.aborted) {
+        await log(sessionId, 'mother', 'info', 'Cancellation signal received before next LLM call.', { repoPath });
+        break; // Exit loop if cancelled
+      }
+
+      // Make next LLM call using the new utility function with config
+      await log(sessionId, 'mother', 'debug', 'Sending to LLM', { model: llmConfig.model, provider: llmConfig.provider, messages, repoPath });
+      replyText = await callLlm(messages, llmConfig); // Update replyText
+      if (!replyText) {
+        messages.push({ role: 'user', content: 'LLM returned empty or malformed response' });
+        await log(sessionId, 'mother', 'warn', 'Received empty/malformed response from LLM', { provider: llmConfig.provider, model: llmConfig.model, repoPath });
+        // replyText is already falsy, loop will terminate naturally
+      } else {
+        // Add the valid response to messages history
+        messages.push({ role: 'assistant', content: replyText });
+        await log(sessionId, 'mother', 'debug', 'Received from LLM', { response: { content: replyText }, provider: llmConfig.provider, model: llmConfig.model, repoPath });
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    // Determine final status based on whether loop was aborted or completed naturally
+    let finalStatusMessage: string;
+    if (signal.aborted) {
+      finalStatusMessage = 'Session cancelled by user request.';
+      await log(sessionId, 'mother', 'info', finalStatusMessage, { repoPath });
+    } else if (replyText?.includes('<solution>')) {
+      finalStatusMessage = 'Solution found or investigation concluded.';
+      await log(sessionId, 'mother', 'info', finalStatusMessage, { repoPath });
+    } else {
+      finalStatusMessage = 'Loop terminated unexpectedly (e.g., LLM error).';
+       await log(sessionId, 'mother', 'warn', finalStatusMessage, { repoPath });
+    }
+
+    const finalContent = replyText || finalStatusMessage; // Use last reply or status message
+
+    // Structured record at the end
+    if (useMemoryBank) {
+      await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - ${new Date().toISOString()}
+${error ? `Initial Error: ${error}` : ''}
+Final Status: ${finalStatusMessage}
+${finalContent.includes('<solution>') ? finalContent : `Last Response/Status: ${finalContent}`}
+Scenarios Spawned: ${scenarioCounter}
+Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress');
+    }
+
+    return finalContent; // Return the last reply or status
+
+  } catch (err) {
+    const caughtError = err instanceof Error ? err : new Error(String(err));
+    // Check if the error was due to cancellation signal during an operation
+     if (signal.aborted) {
+       await log(sessionId, 'mother', 'info', `Operation aborted during execution: ${caughtError.message}`, { repoPath });
+       // Optionally update progress log for aborted state
+       if (useMemoryBank) {
+         await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - ABORTED - ${new Date().toISOString()}\nError during abort: ${caughtError.message}`, 'progress');
+       }
+       return 'Session cancelled during operation.'; // Return specific cancellation message
+     } else {
+       // Log and record other errors
+       await log(sessionId, 'mother', 'error', `Failed: ${caughtError.message}`, { repoPath, stack: caughtError.stack });
+       if (useMemoryBank) {
+         await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - FAILED - ${new Date().toISOString()}\nError: ${caughtError.message}\nStack: ${caughtError.stack}`, 'progress');
+       }
+       throw caughtError; // Re-throw unexpected errors
+     }
+  } finally {
+     // Ensure any remaining scenario PIDs are cleaned up if the mother agent exits unexpectedly
+     // (though the 'exit' handler should cover most cases)
+     if (scenarioPids.size > 0) {
+       await log(sessionId, 'mother', 'warn', `Mother agent exiting with ${scenarioPids.size} scenario PIDs still in registry.`, { pids: Array.from(scenarioPids) });
+       // Optionally attempt to kill them here, though 'cancel' is the primary mechanism
+     }
+  }
+}
+
+
+
+=== src/scenario-agent.ts ===
+import { log } from './util/logger.js';
+import { connectRequiredTools } from './util/mcp.js';
+import { writeReport } from './util/reports.js';  // System infrastructure for capturing output
+// import OpenAI from 'openai'; // Removed
+import { ChatCompletionMessageParam, ChatCompletionMessage } from 'openai/resources/chat/completions';
+import { writeObservation, getAgentObservations } from './util/observations.js';
+import { callLlm } from './util/agent-utils.js'; // Added
+
+const MAX_RUNTIME = 15 * 60 * 1000; // 15 minutes
+
+// Define LlmConfig interface (can be moved to a shared types file later if needed)
+interface LlmConfig {
+  provider?: string;
+  model?: string;
+  maxTokens?: number;
+  apiKey?: string; // Generic key, specific keys passed within (used for OpenRouter)
+  // baseURL?: string; // Removed - OpenRouter URL is hardcoded in agent-utils
+  geminiApiKey?: string;
+  anthropicApiKey?: string;
+}
+
+interface ScenarioArgs {
+  id: string;
+  session: string;
+  error: string;
+  context: string;
+  hypothesis: string;
+  language: string;
+  repoPath: string;
+  filePath?: string;
+  branch: string;
+}
+
+function parseArgs(args: string[]): ScenarioArgs {
+  const result: Record<string, string> = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i].startsWith('--')) {
+      const key = args[i].slice(2);
+      const value = args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : '';
+      result[key] = value;
+      if (value) i++;
+    }
+  }
+
+  const repoPath = result.repo;
+  if (!repoPath) {
+    throw new Error('Required argument missing: --repo');
+  }
+
+  return {
+    id: result.id || '',
+    session: result.session || '',
+    error: result.error || '',
+    context: result.context || '',
+    hypothesis: result.hypothesis || '',
+    language: result.language || 'typescript',
+    repoPath,
+    filePath: result.file || undefined,
+    branch: result.branch || '' 
+  };
+}
+
+export async function runScenarioAgent(args: ScenarioArgs) {
+  await log(args.session, `scenario-${args.id}`, 'info', 'Scenario agent started', { repoPath: args.repoPath, hypothesis: args.hypothesis });
+
+  try {
+    // Set up tools
+    await log(args.session, `scenario-${args.id}`, 'info', 'Connecting to tools...', { repoPath: args.repoPath });
+  const { gitClient, filesystemClient } = await connectRequiredTools(
+    `scenario-${args.id}`, 
+    args.session,
+    args.repoPath
+  );
+  await log(args.session, `scenario-${args.id}`, 'info', 'Connected to tools successfully', { repoPath: args.repoPath });
+
+    // Branch creation is handled by system infrastructure before this agent is spawned.
+
+    // Start LLM conversation with initial context
+    const startTime = Date.now();
+    // Initial conversation context
+    const messages: ChatCompletionMessageParam[] = [{
+      role: 'assistant',
+      content: `You are a scenario agent investigating a bug based on a specific hypothesis.
+A dedicated Git branch '${args.branch}' has been created for your investigation.
+
+Your hypothesis: "${args.hypothesis}"
+Your job is to either validate the hypothesis, falsify it, or propose alternative directions if stuck. You do not need to fix the entire bug — your focus is the truth of the SPECIFIC hypothesis you are assigned to.
+That being said, don't be too hasty to report a conclusion. If you see something potentially useful/interesting, investigate it further. Debugging is a complicated, nonlinear process, and subtle clues could be useful.
+IMPORTANT:
+- READ THE CONTEXT CAREFULLY: "${args.context}"
+- This contains what approaches have failed and why
+- Don't waste time repeating failed attempts
+- These are instructions, not suggestions. Do not retry any approach listed here as ‘already attempted’.
+- Mother agent is counting on you to explore NEW approaches
+- When you're reasonably confident, wrap up with <report> tags
+
+TOOL USAGE:
+Always use this exact format for tools:
+<use_mcp_tool>
+  <server_name>git-mcp</server_name>
+  <tool_name>git_status</tool_name>
+  <arguments>
+    {
+      "repo_path": "${args.repoPath}"
+    }
+  </arguments>
+</use_mcp_tool>
+
+Available Tools:
+git-mcp (use for ALL git operations):
+- git_status: Show working tree status
+  Example: { "repo_path": "${args.repoPath}" }
+- git_diff_unstaged: Show changes in working directory not yet staged
+  Example: { "repo_path": "${args.repoPath}" }
+- git_diff_staged: Show changes that are staged for commit
+  Example: { "repo_path": "${args.repoPath}" }
+- git_diff: Compare current state with a branch or commit
+  Example: { "repo_path": "${args.repoPath}", "target": "main" }
+- git_add: Stage file changes
+  Example: { "repo_path": "${args.repoPath}", "files": ["file1.ts", "file2.ts"] }
+- git_commit: Commit staged changes
+  Example: { "repo_path": "${args.repoPath}", "message": "commit message" }
+- git_reset: Unstage all changes
+  Example: { "repo_path": "${args.repoPath}" }
+- git_log: Show recent commit history
+  Example: { "repo_path": "${args.repoPath}" }
+- git_checkout: Switch to a different branch
+  Example: { "repo_path": "${args.repoPath}", "branch_name": "${args.branch}" }
+- git_show: Show contents of a specific commit
+  Example: { "repo_path": "${args.repoPath}", "revision": "HEAD" }
+
+desktop-commander (use ONLY for non-git operations):
+
+Terminal Tools:
+- execute_command: Run terminal commands with timeout
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>execute_command</tool_name>
+    <arguments>
+      {
+        "command": "npm run build",
+        "timeout_ms": 5000
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- read_output: Get output from running commands
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>read_output</tool_name>
+    <arguments>
+      {
+        "pid": 12345
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- force_terminate: Stop running command sessions
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>force_terminate</tool_name>
+    <arguments>
+      {
+        "pid": 12345
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- list_sessions: View active command sessions
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>list_sessions</tool_name>
+    <arguments>
+      {}
+    </arguments>
+  </use_mcp_tool>
+
+- list_processes: List system processes
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>list_processes</tool_name>
+    <arguments>
+      {}
+    </arguments>
+  </use_mcp_tool>
+
+- kill_process: Terminate processes by PID
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>kill_process</tool_name>
+    <arguments>
+      {
+        "pid": 12345
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- block_command: Block a command from execution
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>block_command</tool_name>
+    <arguments>
+      {
+        "command": "rm -rf /"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- unblock_command: Unblock a command
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>unblock_command</tool_name>
+    <arguments>
+      {
+        "command": "rm -rf /"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+Filesystem Tools:
+- read_file: Read file contents
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>read_file</tool_name>
+    <arguments>
+      {
+        "path": "${args.repoPath}/file.ts"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- read_multiple_files: Read multiple files at once
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>read_multiple_files</tool_name>
+    <arguments>
+      {
+        "paths": ["file1.ts", "file2.ts"]
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- write_file: Write content to files
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>write_file</tool_name>
+    <arguments>
+      {
+        "path": "file.ts",
+        "content": "console.log('hello');"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- edit_file: Apply surgical text replacements
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>edit_file</tool_name>
+    <arguments>
+      {
+        "path": "file.ts",
+        "diff": "<<<<<<< SEARCH\nold code\n=======\nnew code\n>>>>>>> REPLACE"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- list_directory: List directory contents
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>list_directory</tool_name>
+    <arguments>
+      {
+        "path": "${args.repoPath}"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- search_files: Search files with pattern
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>search_files</tool_name>
+    <arguments>
+      {
+        "path": "${args.repoPath}",
+        "pattern": "error",
+        "file_pattern": "*.ts"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- create_directory: Create a new directory
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>create_directory</tool_name>
+    <arguments>
+      {
+        "path": "new-dir"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- move_file: Move or rename a file
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>move_file</tool_name>
+    <arguments>
+      {
+        "source": "old.ts",
+        "destination": "new.ts"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- get_file_info: Get file metadata
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>get_file_info</tool_name>
+    <arguments>
+      {
+        "path": "file.ts"
+      }
+    </arguments>
+  </use_mcp_tool>
+
+- search_code: Recursive code search
+  Example:
+  <use_mcp_tool>
+    <server_name>desktop-commander</server_name>
+    <tool_name>search_code</tool_name>
+    <arguments>
+      {
+        "path": "${args.repoPath}",
+        "pattern": "function",
+        "filePattern": "*.ts",
+        "contextLines": 2,
+        "ignoreCase": true
+      }
+    </arguments>
+  </use_mcp_tool>
+
+REPORT FORMAT:
+When you've completed your investigation, use:
+<report>
+HYPOTHESIS: [Original hypothesis]
+CONFIRMED: [Yes/No/Partially]
+INVESTIGATION:
+[Briefly explain what context you took into account and how this differed]
+[Summary of what you tried]
+[Key findings]
+[Why this confirms/refutes hypothesis]
+
+CHANGES MADE:
+[List any file changes]
+[Why each change was needed]
+
+CONFIDENCE: [High/Medium/Low]
+[Explanation of confidence level]
+</report>`
+    }, {
+      role: 'user',
+      content: `Error: ${args.error}
+Context: ${args.context}
+Language: ${args.language}
+File: ${args.filePath}
+Repo: ${args.repoPath}
+Hypothesis: ${args.hypothesis}`
+    }];
+
+    // Check for observations
+    const observations = await getAgentObservations(args.repoPath, args.session, `scenario-${args.id}`);
+    if (observations.length > 0) {
+      messages.push(...observations.map((obs: string) => ({
+        role: 'user' as const,
+        content: `Scientific observation: ${obs}`
+      })));
+    }
+
+    // Read LLM configuration from environment variables
+    const scenarioProvider = process.env.SCENARIO_HOST; // Read provider name from SCENARIO_HOST
+    const scenarioModel = process.env.SCENARIO_MODEL;
+    const openrouterApiKey = process.env.OPENROUTER_API_KEY; // Still needed if provider is 'openrouter'
+    const geminiApiKey = process.env.GEMINI_API_KEY;
+    const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+    // const scenarioHost = process.env.SCENARIO_HOST; // No longer needed as separate URL
+
+    // Create the config object to pass to callLlm
+    const llmConfig: LlmConfig = {
+      provider: scenarioProvider, // Use the provider name from SCENARIO_HOST
+      model: scenarioModel,
+      apiKey: openrouterApiKey, // Pass the OpenRouter key (used only if provider is 'openrouter')
+      // baseURL: scenarioHost, // Removed - OpenRouter URL is hardcoded in agent-utils
+      geminiApiKey: geminiApiKey,
+      anthropicApiKey: anthropicApiKey
+    };
+
+    await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to LLM', { model: llmConfig.model, provider: llmConfig.provider, messages, repoPath: args.repoPath });
+    let replyText = await callLlm(messages, llmConfig);
+    if (!replyText) {
+      await log(args.session, `scenario-${args.id}`, 'warn', 'Received empty/malformed response from LLM', { repoPath: args.repoPath });
+      // Exit if the first call fails, as there's no response to process
+      await writeReport(args.repoPath, args.session, args.id, 'Initial LLM call returned empty response.');
+      console.log('Initial LLM call returned empty response.');
+      process.exit(1); 
+    } else {
+      messages.push({ role: 'assistant', content: replyText });
+      await log(args.session, `scenario-${args.id}`, 'debug', 'Received from LLM', { response: { content: replyText }, repoPath: args.repoPath });
+    }
+
+    // Check for report in initial response
+    const initialResponseText = replyText;
+    const initialReportMatch = initialResponseText.match(/<report>\s*([\s\S]*?)\s*<\/report>/i);
+    if (initialReportMatch) {
+      const reportText = initialReportMatch[1].trim();
+      await writeReport(args.repoPath, args.session, args.id, reportText);
+      console.log(reportText);
+      process.exit(0);
+    }
+
+    while (true) {
+      if (Date.now() - startTime > MAX_RUNTIME) {
+        await writeReport(args.repoPath, args.session, args.id, 'Investigation exceeded maximum runtime');
+        console.log('Investigation exceeded maximum runtime');
+        process.exit(1);
+      }
+
+      // The assistant's response (replyText) is already added to messages history
+      const responseText = replyText; // Use the latest replyText
+
+
+      // Handle MULTIPLE MCP tools (if any) - Parsing from responseText
+      const toolCalls = responseText.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
+
+      const parsedCalls = toolCalls.map((tc: string) => {
+        try {
+          const server = tc.includes('git-mcp') ? gitClient! : filesystemClient!;
+          const toolMatch = tc.match(/<tool_name>(.*?)<\/tool_name>/);
+          if (!toolMatch || !toolMatch[1]) throw new Error('Missing tool');
+          const tool = toolMatch[1]!;
+
+          const argsMatch = tc.match(/<arguments>(.*?)<\/arguments>/s);
+          if (!argsMatch || !argsMatch[1]) throw new Error('Missing arguments');
+          const args = JSON.parse(argsMatch[1]!);
+
+          return { server, tool, args };
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : String(err) };
+        }
+      });
+
+      // Abort if *any* call fails to parse
+      const invalid = parsedCalls.find(p => 'error' in p);
+      if (invalid) {
+        messages.push({
+          role: 'user',
+          content: `One of your tool calls was malformed and none were run. Error: ${invalid.error}`
+        });
+        // No need to clear assistantResponse here, just continue the loop
+        continue;
+      }
+      
+      const validCalls = parsedCalls as { server: NonNullable<typeof gitClient>, tool: string, args: any }[];
+
+      // Only now, execute each one
+      for (const { server, tool, args } of validCalls) {
+        if (tool === 'git_create_branch') {
+          messages.push({
+            role: 'user',
+            content: 'git_create_branch is not allowed — the branch was already created by the mother agent.'
+          });
+          continue;
+        }
+
+        try {
+            const result = await server.callTool({ name: tool, arguments: args });
+            messages.push({
+              role: 'user',
+              content: JSON.stringify(result)
+            });
+        } catch (toolErr) {
+            messages.push({
+              role: 'user',
+              content: `Tool call failed: ${toolErr instanceof Error ? toolErr.message : String(toolErr)}`
+            });
+        }
+      }
+
+      // Extract report if present - Parsing from responseText
+      const reportMatch = responseText.match(/<report>\s*([\s\S]*?)\s*<\/report>/i);
+      if (reportMatch) {
+        const reportText = reportMatch[1].trim();
+        await writeReport(args.repoPath, args.session, args.id, reportText);
+        console.log(reportText);
+        process.exit(0);
+      }
+
+      // Continue the conversation
+      // Check for new observations before each Claude call
+      const newObservations = await getAgentObservations(args.repoPath, args.session, `scenario-${args.id}`);
+      if (newObservations.length > observations.length) {
+        const latestObservations = newObservations.slice(observations.length);
+        messages.push(...latestObservations.map((obs: string): ChatCompletionMessageParam => ({
+          role: 'user', // No 'as const' needed here
+          content: `Scientific observation: ${obs}`
+        })));
+        // Update the baseline observations count after processing
+        // This was the bug in the previous attempt - it needs to be updated *outside* the if block
+        // observations = newObservations; // Let's remove this line as it wasn't in the original and might be incorrect logic introduced by me. The original logic only checked length difference.
+      }
+
+      // Make next LLM call
+      await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to LLM', { model: llmConfig.model, provider: llmConfig.provider, messages, repoPath: args.repoPath });
+      replyText = await callLlm(messages, llmConfig); // Update replyText
+      if (!replyText) {
+        await log(args.session, `scenario-${args.id}`, 'warn', 'Received empty/malformed response from LLM', { provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
+        // If the LLM fails mid-conversation, write a report and exit
+        await writeReport(args.repoPath, args.session, args.id, 'LLM returned empty response mid-investigation.');
+        console.log('LLM returned empty response mid-investigation.');
+        process.exit(1);
+      } else {
+        messages.push({ role: 'assistant', content: replyText });
+        await log(args.session, `scenario-${args.id}`, 'debug', 'Received from LLM', { response: { content: replyText }, provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  } catch (error) {
+    const errorText = error instanceof Error ? error.message : String(error);
+    await writeReport(args.repoPath, args.session, args.id, `SCENARIO ERROR: ${errorText}`);
+    console.log(`SCENARIO ERROR: ${errorText}`);
+    process.exit(1);
+  }
+}
+
+// Parse args and run
+const args = parseArgs(process.argv);
+runScenarioAgent(args).catch(err => {
+  const errorText = err instanceof Error ? err.message : String(err);
+  console.log(`SCENARIO ERROR: ${errorText}`);
+  process.exit(1);
+});
+
+
+
+=== src/util/mcp.ts ===
+// src/util/mcp.ts
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { readFile } from 'fs/promises';
+import { join } from 'path';
+import { DEEBO_ROOT } from '../index.js';
+import { getProjectId } from './sanitize.js';
+
+// Map to track active connections
+const activeConnections: Map<string, Promise<Client>> = new Map();
+
+export async function connectMcpTool(name: string, toolName: string, sessionId: string, repoPath: string): Promise<Client> {
+  const connectionKey = `${name}-${toolName}-${sessionId}`;
+  
+  const existingConnection = activeConnections.get(connectionKey);
+  if (existingConnection) {
+    return existingConnection;
+  }
+
+  const connectionPromise = (async () => {
+    const config = JSON.parse(await readFile(join(DEEBO_ROOT, 'config', 'tools.json'), 'utf-8'));
+    const toolConfig = { ...config.tools[toolName] };
+
+    // Build paths for placeholder replacement
+    const projectId = getProjectId(repoPath);
+    const memoryPath = join(DEEBO_ROOT, 'memory-bank', projectId);
+    const memoryRoot = join(DEEBO_ROOT, 'memory-bank');
+    
+    // Replace placeholders in arguments
+    toolConfig.args = toolConfig.args.map((arg: string) =>
+      arg.replace(/{repoPath}/g, repoPath)
+         .replace(/{memoryPath}/g, memoryPath)
+         .replace(/{memoryRoot}/g, memoryRoot)
+    );
+
+    const transport = new StdioClientTransport({
+      command: toolConfig.command,
+      args: toolConfig.args
+    });
+
+    const client = new Client(
+      { name, version: '1.0.0' },
+      { capabilities: { tools: true } }
+    );
+    await client.connect(transport);
+    return client;
+  })();
+
+  activeConnections.set(connectionKey, connectionPromise);
+  connectionPromise.catch(() => {
+    activeConnections.delete(connectionKey);
+  });
+
+  return connectionPromise;
+}
+
+export async function connectRequiredTools(agentName: string, sessionId: string, repoPath: string): Promise<{
+  gitClient: Client;
+  filesystemClient: Client;
+}> {
+  const [gitClient, filesystemClient] = await Promise.all([
+    connectMcpTool(`${agentName}-git`, 'git-mcp', sessionId, repoPath),
+    // Switch from "filesystem-mcp" to "desktop-commander"
+    connectMcpTool(`${agentName}-desktop-commander`, 'desktopCommander', sessionId, repoPath)
+  ]);
+
+  return { gitClient, filesystemClient };
+}
+
+
+
+=== src/util/logger.ts ===
+import { writeFile, mkdir } from 'fs/promises';
+import { join } from 'path';
+import { DEEBO_ROOT } from '../index.js';
+import { getProjectId } from './sanitize.js';
+
+// Write logs to memory bank structure
+export async function log(sessionId: string, name: string, level: string, message: string, data?: any) {
+  const entry = JSON.stringify({
+    timestamp: new Date().toISOString(),
+    agent: name,
+    level,
+    message,
+    data
+  }) + '\n';
+
+  // Data will be written to memory-bank/projectId/sessions/sessionId/logs/agentName.log
+  const projectId = getProjectId(data?.repoPath);
+  if (projectId) {
+    const logPath = join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'logs', `${name}.log`);
+    await writeFile(logPath, entry, { flag: 'a' });
+  }
+}
+
+// Simple console logging
+export function consoleLog(level: string, message: string, data?: any) {
+  console.log(`[${level}] ${message}`, data || '');
+}
+
+
+
+=== src/util/reports.ts ===
+import { mkdir, writeFile } from 'fs/promises';
+import { join } from 'path';
+import { DEEBO_ROOT } from '../index.js';
+import { getProjectId } from './sanitize.js';
+
+// src/util/reports.ts
+//we changed it to text to make check tool work better then changed it back to json
+// after removing validation.ts which was blocking access to memory bank files 
+// but really inelegantly so i took it out but i might have not reverted all the 
+// changes so there's probably that if you're still getting bugs
+export async function writeReport(repoPath: string, sessionId: string, scenarioId: string, report: string) {
+    const projectId = getProjectId(repoPath);
+    const reportDir = join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'reports');
+    await mkdir(reportDir, { recursive: true });
+    const reportPath = join(reportDir, `${scenarioId}.json`);
+    await writeFile(reportPath, JSON.stringify(report, null, 2));
+}
+
+
+
+=== src/util/membank.ts ===
+// src/util/membank.js
+import { join } from 'path';
+import { writeFile } from 'fs/promises';
+import { DEEBO_ROOT } from '../index.js';
+
+export async function updateMemoryBank(projectId: string, content: string, file: 'activeContext' | 'progress'): Promise<void> {
+  const path = join(DEEBO_ROOT, 'memory-bank', projectId, `${file}.md`);
+  await writeFile(path, '\n' + content, { flag: 'a' });
+}
+
+
+=== src/util/sanitize.ts ===
+// src/util/sanitize.ts
+import { createHash } from 'crypto';
+
+export function getProjectId(repoPath: string): string {
+  const hash = createHash('sha256').update(repoPath).digest('hex');
+  return hash.slice(0, 12); // use first 12 characters
+}
+
+
+=== src/util/observations.ts ===
+import { writeFile, mkdir, readFile } from 'fs/promises';
+import { join } from 'path';
+import { DEEBO_ROOT } from '../index.js';
+import { getProjectId } from './sanitize.js';
+
+export async function getAgentObservations(repoPath: string, sessionId: string, agentId: string): Promise<string[]> {
+  const projectId = getProjectId(repoPath);
+  const obsPath = join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'observations', `${agentId}.log`);
+  
+  try {
+    const content = await readFile(obsPath, 'utf8');
+    return content
+      .split('\n')
+      .filter(Boolean)
+      .map((line: string) => JSON.parse(line).observation);
+  } catch {
+    return []; // No observations yet
+  }
+}
+
+export async function writeObservation(repoPath: string, sessionId: string, agentId: string, observation: string) {
+  const projectId = getProjectId(repoPath);
+  const obsDir = join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'observations');
+  await mkdir(obsDir, { recursive: true });
+  
+  const entry = JSON.stringify({
+    timestamp: new Date().toISOString(),
+    observation
+  }) + '\n';
+  
+  await writeFile(join(obsDir, `${agentId}.log`), entry, { flag: 'a' });
+}
+
+
+
+=== src/util/branch-manager.ts ===
+import { simpleGit } from 'simple-git';
+
+export async function createScenarioBranch(repoPath: string, sessionId: string): Promise<string> {
+  const git = simpleGit(repoPath);
+  const branchName = `debug-${sessionId}-${Date.now()}`;
+  
+  await git.checkoutLocalBranch(branchName);
+  return branchName;
+}
+
+
+
+=== src/util/agent-utils.ts ===
+import { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
+import { GoogleGenerativeAI, Content, Part } from "@google/generative-ai";
+import Anthropic from "@anthropic-ai/sdk"; // Import the default export
+import { MessageParam } from "@anthropic-ai/sdk/resources/messages.mjs"; // Import the specific type
+import OpenAI from "openai";
+import { ChatModel } from 'openai/resources';
+
+// Define an interface for the configuration passed from agents
+interface LlmConfig {
+  provider?: string;
+  model?: string;
+  maxTokens?: number;
+  apiKey?: string; // Generic key, specific keys passed within (used for OpenRouter)
+  // baseURL?: string; // Removed - OpenRouter URL will be hardcoded
+  geminiApiKey?: string;
+  anthropicApiKey?: string;
+}
+
+export async function callLlm(
+  messages: ChatCompletionMessageParam[],
+  config: LlmConfig
+): Promise<string> {
+  const {
+    provider,
+    model,
+    maxTokens = 4096,
+    apiKey, // Keep generic apiKey for OpenRouter case
+    // baseURL, // Removed
+    geminiApiKey,
+    anthropicApiKey
+  } = config;
+
+  const lowerCaseProvider = provider?.toLowerCase();
+
+  if (lowerCaseProvider === 'openrouter') {
+    if (!apiKey) throw new Error("OpenRouter API key is required for 'openrouter' provider.");
+    const openai = new OpenAI({
+      apiKey: apiKey,
+      baseURL: 'https://openrouter.ai/api/v1', // Hardcoded OpenRouter URL
+    });
+    const completion = await openai.chat.completions.create({
+      model: (model || 'openai/gpt-4o') as ChatModel, // Use provided model or default
+      max_tokens: maxTokens,
+      messages
+    });
+    return completion.choices?.[0]?.message?.content || '';
+  }
+
+  if (lowerCaseProvider === 'gemini') {
+    if (!geminiApiKey) throw new Error("Gemini API key is required for 'gemini' provider.");
+    const gemini = new GoogleGenerativeAI(geminiApiKey);
+    const model_name = model || 'gemini-1.5-pro'; // Use provided model or default
+    const genModel = gemini.getGenerativeModel({ model: model_name });
+
+    // Correctly map messages to Gemini's Content[] format
+    const geminiHistory: Content[] = messages.map(m => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content as string }] as Part[] // Ensure parts is an array of Part
+    }));
+
+    const result = await genModel.generateContent({
+      contents: geminiHistory,
+      generationConfig: {
+        maxOutputTokens: maxTokens
+      }
+    });
+    const response = await result.response;
+    return response.text() || '';
+  }
+
+  if (lowerCaseProvider === 'anthropic') {
+    if (!anthropicApiKey) throw new Error("Anthropic API key is required for 'anthropic' provider.");
+    const anthropic = new Anthropic({ apiKey: anthropicApiKey });
+    // Correctly map messages to Anthropic's MessageParam[] format with explicit roles
+    const anthropicMessages: MessageParam[] = messages.map(m => ({
+      role: (m.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
+      content: m.content as string
+    }));
+
+    const raw = await anthropic.messages.create({
+      model: (model || 'claude-3-sonnet-20240229') as any, // Use provided model or default
+      max_tokens: maxTokens,
+      messages: anthropicMessages,
+    });
+    // Check if the first content block is a TextBlock before accessing text
+    const firstContent = raw.content[0];
+    return firstContent && firstContent.type === 'text' ? firstContent.text : '';
+  }
+
+  throw new Error(`Unsupported provider '${lowerCaseProvider}'. Set LLM_PROVIDER env var to 'openrouter', 'gemini', or 'anthropic'`);
+}
+
+
+

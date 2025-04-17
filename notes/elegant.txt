@@ -1,0 +1,231 @@
+
+
+Expanding the Implementation
+
+1. JSON Schema Validation
+
+It’s crucial to ensure Claude always returns valid JSON. Integrate a library like Zod to validate and parse the response.
+
+Example:
+
+import { z } from 'zod';
+
+const StepSchema = z.object({
+  tool: z.enum(['git-mcp', 'filesystem']),
+  action: z.string(),
+  args: z.any(), // Improve this with specific schemas for each tool
+});
+
+const PlanSchema = z.object({
+  steps: z.array(StepSchema),
+});
+
+async function callClaude(prompt: string) {
+  const msg = await anthropic.messages.create({
+    model: 'claude-3-5-sonnet-20241022',
+    max_tokens: 1024,
+    messages: [{ role: 'user', content: prompt }],
+  });
+  const content = msg.content?.[0]?.text || '';
+  const parsed = JSON.parse(content);
+  return PlanSchema.parse(parsed); // Throws if invalid!
+}
+
+2. Enhanced Error Handling and Retries
+
+Your Scenario Agent should catch parsing errors or tool execution failures, log detailed errors, and even retry if needed. Consider wrapping tool calls in a retry loop with exponential backoff if you hit transient errors.
+
+3. Timeouts and Resource Cleanup
+	•	Timeouts:
+Ensure each tool call is given a maximum execution time. If it exceeds that, kill the process and log a timeout error.
+	•	Cleanup:
+Always close your MCP sessions, and consider cleaning up temporary git branches if necessary.
+
+4. Better Logging Infrastructure
+
+Right now, logging is a simple array written to a JSON file. In production, you might want to:
+	•	Use structured logging (e.g., NDJSON).
+	•	Log to an external system (e.g., Elasticsearch) for real-time monitoring.
+	•	Include metadata like timestamps, agent IDs, and context for every log entry.
+
+Revised Code Overview
+
+Here’s a slightly expanded version of your scenario agent with schema validation and enhanced error handling:
+
+src/scenario-agent.ts (Expanded)
+
+import { readFileSync, writeFileSync } from 'fs';
+import { config } from 'dotenv';
+import { v4 as uuidv4 } from 'uuid';
+import { z } from 'zod';
+import { Anthropic } from '@anthropic-ai/sdk';
+import { stdioClient, ClientSession, StdioServerParameters } from '@modelcontextprotocol/sdk';
+
+config();
+
+const PROMPT_PATH = process.argv[2];
+const REPORT_PATH = process.argv[3] || `report-${uuidv4()}.json`;
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+// Define JSON schema for steps
+const StepSchema = z.object({
+  tool: z.enum(['git-mcp', 'filesystem']),
+  action: z.string(),
+  args: z.any(),
+});
+const PlanSchema = z.object({
+  steps: z.array(StepSchema),
+});
+
+async function callClaude(prompt: string) {
+  const msg = await anthropic.messages.create({
+    model: 'claude-3-5-sonnet-20241022',
+    max_tokens: 1024,
+    messages: [{ role: 'user', content: prompt }],
+  });
+  const content = msg.content?.[0]?.text || '';
+  try {
+    const parsed = JSON.parse(content);
+    return PlanSchema.parse(parsed);
+  } catch (err) {
+    throw new Error(`Claude output invalid: ${err.message}`);
+  }
+}
+
+async function callMCP(toolPath: string, toolName: string, action: string, args: any) {
+  const serverParams = new StdioServerParameters({
+    command: 'node',
+    args: [toolPath],
+    env: process.env,
+  });
+
+  const [stdio, write] = await stdioClient(serverParams);
+  const session = new ClientSession(stdio, write);
+  await session.initialize();
+
+  const tools = await session.list_tools();
+  const target = tools.tools.find(t => t.name === toolName);
+  if (!target) throw new Error(`Tool ${toolName} not found`);
+
+  const result = await session.call_tool(toolName, args);
+  await session.close();
+  return result.content;
+}
+
+async function main() {
+  const prompt = readFileSync(PROMPT_PATH, 'utf-8');
+  let plan;
+  try {
+    plan = await callClaude(prompt);
+  } catch (err: any) {
+    console.error('Error calling Claude:', err.message);
+    process.exit(1);
+  }
+
+  const logs: any[] = [];
+
+  for (const step of plan.steps) {
+    const { tool, action, args } = step;
+    const toolPath = tool === 'git-mcp' ? './tools/git-mcp.js' : './tools/filesystem.js';
+
+    try {
+      const result = await callMCP(toolPath, tool, action, args);
+      logs.push({ step, result, status: 'success', timestamp: new Date().toISOString() });
+    } catch (err: any) {
+      logs.push({ step, error: err.message, status: 'error', timestamp: new Date().toISOString() });
+    }
+  }
+
+  writeFileSync(REPORT_PATH, JSON.stringify({ logs, finished: true }, null, 2), 'utf-8');
+  console.log(`Report written to ${REPORT_PATH}`);
+}
+
+main().catch((err) => {
+  console.error('Scenario agent failed:', err);
+  process.exit(1);
+});
+
+src/mother-agent.ts (Expanded)
+
+import { spawn } from 'child_process';
+import { readdirSync, mkdirSync } from 'fs';
+import path from 'path';
+import { v4 as uuidv4 } from 'uuid';
+
+const PROMPT_DIR = 'prompts';
+const REPORT_DIR = 'reports';
+
+mkdirSync(REPORT_DIR, { recursive: true });
+
+function runScenarioAgent(promptFile: string, reportFile: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('npx', ['tsx', 'src/scenario-agent.ts', promptFile, reportFile], {
+      stdio: 'inherit',
+      shell: true,
+    });
+
+    proc.on('exit', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Scenario agent failed with code ${code}`));
+    });
+  });
+}
+
+async function main() {
+  const promptFiles = readdirSync(PROMPT_DIR)
+    .filter(f => f.endsWith('.txt'))
+    .map(f => path.join(PROMPT_DIR, f));
+
+  // Optionally, add concurrency control here if needed
+  const tasks = promptFiles.map(async (promptPath, index) => {
+    const reportPath = path.join(REPORT_DIR, `report-${index + 1}-${uuidv4()}.json`);
+    console.log(`Spawning scenario agent for ${promptPath}`);
+    try {
+      await runScenarioAgent(promptPath, reportPath);
+      console.log(`✔ Finished: ${reportPath}`);
+    } catch (err: any) {
+      console.error(`✖ Error in scenario agent for ${promptPath}:`, err.message);
+    }
+  });
+
+  await Promise.all(tasks);
+  console.log('Mother Agent: All scenario agents complete.');
+}
+
+main().catch(err => {
+  console.error('Mother Agent failed:', err);
+  process.exit(1);
+});
+
+
+
+⸻
+
+Final Thoughts
+
+This expanded implementation focuses on:
+	•	Validation: Using Zod ensures your agents act on valid, expected JSON.
+	•	Robustness: Improved error messages and potential retries/timeouts (you can add more logic here) keep things production-friendly.
+	•	Logging & Cleanup: Structured logging with timestamps and clear status markers.
+	•	Scalability: The Mother Agent can be further enhanced with concurrency limits.
+
+The beauty of this approach is in its elegant minimalism. By offloading the heavy lifting to existing, battle-tested SDKs and letting OS-level process isolation do the work, you keep the codebase razor-sharp and clear. No labyrinthine async frameworks or convoluted message queues—just a simple Mother Agent spawning Scenario Agents that each take a prompt, get a structured plan from Claude, and execute it via MCP tools.
+
+Simplicity:
+Every component has a singular focus: the Mother Agent is just a spawner and logger; the Scenario Agent is a planner and executor. The code is concise because it relies on robust libraries, allowing you to avoid reinventing the wheel. Each tool call becomes a short, well-defined subprocess.
+
+Extensibility:
+Since your agents are based on a structured JSON schema from Claude, you can easily extend them. Need a new tool? Just add a new entry in your tool mapping and update the JSON schema. The separation of concerns means changes in one module don’t ripple across the system.
+
+Flexibility:
+The system is adaptable. Want to change the LLM or tweak the tool integration? It’s as simple as swapping out the SDK or modifying a configuration file. The architecture is modular, so you can adjust parts independently. It’s a bit like Lego—small, powerful blocks that can be reassembled in endless configurations.
+
+Adaptability:
+By designing each Scenario Agent as an ephemeral, self-contained process, you naturally scale out. Each agent works on its own branch, and if one fails, it doesn’t drag down the others. You can run hundreds in parallel if needed, all coordinated by a lean, blocking Mother Agent. This resilience makes it robust in the face of real-world uncertainties.
+
+Powerfulness:
+Despite its brevity, the system packs a punch. It leverages cutting-edge AI via Claude for strategic planning and uses MCP tools to handle real system-level operations—git branching, file manipulation, and command execution. The chain-of-thought process happens externally, so your agents aren’t bogged down with internal logic; they’re mere conduits between high-level AI insight and low-level execution. This creates an agile feedback loop where even complex debugging tasks are decomposed into manageable, executable steps.
+
+In essence, you’re harnessing the power of modern AI and lightweight process management to build a system that’s as potent as it is succinct—a true nod to both minimalism and practical engineering prowess.
+This approach should give you a solid foundation to evolve your ADS from a prototype into a robust, deployable system. Let me know if you want further refinements, like a sample Claude prompt template or additional tool integrations!

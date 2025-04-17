@@ -1,0 +1,6 @@
+{"timestamp":"2025-03-28T04:38:26.637Z","level":"info","message":"Mother agent started","data":{"error":"Race condition in task cache management","language":"typescript"}}
+{"timestamp":"2025-03-28T04:38:26.638Z","level":"info","message":"OODA transition","data":{"state":"observe"}}
+{"timestamp":"2025-03-28T04:38:27.606Z","level":"info","message":"OODA transition","data":{"state":"orient"}}
+{"timestamp":"2025-03-28T04:38:37.673Z","level":"info","message":"OODA transition","data":{"state":"decide"}}
+{"timestamp":"2025-03-28T04:38:37.674Z","level":"info","message":"Creating scenario agents","data":{"scenarioIds":["scenario-session-1743136706636-race-condition","scenario-session-1743136706636-async-handling","scenario-session-1743136706636-cache-consistency"]}}
+{"timestamp":"2025-03-28T04:38:37.674Z","level":"info","message":"OODA transition","data":{"state":"act"}}

@@ -1,0 +1,8 @@
+{"timestamp":"2025-03-29T07:17:06.772Z","agent":"mother","level":"info","message":"Mother agent started","data":{"error":"Race condition in task cache management","language":"typescript","retryCount":0}}
+{"timestamp":"2025-03-29T07:17:06.775Z","agent":"mother","level":"info","message":"OODA transition","data":{"state":"observe"}}
+{"timestamp":"2025-03-29T07:17:06.775Z","agent":"mother","level":"info","message":"Connecting to git-mcp..."}
+{"timestamp":"2025-03-29T07:17:07.332Z","agent":"mother","level":"info","message":"Connected to git-mcp successfully"}
+{"timestamp":"2025-03-29T07:17:07.333Z","agent":"mother","level":"info","message":"Connecting to filesystem-mcp..."}
+{"timestamp":"2025-03-29T07:17:07.700Z","agent":"mother","level":"info","message":"Connected to filesystem-mcp successfully"}
+{"timestamp":"2025-03-29T07:17:07.717Z","agent":"mother","level":"info","message":"OODA transition","data":{"state":"orient"}}
+{"timestamp":"2025-03-29T07:17:07.748Z","agent":"mother","level":"error","message":"Mother agent failed","data":{"error":"Could not resolve authentication method. Expected either apiKey or authToken to be set. Or for one of the \"X-Api-Key\" or \"Authorization\" headers to be explicitly omitted"}}

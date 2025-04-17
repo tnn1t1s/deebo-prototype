@@ -1,0 +1,6 @@
+{"timestamp":"2025-03-28T02:34:31.974Z","level":"info","message":"Mother agent started","data":{"error":"TypeError: Cannot read property \"length\" of undefined","language":"typescript"}}
+{"timestamp":"2025-03-28T02:34:31.974Z","level":"info","message":"OODA transition","data":{"state":"observe"}}
+{"timestamp":"2025-03-28T02:34:32.803Z","level":"info","message":"OODA transition","data":{"state":"orient"}}
+{"timestamp":"2025-03-28T02:34:40.844Z","level":"info","message":"OODA transition","data":{"state":"decide"}}
+{"timestamp":"2025-03-28T02:34:40.845Z","level":"info","message":"Creating scenario agents","data":{"scenarioIds":["scenario-session-1743129271974-Undefined Array Access","scenario-session-1743129271974-Missing Data Transform","scenario-session-1743129271974-Configuration Issue"]}}
+{"timestamp":"2025-03-28T02:34:40.845Z","level":"info","message":"OODA transition","data":{"state":"act"}}

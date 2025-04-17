@@ -1,0 +1,1 @@
+{"timestamp":"2025-03-28T02:34:31.974Z","level":"info","message":"Session started","data":{"error":"TypeError: Cannot read property \"length\" of undefined","language":"typescript"}}

@@ -1,0 +1,6 @@
+{"timestamp":"2025-03-28T02:30:38.559Z","level":"info","message":"Mother agent started","data":{"error":"TypeError: Cannot read property \"length\" of undefined","language":"typescript"}}
+{"timestamp":"2025-03-28T02:30:38.559Z","level":"info","message":"OODA transition","data":{"state":"observe"}}
+{"timestamp":"2025-03-28T02:30:39.696Z","level":"info","message":"OODA transition","data":{"state":"orient"}}
+{"timestamp":"2025-03-28T02:30:51.968Z","level":"info","message":"OODA transition","data":{"state":"decide"}}
+{"timestamp":"2025-03-28T02:30:51.968Z","level":"info","message":"Creating scenario agents","data":{"scenarioIds":["scenario-session-1743129038559-undefined_array","scenario-session-1743129038559-dependency_chain","scenario-session-1743129038559-config_change"]}}
+{"timestamp":"2025-03-28T02:30:51.968Z","level":"info","message":"OODA transition","data":{"state":"act"}}
