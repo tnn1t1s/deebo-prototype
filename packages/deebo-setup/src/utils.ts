@@ -110,11 +110,11 @@ export async function setupDeeboDirectory(config: SetupConfig): Promise<void> {
 }
 
 export async function writeEnvFile(config: SetupConfig): Promise<void> {
-  const envContent = `MOTHER_HOST=${config.llmHost}
-MOTHER_MODEL=${getDefaultModel(config.llmHost)}
-SCENARIO_HOST=${config.llmHost}
-SCENARIO_MODEL=${getDefaultModel(config.llmHost)}
-${getApiKeyEnvVar(config.llmHost)}=${config.apiKey}
+  const envContent = `MOTHER_HOST=${config.motherHost}
+MOTHER_MODEL=${config.motherModel}
+SCENARIO_HOST=${config.scenarioHost}
+SCENARIO_MODEL=${config.scenarioModel}
+${getApiKeyEnvVar(config.motherHost)}=${config.apiKey}
 USE_MEMORY_BANK=true
 NODE_ENV=development`;
 
@@ -137,11 +137,11 @@ export async function updateMcpConfig(config: SetupConfig): Promise<void> {
     env: {
       NODE_ENV: 'development',
       USE_MEMORY_BANK: 'true',
-      MOTHER_HOST: config.llmHost,
-      MOTHER_MODEL: getDefaultModel(config.llmHost),
-      SCENARIO_HOST: config.llmHost,
-      SCENARIO_MODEL: getDefaultModel(config.llmHost),
-      [getApiKeyEnvVar(config.llmHost)]: config.apiKey
+      MOTHER_HOST: config.motherHost,
+      MOTHER_MODEL: config.motherModel,
+      SCENARIO_HOST: config.scenarioHost,
+      SCENARIO_MODEL: config.scenarioModel,
+      [getApiKeyEnvVar(config.motherHost)]: config.apiKey
     },
     transportType: 'stdio'
   };

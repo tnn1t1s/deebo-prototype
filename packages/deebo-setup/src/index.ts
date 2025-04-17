@@ -20,23 +20,67 @@ async function main() {
     // Find config paths
     const configPaths = await findConfigPaths();
 
-    // Get LLM host preference
-    const { llmHost } = await inquirer.prompt([{
+    // Get Mother agent configuration
+    const defaultModels: Record<string, string> = {
+      openrouter: 'anthropic/claude-3.5-sonnet',
+      anthropic: 'claude-3-sonnet-20240229',
+      gemini: 'gemini-1.5-pro'
+    };
+
+    // Get Mother agent configuration
+    const { motherHost } = await inquirer.prompt([{
       type: 'list',
-      name: 'llmHost',
-      message: 'Choose your preferred LLM host:',
-      choices: ['openrouter', 'anthropic', 'gemini']
+      name: 'motherHost',
+      message: 'Choose LLM host for Mother agent:',
+      choices: Object.keys(defaultModels)
     }]);
 
-    // Validate LLM host
-    const parsedHost = LlmHostSchema.parse(llmHost);
+    const parsedMotherHost = LlmHostSchema.parse(motherHost);
+
+    const { motherModel } = await inquirer.prompt([{
+      type: 'input',
+      name: 'motherModel',
+      message: `Enter model for Mother agent (press Enter for ${defaultModels[parsedMotherHost]}):`,
+      default: defaultModels[parsedMotherHost]
+    }]);
+
+    // Get Scenario agent configuration
+    const { scenarioHost } = await inquirer.prompt([{
+      type: 'list',
+      name: 'scenarioHost',
+      message: 'Choose LLM host for Scenario agents (press Enter to use same as Mother):',
+      choices: Object.keys(defaultModels),
+      default: parsedMotherHost
+    }]);
+
+    const parsedScenarioHost = LlmHostSchema.parse(scenarioHost);
+
+    const { scenarioModel } = await inquirer.prompt([{
+      type: 'input',
+      name: 'scenarioModel',
+      message: `Enter model for Scenario agents (press Enter for ${defaultModels[parsedScenarioHost]}):`,
+      default: defaultModels[parsedScenarioHost]
+    }]);
 
     // Get API key
     const { apiKey } = await inquirer.prompt([{
       type: 'password',
       name: 'apiKey',
-      message: `Enter your ${llmHost.toUpperCase()}_API_KEY:`
+      message: `Enter your ${motherHost.toUpperCase()}_API_KEY:`
     }]);
+
+    // Show API key preview
+    console.log(chalk.dim(`API key preview: ${apiKey.substring(0, 8)}...`));
+    const { confirmKey } = await inquirer.prompt([{
+      type: 'confirm',
+      name: 'confirmKey',
+      message: 'Is this API key correct?',
+      default: true
+    }]);
+
+    if (!confirmKey) {
+      throw new Error('API key confirmation failed. Please try again.');
+    }
 
     // Setup paths
     const home = homedir();
@@ -47,7 +91,10 @@ async function main() {
     const config = {
       deeboPath,
       envPath,
-      llmHost: parsedHost,
+      motherHost: parsedMotherHost,
+      motherModel,
+      scenarioHost: parsedScenarioHost,
+      scenarioModel,
       apiKey,
       clineConfigPath: configPaths.cline,
       claudeConfigPath: configPaths.claude

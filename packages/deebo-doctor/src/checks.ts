@@ -102,11 +102,12 @@ export const toolPathsCheck: SystemCheck = {
   name: 'Tool Paths',
   async check() {
     const results: CheckResult[] = [];
+    const isWindows = process.platform === 'win32';
+    const { execSync } = await import('child_process');
     
     // Check npx
     try {
-      const { execSync } = await import('child_process');
-      const npxPath = execSync('which npx').toString().trim();
+      const npxPath = execSync(isWindows ? 'where npx' : 'which npx').toString().trim();
       results.push({
         name: 'npx',
         status: 'pass',
@@ -124,8 +125,7 @@ export const toolPathsCheck: SystemCheck = {
 
     // Check uvx
     try {
-      const { execSync } = await import('child_process');
-      const uvxPath = execSync('which uvx').toString().trim();
+      const uvxPath = execSync(isWindows ? 'where uvx' : 'which uvx').toString().trim();
       results.push({
         name: 'uvx',
         status: 'pass',
@@ -137,7 +137,7 @@ export const toolPathsCheck: SystemCheck = {
         name: 'uvx',
         status: 'fail',
         message: 'uvx not found',
-        details: 'Install uv to get uvx: curl -LsSf https://astral.sh/uv/install.sh | sh'
+        details: isWindows ? 'Install uv using pip: pip install uv' : 'Install uv: curl -LsSf https://astral.sh/uv/install.sh | sh'
       });
     }
 

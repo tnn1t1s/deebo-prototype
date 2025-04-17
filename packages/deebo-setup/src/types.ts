@@ -17,10 +17,16 @@ export const McpConfigSchema = z.object({
 
 export type McpConfig = z.infer<typeof McpConfigSchema>;
 
+export const LlmModelSchema = z.string();
+export type LlmModel = z.infer<typeof LlmModelSchema>;
+
 export interface SetupConfig {
   deeboPath: string;
   envPath: string;
-  llmHost: LlmHost;
+  motherHost: LlmHost;
+  motherModel: LlmModel;
+  scenarioHost: LlmHost;
+  scenarioModel: LlmModel;
   apiKey: string;
   clineConfigPath?: string;
   claudeConfigPath?: string;

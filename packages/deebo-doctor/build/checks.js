@@ -149,7 +149,13 @@ export const configFilesCheck = {
     name: 'Configuration Files',
     async check(config) {
         const home = homedir();
-        const paths = {
+        const isWindows = process.platform === 'win32';
+        const paths = isWindows ? {
+            cline: join(process.env.APPDATA || '', 'Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
+            claude: join(process.env.APPDATA || '', 'Claude/claude_desktop_config.json'),
+            env: join(config.deeboPath, '.env'),
+            tools: join(config.deeboPath, 'config/tools.json')
+        } : {
             cline: join(home, 'Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
             claude: join(home, 'Library/Application Support/Claude/claude_desktop_config.json'),
             env: join(config.deeboPath, '.env'),
