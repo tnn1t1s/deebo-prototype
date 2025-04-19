@@ -28,8 +28,8 @@ export async function connectMcpTool(name: string, toolName: string, sessionId: 
     
     // Replace placeholders in command
     toolConfig.command = toolConfig.command
-      .replace(/{npxPath}/g, process.env.DEEBO_NPX_PATH || '')
-      .replace(/{uvxPath}/g, process.env.DEEBO_UVX_PATH || '');
+    .replace(/{npxPath}/g, `"${process.env.DEEBO_NPX_PATH || ''}"`) // Quote the paths
+    .replace(/{uvxPath}/g, `"${process.env.DEEBO_UVX_PATH || ''}"`);
 
     // Replace placeholders in arguments  
     toolConfig.args = toolConfig.args.map((arg: string) =>
