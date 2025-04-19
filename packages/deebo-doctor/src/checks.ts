@@ -99,7 +99,7 @@ export const mcpToolsCheck: SystemCheck = {
 };
 
 export const toolPathsCheck: SystemCheck = {
-  name: 'Tool Paths',
+  name: 'Tool Paths', 
   async check() {
     const results: CheckResult[] = [];
     const isWindows = process.platform === 'win32';
@@ -107,7 +107,9 @@ export const toolPathsCheck: SystemCheck = {
     
     // Check npx
     try {
-      const npxPath = execSync(isWindows ? 'where npx' : 'which npx').toString().trim();
+      const npxPath = execSync(
+        isWindows ? 'cmd.exe /c where npx.cmd' : 'which npx'
+      ).toString().trim().split('\n')[0]; // Take first path if multiple returned
       results.push({
         name: 'npx',
         status: 'pass',
@@ -123,9 +125,11 @@ export const toolPathsCheck: SystemCheck = {
       });
     }
 
-    // Check uvx
+    // Check uvx 
     try {
-      const uvxPath = execSync(isWindows ? 'where uvx' : 'which uvx').toString().trim();
+      const uvxPath = execSync(
+        isWindows ? 'cmd.exe /c where uvx.exe' : 'which uvx'
+      ).toString().trim().split('\n')[0]; // Take first path if multiple returned
       results.push({
         name: 'uvx',
         status: 'pass',
@@ -145,7 +149,7 @@ export const toolPathsCheck: SystemCheck = {
     const allPass = results.every(r => r.status === 'pass');
     return {
       name: 'Tool Paths',
-      status: allPass ? 'pass' : 'fail',
+      status: allPass ? 'pass' : 'fail', 
       message: allPass ? 'All tool paths found' : 'Some tool paths missing',
       details: results.map(r => `${r.name}: ${r.details || r.message}`).join('\n')
     };
