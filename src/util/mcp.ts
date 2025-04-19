@@ -27,20 +27,14 @@ export async function connectMcpTool(name: string, toolName: string, sessionId: 
     const memoryRoot = join(DEEBO_ROOT, 'memory-bank');
     
     if (process.platform === 'win32') {
-      // DEBUG: Log BEFORE any replacements
-      await writeFile('C:/Users/ramna/Desktop/deebo-command-pre.txt',
-        `Tool: ${toolName}\nConfig: ${JSON.stringify(toolConfig, null, 2)}\nEnv NPX: ${process.env.DEEBO_NPX_PATH}\nEnv UVX: ${process.env.DEEBO_UVX_PATH}`);
-    
       const execPath = toolConfig.command
         .replace(/{npxPath}/g, process.env.DEEBO_NPX_PATH || '')
-        .replace(/{uvxPath}/g, process.env.DEEBO_UVX_PATH || '');
-        
+        .replace(/{uvxPath}/g, process.env.DEEBO_UVX_PATH || '')
+        .trim()
+        .replace(/\r/g, '');
+      
       toolConfig.command = 'cmd.exe';
-      toolConfig.args = ['/c', execPath, ...toolConfig.args];
-    
-      // DEBUG: Log AFTER replacements 
-      await writeFile('C:/Users/ramna/Desktop/deebo-command-post.txt',
-        `Tool: ${toolName}\nCommand: ${toolConfig.command}\nArgs: ${JSON.stringify(toolConfig.args, null, 2)}`);
+      toolConfig.args = ['/c', execPath.includes(' ') ? `"${execPath}"` : execPath, ...toolConfig.args];
     }else {
       toolConfig.command = toolConfig.command
         .replace(/{npxPath}/g, process.env.DEEBO_NPX_PATH || '')
