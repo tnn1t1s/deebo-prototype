@@ -13,29 +13,19 @@ import { promisify } from 'util';
 
 // Function to find tool paths during initialization
 async function findToolPaths() {
-  const npxPath = (await execPromise('which npx')).stdout.trim();
-  const uvxPath = (await execPromise('which uvx')).stdout.trim();
+  const isWindows = process.platform === 'win32';
+  
+  const npxPath = (await execPromise(
+    isWindows ? 'cmd.exe /c where npx.cmd' : 'which npx'
+  )).stdout.trim().split('\n')[0]; // Take first path if multiple
+
+  const uvxPath = (await execPromise(
+    isWindows ? 'cmd.exe /c where uvx.exe' : 'which uvx'
+  )).stdout.trim().split('\n')[0]; // Take first path if multiple
 
   // Store paths in env for mcp.ts to use
   process.env.DEEBO_NPX_PATH = npxPath;
   process.env.DEEBO_UVX_PATH = uvxPath;
-
-  // Write tools.json with placeholders
-  const toolsConfig = {
-    tools: {
-      desktopCommander: {
-        command: "{npxPath}",
-        args: ["@wonderwhy-er/desktop-commander"]
-      },
-      "git-mcp": {
-        command: "{uvxPath}",
-        args: ["mcp-server-git", "--repository", "{repoPath}"]
-      }
-    }
-  };
-
-  await writeFile(join(DEEBO_ROOT, 'config', 'tools.json'), 
-    JSON.stringify(toolsConfig, null, 2));
 
   return { npxPath, uvxPath };
 }
