@@ -10,6 +10,11 @@ import { getProjectId } from './sanitize.js';
 const activeConnections: Map<string, Promise<Client>> = new Map();
 
 export async function connectMcpTool(name: string, toolName: string, sessionId: string, repoPath: string): Promise<Client> {
+  if (process.platform === 'win32') {
+    await writeFile('C:/Users/ramna/Desktop/deebo-connect-start.txt', 
+      `Starting connection for tool: ${toolName}`);
+  }
+
   const connectionKey = `${name}-${toolName}-${sessionId}`;
   
   const existingConnection = activeConnections.get(connectionKey);
@@ -35,7 +40,11 @@ export async function connectMcpTool(name: string, toolName: string, sessionId: 
       
       toolConfig.command = 'cmd.exe';
       toolConfig.args = ['/c', execPath.includes(' ') ? `"${execPath}"` : execPath, ...toolConfig.args];
-    }else {
+
+      // Add debug logging here
+      await writeFile('C:/Users/ramna/Desktop/deebo-pre-transport.txt',
+        `Tool: ${toolName}\nCommand: ${toolConfig.command}\nArgs: ${JSON.stringify(toolConfig.args, null, 2)}`);
+    } else {
       toolConfig.command = toolConfig.command
         .replace(/{npxPath}/g, process.env.DEEBO_NPX_PATH || '')
         .replace(/{uvxPath}/g, process.env.DEEBO_UVX_PATH || '');
@@ -57,6 +66,12 @@ export async function connectMcpTool(name: string, toolName: string, sessionId: 
       { name, version: '1.0.0' },
       { capabilities: { tools: true } }
     );
+
+    if (process.platform === 'win32') {
+      await writeFile('C:/Users/ramna/Desktop/deebo-pre-connect.txt',
+        `Tool: ${toolName}\nAbout to connect transport`);
+    }
+
     await client.connect(transport);
     return client;
   })();
