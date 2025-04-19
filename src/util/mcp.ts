@@ -1,7 +1,7 @@
 // src/util/mcp.ts
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { readFile } from 'fs/promises';
+import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { DEEBO_ROOT } from '../index.js';
 import { getProjectId } from './sanitize.js';
@@ -33,7 +33,11 @@ export async function connectMcpTool(name: string, toolName: string, sessionId: 
       
       toolConfig.command = 'cmd.exe';
       toolConfig.args = ['/c', execPath, ...toolConfig.args];
-    } else {
+      
+      // DEBUG: Write final command
+      await writeFile('C:/Users/ramna/Desktop/deebo-command.txt', 
+        `Command: ${toolConfig.command}\nArgs: ${JSON.stringify(toolConfig.args, null, 2)}`);
+     }else {
       toolConfig.command = toolConfig.command
         .replace(/{npxPath}/g, process.env.DEEBO_NPX_PATH || '')
         .replace(/{uvxPath}/g, process.env.DEEBO_UVX_PATH || '');
