@@ -1,0 +1,12 @@
+name = "deebo-active-counter"
+main = "src/worker.ts"
+compatibility_date = "2024-03-17"
+
+# KV Namespace for storing ping data
+kv_namespaces = [
+  { binding = "ACTIVE_USERS", id = "a2826cdd5a3d4d95b2271ae697e5bdef" }
+]
+
+[vars]
+# Environment variables
+ENVIRONMENT = "production"
