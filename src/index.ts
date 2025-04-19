@@ -94,10 +94,16 @@ await mkdir(join(DEEBO_ROOT, 'memory-bank'), { recursive: true });
 // Find and configure tool paths
 await findToolPaths();
 
+// DEBUG: Write paths to desktop on Windows only
+if (process.platform === 'win32') {
+ await writeFile('C:/Users/ramna/Desktop/deebo-paths.txt', 
+   `DEEBO_NPX_PATH=${process.env.DEEBO_NPX_PATH}\nDEEBO_UVX_PATH=${process.env.DEEBO_UVX_PATH}`);
+}
+
 // Create MCP server
 const server = new McpServer({
-  name: "Deebo",
-  version: "1.0.0"
+ name: "Deebo",
+ version: "1.0.0"
 });
 
 // Register start tool - begins a debug session
