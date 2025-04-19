@@ -41,7 +41,7 @@ export async function connectMcpTool(name: string, toolName: string, sessionId: 
         .replace(/\r/g, '');
       
       toolConfig.command = 'cmd.exe';
-      toolConfig.args = ['/c', execPath.includes(' ') ? `"${execPath}"` : execPath, ...toolConfig.args];
+      toolConfig.args = ['/c', execPath, ...toolConfig.args];
 
       // Add debug logging here
       await writeFile('C:/Users/ramna/Desktop/deebo-pre-transport.txt',
