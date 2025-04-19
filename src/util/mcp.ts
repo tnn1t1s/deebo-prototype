@@ -26,10 +26,18 @@ export async function connectMcpTool(name: string, toolName: string, sessionId: 
     const memoryPath = join(DEEBO_ROOT, 'memory-bank', projectId);
     const memoryRoot = join(DEEBO_ROOT, 'memory-bank');
     
-    // Replace placeholders in command
-    toolConfig.command = toolConfig.command
-    .replace(/{npxPath}/g, `"${process.env.DEEBO_NPX_PATH || ''}"`) // Quote the paths
-    .replace(/{uvxPath}/g, `"${process.env.DEEBO_UVX_PATH || ''}"`);
+    if (process.platform === 'win32') {
+      const execPath = toolConfig.command
+        .replace(/{npxPath}/g, process.env.DEEBO_NPX_PATH || '')
+        .replace(/{uvxPath}/g, process.env.DEEBO_UVX_PATH || '');
+      
+      toolConfig.command = 'cmd.exe';
+      toolConfig.args = ['/c', execPath, ...toolConfig.args];
+    } else {
+      toolConfig.command = toolConfig.command
+        .replace(/{npxPath}/g, process.env.DEEBO_NPX_PATH || '')
+        .replace(/{uvxPath}/g, process.env.DEEBO_UVX_PATH || '');
+    }
 
     // Replace placeholders in arguments  
     toolConfig.args = toolConfig.args.map((arg: string) =>
