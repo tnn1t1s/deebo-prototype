@@ -27,6 +27,10 @@ async function findToolPaths() {
 
       // Get uvx path - should be in user's .local/bin
       uvxPath = (await execPromise('cmd.exe /c where uvx.exe')).stdout.trim().split('\n')[0];
+
+      // Clean Windows line endings and whitespace
+      npxPath = npxPath.trim().replace(/\r/g, '');
+      uvxPath = uvxPath.trim().replace(/\r/g, '');
     } catch (err) {
       throw new Error(`Failed to find tool paths: ${err}`);
     }
