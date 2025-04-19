@@ -15,13 +15,26 @@ import { promisify } from 'util';
 async function findToolPaths() {
   const isWindows = process.platform === 'win32';
   
-  const npxPath = (await execPromise(
-    isWindows ? 'cmd.exe /c where npx.cmd' : 'which npx'
-  )).stdout.trim().split('\n')[0]; // Take first path if multiple
+  let npxPath, uvxPath;
 
-  const uvxPath = (await execPromise(
-    isWindows ? 'cmd.exe /c where uvx.exe' : 'which uvx'
-  )).stdout.trim().split('\n')[0]; // Take first path if multiple
+  if (isWindows) {
+    try {
+      // Get all npx paths and prefer Program Files or User paths
+      const npxPaths = (await execPromise('cmd.exe /c where npx.cmd')).stdout.trim().split('\n');
+      npxPath = npxPaths.find(p => p.includes('Program Files')) || 
+                npxPaths.find(p => p.includes('AppData\\Roaming')) ||
+                npxPaths[0];
+
+      // Get uvx path - should be in user's .local/bin
+      uvxPath = (await execPromise('cmd.exe /c where uvx.exe')).stdout.trim().split('\n')[0];
+    } catch (err) {
+      throw new Error(`Failed to find tool paths: ${err}`);
+    }
+  } else {
+    // Unix path finding stays the same
+    npxPath = (await execPromise('which npx')).stdout.trim();
+    uvxPath = (await execPromise('which uvx')).stdout.trim();
+  }
 
   // Store paths in env for mcp.ts to use
   process.env.DEEBO_NPX_PATH = npxPath;
