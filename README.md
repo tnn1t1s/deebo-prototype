@@ -2,7 +2,7 @@
 # Deebo: Your AI Agent's Debugging Partner
 [![npm version](https://img.shields.io/npm/v/deebo-setup.svg)](https://www.npmjs.com/package/deebo-setup)
 [![GitHub stars](https://img.shields.io/github/stars/snagasuri/deebo-prototype?style=social)](https://github.com/snagasuri/deebo-prototype)
-[![Active installs](https://img.shields.io/badge/active--ping-live-brightgreen)](https://github.com/snagasuri/deebo-prototype)
+[![Active installs](https://deebo-active-counter.ramnag2003.workers.dev/active)](https://github.com/snagasuri/deebo-prototype)
 
 Deebo is an autonomous debugging system that works alongside AI coding agents (Claude, Cline, Cursor, etc.) to solve complex bugs. It runs parallel experiments in isolated Git branches and delivers validated fixes—no human intervention needed.
 
@@ -20,6 +20,12 @@ Deebo scales to production codebases, too. Here's [an example of Deebo solving t
 npx deebo-setup
 ```
 That's it! Follow the prompts to configure your API key and you're ready to go.
+
+To help us track active installations (for our badge above):
+```bash
+deebo-setup ping
+```
+Running this command will anonymously count your installation as active for this week. We use a hash of your machine ID, so your privacy is protected.
 
 Need help? DM me on Twitter: [@sriramenn](https://twitter.com/sriramenn)
 

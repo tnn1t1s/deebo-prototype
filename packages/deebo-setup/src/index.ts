@@ -13,6 +13,28 @@ import {
 } from './utils.js';
 
 async function main() {
+  // Check if this is a ping command
+  if (process.argv.length > 2 && process.argv[2] === 'ping') {
+    try {
+      console.log(chalk.blue('Pinging Deebo installation tracker...'));
+      // Simple ping with no extra dependencies or complexity
+      const response = await fetch('https://deebo-active-counter.ramnag2003.workers.dev/ping', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hash: `user-${Date.now()}` })
+      });
+      
+      if (response.ok) {
+        console.log(chalk.green('✓ Successfully pinged Deebo installation tracker'));
+      } else {
+        console.log(chalk.yellow('⚠ Failed to ping installation tracker'));
+      }
+    } catch (error) {
+      console.log(chalk.yellow('⚠ Could not reach installation tracker'));
+    }
+    return;
+  }
+
   try {
     // Check prerequisites
     await checkPrerequisites();

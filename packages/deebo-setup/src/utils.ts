@@ -188,3 +188,5 @@ function getApiKeyEnvVar(host: string): string {
       return 'OPENROUTER_API_KEY';
   }
 }
+
+// Removed the pingInstallation function - implemented directly in index.ts
