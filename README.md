@@ -9,9 +9,7 @@ Deebo is an autonomous debugging system that works alongside AI coding agents (C
 Deebo is basically your AI coding agent's best friend and teammate. When your agent runs into a tricky bug, it can offload it to Deebo, saving you time and money, and giving you higher quality code in your agentic coding workflows.
 
 **If you think your team can benefit from Deebo, we’d love to hear from you.**
-
 We’re partnering with early teams who rely on AI agents and want to maximize their productivity.
-
 Reach out for a live walkthrough, custom setup support, or to explore early access to enterprise features.
 
 <video src="https://github.com/user-attachments/assets/756d35b4-4f77-48de-bd1a-86f76360279e" controls width="100%"></video>
