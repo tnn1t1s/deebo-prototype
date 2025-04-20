@@ -7,7 +7,7 @@
 Deebo is an autonomous debugging system that works alongside AI coding agents (Claude, Cline, Cursor, etc.) to solve complex bugs. It runs parallel experiments in isolated Git branches and delivers validated fixes—no human intervention needed.
 
 **If you think your team can benefit from Deebo, we’d love to hear from you.**
-We’re partnering with early teams who rely on AI agents and want to maximize their productivity.
+We’re partnering with teams who use AI agents to write production code and want to maximize their productivity.
 Reach out for a live walkthrough, custom setup support, or to explore early access to enterprise features.
 
 <video src="https://github.com/user-attachments/assets/756d35b4-4f77-48de-bd1a-86f76360279e" controls width="100%"></video>
