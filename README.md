@@ -21,11 +21,10 @@ npx deebo-setup
 ```
 That's it! Follow the prompts to configure your API key and you're ready to go.
 
-To help us track active installations (for our badge above):
+**show us you're alive!!**
 ```bash
-deebo-setup ping
+npx deebo-setup ping
 ```
-Running this command will anonymously count your installation as active for this week. We use a hash of your machine ID, so your privacy is protected.
 
 Need help? DM me on Twitter: [@sriramenn](https://twitter.com/sriramenn)
 
