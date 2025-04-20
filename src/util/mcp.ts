@@ -32,20 +32,14 @@ export async function connectMcpTool(name: string, toolName: string, sessionId: 
     const memoryRoot = join(DEEBO_ROOT, 'memory-bank');
     
     if (process.platform === 'win32') {
-      await writeFile('C:/Users/ramna/Desktop/deebo-pre-transform.txt',
-        `Tool: ${toolName}\nRaw command: ${toolConfig.command}\nNPX Path: ${process.env.DEEBO_NPX_PATH}\nUVX Path: ${process.env.DEEBO_UVX_PATH}`);
+      // Just substitute the already-normalized paths
       const execPath = toolConfig.command
         .replace(/{npxPath}/g, process.env.DEEBO_NPX_PATH || '')
-        .replace(/{uvxPath}/g, process.env.DEEBO_UVX_PATH || '')
-        .trim()
-        .replace(/\r/g, '');
+        .replace(/{uvxPath}/g, process.env.DEEBO_UVX_PATH || '');
       
+      // Let cmd.exe handle path resolution
       toolConfig.command = 'cmd.exe';
       toolConfig.args = ['/c', execPath, ...toolConfig.args];
-
-      // Add debug logging here
-      await writeFile('C:/Users/ramna/Desktop/deebo-pre-transport.txt',
-        `Tool: ${toolName}\nCommand: ${toolConfig.command}\nArgs: ${JSON.stringify(toolConfig.args, null, 2)}`);
     } else {
       toolConfig.command = toolConfig.command
         .replace(/{npxPath}/g, process.env.DEEBO_NPX_PATH || '')

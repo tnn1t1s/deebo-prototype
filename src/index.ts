@@ -4,6 +4,7 @@ import { z } from "zod";
 import { readFile, mkdir, readdir, access, writeFile } from 'fs/promises';
 import { config } from 'dotenv';
 import { dirname, join } from 'path';
+import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { runMotherAgent } from './mother-agent.js';
 import { getProjectId } from './util/sanitize.js';
@@ -19,28 +20,24 @@ async function findToolPaths() {
 
   if (isWindows) {
     try {
-      // Get all npx paths and prefer Program Files or User paths
       const npxPaths = (await execPromise('cmd.exe /c where npx.cmd')).stdout.trim().split('\n');
-      npxPath = npxPaths.find(p => p.includes('Program Files')) || 
-                npxPaths.find(p => p.includes('AppData\\Roaming')) ||
-                npxPaths[0];
+      // Favor Program Files to get direct executable
+      const foundNpxPath = npxPaths.find(p => p.includes('Program Files'));
+      if (!foundNpxPath) {
+        throw new Error('Could not find npx.cmd in Program Files');
+      }
+      npxPath = path.normalize(foundNpxPath).trim();
 
-      // Get uvx path - should be in user's .local/bin
-      uvxPath = (await execPromise('cmd.exe /c where uvx.exe')).stdout.trim().split('\n')[0];
-
-      // Clean Windows line endings and whitespace
-      npxPath = npxPath.trim().replace(/\r/g, '');
-      uvxPath = uvxPath.trim().replace(/\r/g, '');
+      uvxPath = path.normalize((await execPromise('cmd.exe /c where uvx.exe')).stdout.trim().split('\n')[0]).trim();
     } catch (err) {
       throw new Error(`Failed to find tool paths: ${err}`);
     }
-  } else {
-    // Unix path finding stays the same
+  }else {
     npxPath = (await execPromise('which npx')).stdout.trim();
     uvxPath = (await execPromise('which uvx')).stdout.trim();
   }
 
-  // Store paths in env for mcp.ts to use
+  // Store normalized paths
   process.env.DEEBO_NPX_PATH = npxPath;
   process.env.DEEBO_UVX_PATH = uvxPath;
 
@@ -97,12 +94,6 @@ await mkdir(join(DEEBO_ROOT, 'memory-bank'), { recursive: true });
 
 // Find and configure tool paths
 await findToolPaths();
-
-// DEBUG: Write paths to desktop on Windows only
-if (process.platform === 'win32') {
- await writeFile('C:/Users/ramna/Desktop/deebo-paths.txt', 
-   `DEEBO_NPX_PATH=${process.env.DEEBO_NPX_PATH}\nDEEBO_UVX_PATH=${process.env.DEEBO_UVX_PATH}`);
-}
 
 // Create MCP server
 const server = new McpServer({
