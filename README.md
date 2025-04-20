@@ -4,7 +4,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/snagasuri/deebo-prototype?style=social)](https://github.com/snagasuri/deebo-prototype)
 [![Active installs](https://img.shields.io/endpoint?url=https://deebo-active-counter.ramnag2003.workers.dev/active)](https://github.com/snagasuri/deebo-prototype)
 
-Deebo is an autonomous debugging system that works alongside AI coding agents (Claude, Cline, Cursor, etc.) to solve complex bugs. It runs parallel experiments in isolated Git branches and delivers validated fixes—no human intervention needed.
+Deebo is an autonomous debugging system that works alongside AI coding agents (Claude, Cline, Cursor, etc.) using MCP to solve bugs. It runs parallel experiments in isolated Git branches and delivers validated fixes—no human intervention needed.
 
 **If you think your team can benefit from Deebo, we’d love to hear from you.**
 We’re partnering with teams who use AI agents to write production code and want to maximize their productivity.
