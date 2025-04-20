@@ -31,20 +31,16 @@ export async function connectMcpTool(name: string, toolName: string, sessionId: 
     const memoryPath = join(DEEBO_ROOT, 'memory-bank', projectId);
     const memoryRoot = join(DEEBO_ROOT, 'memory-bank');
     
-    if (process.platform === 'win32') {
-      // Just substitute the already-normalized paths
-      const execPath = toolConfig.command
-        .replace(/{npxPath}/g, process.env.DEEBO_NPX_PATH || '')
-        .replace(/{uvxPath}/g, process.env.DEEBO_UVX_PATH || '');
-      
-      // Let cmd.exe handle path resolution
-      toolConfig.command = 'cmd.exe';
-      toolConfig.args = ['/c', execPath, ...toolConfig.args];
-    } else {
-      toolConfig.command = toolConfig.command
-        .replace(/{npxPath}/g, process.env.DEEBO_NPX_PATH || '')
-        .replace(/{uvxPath}/g, process.env.DEEBO_UVX_PATH || '');
-    }
+    // Replace placeholders in command path
+    toolConfig.command = toolConfig.command
+      .replace(/{npxPath}/g, process.env.DEEBO_NPX_PATH || '')
+      .replace(/{uvxPath}/g, process.env.DEEBO_UVX_PATH || '');
+
+    // Build transport using cross-spawn's native .cmd handling
+    const transport = new StdioClientTransport({
+      command: toolConfig.command,
+      args: toolConfig.args
+    });
 
     // Replace placeholders in arguments  
     toolConfig.args = toolConfig.args.map((arg: string) =>
@@ -52,11 +48,6 @@ export async function connectMcpTool(name: string, toolName: string, sessionId: 
          .replace(/{memoryPath}/g, memoryPath)
          .replace(/{memoryRoot}/g, memoryRoot)
     );
-
-    const transport = new StdioClientTransport({
-      command: toolConfig.command,
-      args: toolConfig.args
-    });
 
     const client = new Client(
       { name, version: '1.0.0' },
