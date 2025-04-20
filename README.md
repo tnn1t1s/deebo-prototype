@@ -155,40 +155,153 @@ See `src/util/agent-utils.ts` for supported models and configuration details.
 <details>
 <summary>📖 For LLM Agents</summary>
 
-This section contains detailed information to help LLM agents understand and work with Deebo:
+This section contains detailed information to help LLM agents like Claude, GPT, and others effectively work with Deebo.
 
-### Architecture
-- **Mother Agent:** Coordinates investigation, spawns scenarios, writes solutions
-- **Scenario Agents:** Each tests one hypothesis in an isolated Git branch
-- **Process Isolation:** All agents run as subprocesses with timeout enforcement
-- **MCP Tools:** All Git/FS operations through git-mcp and desktop-commander
+### Understanding Deebo's Architecture
+
+Deebo operates using a mother‑scenario agent architecture:
+
+- **Mother Agent:** Coordinates the overall debugging process, generates hypotheses, spawns scenario agents, analyzes reports, and synthesizes solutions  
+- **Scenario Agents:** Each tests a single hypothesis in an isolated Git branch, running experiments and reporting findings  
+- **Process Isolation:** All agents run as separate Node.js subprocesses with timeout enforcement  
+- **Memory Bank:** Optional persistent storage for session history and context  
+
+### OODA Loop Debugging Process
+
+The mother agent follows an OODA (Observe, Orient, Decide, Act) loop:
+
+1. **Observe:** Gather information about the bug through code examination and error analysis  
+2. **Orient:** Generate multiple competing hypotheses about potential causes  
+3. **Decide:** Dispatch scenario agents to investigate each hypothesis  
+4. **Act:** Synthesize findings and implement validated solutions  
+
+### Effective Tool Usage
+
+#### Starting a Debugging Session
+
+When starting a new debugging session:
+
+    <deebo>
+      <start
+        error="[Full error message or stack trace]"
+        repoPath="[Absolute path to repository]"
+        context="[Relevant code snippets, reproduction steps, or previous attempts]"
+        filePath="[Path to the primary suspect file, if known]"
+        language="[Programming language, e.g., 'typescript', 'python']"
+      />
+    </deebo>
+
+**Best Practices:**
+- Include the complete error message, not just a summary  
+- Provide as much context as possible, including related code snippets  
+- Mention any previous debugging attempts that failed  
+- Reference any known constraints or requirements  
+
+#### Monitoring Progress
+
+To check the current status of a debugging session:
+
+    <deebo>
+      <check sessionId="[session ID returned from start]" />
+    </deebo>
+
+**Understanding the Pulse Report:**
+- "Mother Agent" section shows current OODA loop stage  
+- "Scenario Agents" section lists all running and completed scenarios  
+- Completed scenarios include hypothesis validation status  
+- Final solution (when found) appears in the SOLUTION section  
+
+#### Adding External Observations
+
+To inject information into a running agent:
+
+    <deebo>
+      <add_observation
+        sessionId="[session ID]"
+        agentId="[mother or scenario-session-ID-N]"
+        observation="[Your observation as a plain text message]"
+      />
+    </deebo>
+
+**Effective Observations:**
+- Facts about the codebase architecture  
+- Known constraints not visible in the code  
+- Debugging hints from your own reasoning  
+- Results from external tests or tools  
+
+#### Canceling a Session
+
+When a solution is found or to terminate a long‑running investigation:
+
+    <deebo>
+      <cancel sessionId="[session ID]" />
+    </deebo>
+
+### Interpreting Results
+
+Deebo's solutions are wrapped in `<solution>` tags in the mother agent's response:
+
+    <solution>
+    [Detailed explanation of the root cause]
+
+    [Recommended code changes with reasoning]
+
+    [Supporting evidence from successful scenario(s)]
+    </solution>
+
+**Solution Confidence:**
+- Solutions are only provided when the mother agent is >96% confident  
+- All solutions are validated through actual code changes and testing  
+- If no solution is found, the session will either continue or time out  
 
 ### Memory Bank Structure
-Memory bank paths follow the pattern:
-```
-memory-bank/{codebaseHash}/{session-id-hash}/
-  ├── mother.log
-  ├── scenario-agent-0.log
-  ├── scenario-agent-1.log
-  └── ...
-```
 
-The memory bank allows Deebo to learn from past sessions and personalize to your codebase. Use the context field when starting a debug session to provide relevant information, and add observations mid-session if needed.
+When memory bank is enabled (`USE_MEMORY_BANK=true`), Deebo creates a structured record:
 
-### Tool Usage Examples
-```xml
-<deebo>
-  <start
-    error="ReferenceError: x is not defined"
-    repoPath="/my/project/path"
-    context="// suspect function below\nfunction handleClick() { ... }"
-    filePath="src/ui/buttons.ts"
-    language="typescript"
-  />
-</deebo>
-```
+    memory-bank/{codebaseHash}/
+      ├── activeContext.md    # Live notebook for the mother agent
+      ├── progress.md         # Historical record of all sessions
+      └── sessions/{sessionId}/
+          ├── logs/           # Raw agent logs
+          ├── reports/        # Structured scenario reports
+          └── observations/   # External observations
 
-See the full [MCP Tools documentation](docs/mcp-tools.md) for more examples.
+**Using the Memory Bank:**
+- Reference previous debugging attempts to avoid duplication  
+- Learn from past failures to generate better hypotheses  
+- Build on successful approaches for similar bugs  
+
+### Advanced Usage Patterns
+
+#### Multi‑Agent Collaboration
+
+If working with other LLM agents (like Cline and Claude Desktop together):  
+- Use observations to share insights between agents  
+- Have specialized agents focus on different aspects (e.g., testing vs. code examination)  
+- Share and reference session IDs to build on previous investigations  
+
+#### Session Chaining
+
+For complex bugs that might require multiple approaches:  
+1. Start a debugging session with a narrow initial hypothesis  
+2. Review scenario reports to identify promising directions  
+3. Cancel the initial session and start a new one with refined hypotheses  
+4. Use observations to share context between sessions  
+
+#### Custom Test Development
+
+When a bug requires specific test cases:  
+1. Start a debugging session focused on the bug  
+2. Use observations to provide test case results as they become available  
+3. Guide scenarios toward particular testing approaches  
+
+### Limitations and Considerations
+
+- **Runtime:** Sessions have a 60‑minute maximum duration for mother agents, 15 minutes for scenario agents  
+- **Memory:** Large codebases might require multiple focused sessions  
+- **Branch Management:** Deebo creates temporary Git branches which are not automatically cleaned up  
+- **LLM Context:** Complex bugs may exceed token limits, so be concise in observation messages  
+- **Tool Access:** Deebo has access to file system and Git operations, but not external APIs or databases  
 </details>
 
 ## 📜 License
