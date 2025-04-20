@@ -14,7 +14,7 @@ Deebo is basically your AI coding agent's best friend and teammate. When your ag
 
 Deebo scales to production codebases, too. Here's [an example of Deebo solving the test53 linearizer failure $100 tinygrad bug bounty](https://github.com/snagasuri/deebo-prototype/tree/master/memory-bank/9bd38e9840d3/sessions/session-1744006973678) by spawning 17 scenario agents and coming up with 2 valid fixes. Check out [progress.md](https://github.com/snagasuri/deebo-prototype/blob/master/memory-bank/9bd38e9840d3/progress.md) for just the solution.
 
-## 🚀 Quick Install (for Cline/Claude Desktop users)
+## 🚀 Quick Install (for Cline/Claude Desktop users) questions/support? dm me on x @sriramenn or open an issue here
 
 ```bash
 npx deebo-setup
@@ -26,7 +26,6 @@ That's it! Follow the prompts to configure your API key and you're ready to go.
 npx deebo-setup ping
 ```
 
-Need help? DM me on Twitter: [@sriramenn](https://twitter.com/sriramenn)
 
 <details>
 <summary>🔍 What exactly does Deebo do?</summary>
