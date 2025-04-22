@@ -62,7 +62,13 @@ function parseArgs(args: string[]): ScenarioArgs {
 
 export async function runScenarioAgent(args: ScenarioArgs) {
   await log(args.session, `scenario-${args.id}`, 'info', 'Scenario agent started', { repoPath: args.repoPath, hypothesis: args.hypothesis });
-
+  await log(
+    args.session,
+    `scenario-${args.id}`,
+    'debug',
+    `CWD: ${process.cwd()}, DEEBO_NPX_PATH=${process.env.DEEBO_NPX_PATH}, DEEBO_UVX_PATH=${process.env.DEEBO_UVX_PATH}`,
+    { repoPath: args.repoPath }
+  );
   try {
     // Set up tools
     await log(args.session, `scenario-${args.id}`, 'info', 'Connecting to tools...', { repoPath: args.repoPath });
@@ -136,16 +142,6 @@ Hypothesis: ${args.hypothesis}`
       await log(args.session, `scenario-${args.id}`, 'debug', 'Received from LLM', { response: { content: replyText }, repoPath: args.repoPath });
     }
 
-    // Check for report in initial response
-    const initialResponseText = replyText;
-    const initialReportMatch = initialResponseText.match(/<report>\s*([\s\S]*?)\s*<\/report>/i);
-    if (initialReportMatch) {
-      const reportText = initialReportMatch[1].trim();
-      await writeReport(args.repoPath, args.session, args.id, reportText);
-      console.log(reportText);
-      process.exit(0);
-    }
-
     while (true) {
       if (Date.now() - startTime > MAX_RUNTIME) {
         await writeReport(args.repoPath, args.session, args.id, 'Investigation exceeded maximum runtime');
@@ -159,7 +155,7 @@ Hypothesis: ${args.hypothesis}`
 
       // Handle MULTIPLE MCP tools (if any) - Parsing from responseText
       const toolCalls = responseText.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
-
+      
       const parsedCalls = toolCalls.map((tc: string) => {
         try {
           const server = tc.includes('git-mcp') ? gitClient! : filesystemClient!;
@@ -214,13 +210,21 @@ Hypothesis: ${args.hypothesis}`
         }
       }
 
-      // Extract report if present - Parsing from responseText
-      const reportMatch = responseText.match(/<report>\s*([\s\S]*?)\s*<\/report>/i);
+      // After tool calls, if the assistant response included a report, fetch a clean final report
+      const reportMatch = responseText.match(/<report>\s*([\s\S]*?)<\/report>/i);
       if (reportMatch) {
-        const reportText = reportMatch[1].trim();
-        await writeReport(args.repoPath, args.session, args.id, reportText);
-        console.log(reportText);
-        process.exit(0);
+        // Execute a final LLM call so the model can integrate tool outputs and emit only the report
+        const finalReply = await callLlm(messages, llmConfig);
+        const finalMatch = finalReply.match(/<report>\s*([\s\S]*?)<\/report>/i);
+        if (finalMatch) {
+          const reportText = finalMatch[1].trim();
+          await writeReport(args.repoPath, args.session, args.id, reportText);
+          console.log(reportText);
+          process.exit(0);
+        }
+        // If no report in finalReply, push it and continue
+        messages.push({ role: 'assistant', content: finalReply });
+        continue;
       }
 
       // Continue the conversation

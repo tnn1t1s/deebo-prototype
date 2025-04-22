@@ -194,7 +194,7 @@ ${responseText}
           const scenarioId = `${sessionId}-${scenarioCounter++}`; // Use counter for unique ID
 
           await new Promise(resolve => setTimeout(resolve, 100)); // Small delay
-          const branchName = await createScenarioBranch(repoPath, sessionId); // Branch name generation
+          const branchName = await createScenarioBranch(repoPath, scenarioId); // Branch name generation
 
           const scenarioArgs = [ // Define args for spawn
             join(DEEBO_ROOT, 'build/scenario-agent.js'),
@@ -209,7 +209,10 @@ ${responseText}
             '--branch', branchName
           ];
 
-          const child = spawn('node', scenarioArgs); // Spawn the process
+          const child = spawn('node', scenarioArgs, {
+               cwd: repoPath,             // ensure all file‑based tools run in the repo root
+               env: { ...process.env }    // explicitly pass the full Deebo env (incl. DEEBO_NPX_PATH)
+             });
           let output = '';
 
           // Track the PID in the shared Set
@@ -361,7 +364,7 @@ Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress');
      // Ensure any remaining scenario PIDs are cleaned up if the mother agent exits unexpectedly
      // (though the 'exit' handler should cover most cases)
      if (scenarioPids.size > 0) {
-       await log(sessionId, 'mother', 'warn', `Mother agent exiting with ${scenarioPids.size} scenario PIDs still in registry.`, { pids: Array.from(scenarioPids) });
+       await log(sessionId, 'mother', 'warn', `Mother agent exiting with ${scenarioPids.size} scenario PIDs still in registry.`, { repoPath, pids: Array.from(scenarioPids) });
        // Optionally attempt to kill them here, though 'cancel' is the primary mechanism
      }
   }
