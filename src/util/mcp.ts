@@ -15,37 +15,21 @@ export async function connectMcpTool(name: string, toolName: string, sessionId: 
   const memoryPath = join(DEEBO_ROOT, 'memory-bank', getProjectId(repoPath));
   const memoryRoot = join(DEEBO_ROOT, 'memory-bank');
 
-  let command = def.command;
-  let args = [...def.args];
-
-  if (process.platform === 'win32') {
-    // Substitute the actual npxPath/uvxPath into a single execPath
-    const execPath = command
-      .replace(/{npxPath}/g, process.env.DEEBO_NPX_PATH!)
-      .replace(/{uvxPath}/g, process.env.DEEBO_UVX_PATH!);
-
-    // Wrap in cmd /c
-    command = 'cmd';
-    args = ['/d', '/s', '/c', `"${execPath}"`, ...args];
-  } else {
-    // On mac/linux, substitute the binary paths directly
-    command = command
-      .replace(/{npxPath}/g, process.env.DEEBO_NPX_PATH!)
-      .replace(/{uvxPath}/g, process.env.DEEBO_UVX_PATH!);
-  }
-
-  // **Now** replace {repoPath}, {memoryPath}, {memoryRoot} on every arg
-  args = args.map(arg =>
+  // Substitute npx/uvx paths directly in the command
+  let command = def.command
+    .replace(/{npxPath}/g, process.env.DEEBO_NPX_PATH!)
+    .replace(/{uvxPath}/g, process.env.DEEBO_UVX_PATH!);
+  
+  // Replace placeholders in all args
+  let args = def.args.map((arg: string) =>
     arg
       .replace(/{repoPath}/g, repoPath)
       .replace(/{memoryPath}/g, memoryPath)
       .replace(/{memoryRoot}/g, memoryRoot)
   );
 
-  // Shell options only for Windows
-  const options = process.platform === 'win32'
-    ? { shell: true, windowsVerbatimArguments: true }
-    : {};
+  // No shell: spawn the .cmd/binary directly on all platforms
+  const options = {};
 
   const transport = new StdioClientTransport({ command, args, ...options });
   const client = new Client({ name, version: '1.0.0' }, { capabilities: { tools: true } });
