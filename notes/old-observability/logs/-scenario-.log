@@ -1,6 +1,0 @@
-{"timestamp":"2025-03-28T02:14:59.621Z","level":"info","message":"Scenario agent started","data":{"hypothesis":""}}
-{"timestamp":"2025-03-28T02:14:59.622Z","level":"info","message":"Micro OODA cycle","data":{"state":"investigate"}}
-{"timestamp":"2025-03-28T02:17:34.602Z","level":"info","message":"Scenario agent started","data":{"hypothesis":""}}
-{"timestamp":"2025-03-28T02:17:34.604Z","level":"info","message":"Micro OODA cycle","data":{"state":"investigate"}}
-{"timestamp":"2025-03-28T02:26:24.050Z","level":"info","message":"Scenario agent started","data":{"hypothesis":""}}
-{"timestamp":"2025-03-28T02:26:24.054Z","level":"info","message":"Micro OODA cycle","data":{"state":"investigate"}}

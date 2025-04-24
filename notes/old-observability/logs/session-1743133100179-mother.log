@@ -1,4 +1,0 @@
-{"timestamp":"2025-03-28T03:38:20.180Z","level":"info","message":"Mother agent started","data":{"error":"TypeError: Cannot read property \"length\" of undefined","language":"typescript"}}
-{"timestamp":"2025-03-28T03:38:20.180Z","level":"info","message":"OODA transition","data":{"state":"observe"}}
-{"timestamp":"2025-03-28T03:38:21.206Z","level":"info","message":"OODA transition","data":{"state":"orient"}}
-{"timestamp":"2025-03-28T03:38:21.234Z","level":"error","message":"Mother agent failed","data":{"error":{}}}

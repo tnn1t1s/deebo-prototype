@@ -1,9 +1,0 @@
-{
-  "sessionId": "338f8e26-0c69-4708-871f-cc6b98486e3b",
-  "error": "Race condition in task cache management",
-  "context": "/ Cache the result - BUG: This is causing a race condition with invalidateTaskCache\\n  setCachedTasks(cacheKey, paginatedResponse)\\n    .catch(err => logger.error('Cache setting error:', err));\\n\\n  return paginatedResponse;",
-  "repoPath": "/Users/sriram/Documents/task-manager",
-  "filePath": "/Users/sriram/Documents/task-manager/src/services/taskService.ts",
-  "branchName": "deebo-338f8e26-1742938166490",
-  "taskDescription": "\n        You are a debugging agent investigating an error.\n        \n        Your task: Analyze the error and implement a fix\n        \n        1. Analyze the error and context\n        2. If possible, implement a focused fix\n        3. Use Git operations if working with a repository\n        4. Run appropriate commands to validate your fix works\n        5. Report your findings\n      "
-}

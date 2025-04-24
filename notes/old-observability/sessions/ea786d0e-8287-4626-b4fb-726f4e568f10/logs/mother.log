@@ -1,7 +1,0 @@
-{"timestamp":"2025-03-26T02:39:35.971Z","level":"info","component":"mother","message":"Mother agent started","metadata":{"error":"Race condition in task cache management","language":"typescript","filePath":"src/services/taskService.ts","repoPath":"/Users/sriram/Documents/task-manager"}}
-{"timestamp":"2025-03-26T02:39:35.973Z","level":"info","component":"mother","message":"Starting OODA iteration 1"}
-{"timestamp":"2025-03-26T02:39:35.973Z","level":"info","component":"mother","message":"OBSERVE: Gathering observations"}
-{"timestamp":"2025-03-26T02:39:35.974Z","level":"debug","component":"mother","message":"Observations gathered","metadata":{"observations":{"iteration":0}}}
-{"timestamp":"2025-03-26T02:39:35.974Z","level":"info","component":"mother","message":"ORIENT: Generating hypotheses"}
-{"timestamp":"2025-03-26T02:39:35.977Z","level":"error","component":"mother","message":"Mother agent failed","metadata":{"error":"Could not resolve authentication method. Expected either apiKey or authToken to be set. Or for one of the \"X-Api-Key\" or \"Authorization\" headers to be explicitly omitted"}}
-{"timestamp":"2025-03-26T02:39:35.977Z","level":"info","component":"mother","message":"Mother agent shutting down"}

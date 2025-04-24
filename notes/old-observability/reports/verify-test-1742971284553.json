@@ -1,8 +1,0 @@
-{
-  "test": "path-fix-verification",
-  "timestamp": "2025-03-26T06:41:24.553Z",
-  "environment": {
-    "DEEBO_ROOT": "/Users/sriram/Documents/Cline/MCP/deebo-prototype",
-    "cwd": "/Users/sriram/Documents/Cline/MCP/deebo-prototype"
-  }
-}
