@@ -46,7 +46,7 @@ async function main() {
     const defaultModels: Record<string, string> = {
       openrouter: 'anthropic/claude-3.5-sonnet',
       anthropic: 'claude-3-sonnet-20240229',
-      gemini: 'gemini-1.5-pro'
+      gemini: 'gemini-2.5-pro-preview-03-25'
     };
 
     // Get Mother agent configuration

@@ -73,9 +73,6 @@ const processRegistry = new Map<string, {
 config();
 
 // Validate required environment variables
-if (!process.env.OPENROUTER_API_KEY) {
-  throw new Error('OPENROUTER_API_KEY environment variable is required');
-}
 if (!process.env.MOTHER_MODEL) {
   throw new Error('MOTHER_MODEL environment variable is required');
 }
