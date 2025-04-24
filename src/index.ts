@@ -11,6 +11,15 @@ import { getProjectId } from './util/sanitize.js';
 import { writeObservation } from './util/observations.js';
 import { exec, spawn, ChildProcess } from 'child_process';
 import { promisify } from 'util';
+import { homedir } from "node:os";
+
+const execPromise = promisify(exec);
+
+function winRoamingBin(): string {
+  // VS Code spawns MCP servers with a clean env (no APPDATA)
+  const base = process.env.APPDATA ?? path.join(homedir(), "AppData", "Roaming");
+  return path.join(base, "npm");
+}
 
 // Function to find tool paths during initialization
 async function findToolPaths() {
@@ -43,15 +52,13 @@ async function findToolPaths() {
 
   // Get npm bin directory for Windows desktop-commander.cmd
   const npmBin = isWindows
-    ? path.join(process.env.APPDATA!, "npm")            // C:\Users\<you>\AppData\Roaming\npm
-    : path.dirname(npxPath);                            // same folder as npx on *nix
+    ? winRoamingBin()                                  // Use homedir() when VS Code strips env
+    : path.dirname(npxPath);                           // same folder as npx on *nix
 
-  process.env.DEEBO_NPM_BIN = npmBin;                  // <-- expose for later
+  process.env.DEEBO_NPM_BIN = npmBin;                 // <-- expose for later
   
   return { npxPath, uvxPath, npmBin };
 }
-
-const execPromise = promisify(exec);
 
 // Helper to find session directory
 async function findSessionDir(sessionId: string): Promise<string | null> {
