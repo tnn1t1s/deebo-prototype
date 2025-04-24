@@ -41,7 +41,14 @@ async function findToolPaths() {
   process.env.DEEBO_NPX_PATH = npxPath;
   process.env.DEEBO_UVX_PATH = uvxPath;
 
-  return { npxPath, uvxPath };
+  // Get npm bin directory for Windows desktop-commander.cmd
+  const npmBin = isWindows
+    ? path.join(process.env.APPDATA!, "npm")            // C:\Users\<you>\AppData\Roaming\npm
+    : path.dirname(npxPath);                            // same folder as npx on *nix
+
+  process.env.DEEBO_NPM_BIN = npmBin;                  // <-- expose for later
+  
+  return { npxPath, uvxPath, npmBin };
 }
 
 const execPromise = promisify(exec);

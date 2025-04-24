@@ -3,6 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
+import * as path from 'path';
 import { DEEBO_ROOT } from '../index.js';
 import { getProjectId } from './sanitize.js';
 
@@ -14,6 +15,15 @@ export async function connectMcpTool(name: string, toolName: string, sessionId: 
   const def = rawConfig.tools[toolName];
   const memoryPath = join(DEEBO_ROOT, 'memory-bank', getProjectId(repoPath));
   const memoryRoot = join(DEEBO_ROOT, 'memory-bank');
+
+  /* --- WINDOWS-ONLY PATCH ----------------------------------------- */
+  if (process.platform === "win32" && toolName === "desktopCommander") {
+    // Use the real *.cmd so the process owns stdin/stdout
+    const cmdPath = path.join(process.env.DEEBO_NPM_BIN!, "desktop-commander.cmd");
+    def.command = cmdPath;
+    def.args = ["serve"];            // same behaviour as 'npx … serve'
+  }
+  /* ---------------------------------------------------------------- */
 
   // Substitute npx/uvx paths directly in the command
   let command = def.command
