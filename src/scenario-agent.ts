@@ -210,21 +210,13 @@ Hypothesis: ${args.hypothesis}`
         }
       }
 
-      // After tool calls, if the assistant response included a report, fetch a clean final report
+      // After tool calls, check for a report and save it directly
       const reportMatch = responseText.match(/<report>\s*([\s\S]*?)<\/report>/i);
       if (reportMatch) {
-        // Execute a final LLM call so the model can integrate tool outputs and emit only the report
-        const finalReply = await callLlm(messages, llmConfig);
-        const finalMatch = finalReply.match(/<report>\s*([\s\S]*?)<\/report>/i);
-        if (finalMatch) {
-          const reportText = finalMatch[1].trim();
-          await writeReport(args.repoPath, args.session, args.id, reportText);
-          console.log(reportText);
-          process.exit(0);
-        }
-        // If no report in finalReply, push it and continue
-        messages.push({ role: 'assistant', content: finalReply });
-        continue;
+        const reportText = reportMatch[1].trim();
+        await writeReport(args.repoPath, args.session, args.id, reportText);
+        console.log(reportText);
+        process.exit(0);
       }
 
       // Continue the conversation
