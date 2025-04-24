@@ -34,6 +34,8 @@ logs/
 reports/
 memory-bank/
 venv/
-notes/todo.md
-TODO.md
+# Project specific directories
+workers/
+packages/
 notes/
+TODO.md
