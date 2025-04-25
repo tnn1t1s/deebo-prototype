@@ -150,10 +150,19 @@ Hypothesis: ${args.hypothesis}`
       }
 
       // The assistant's response (replyText) is already added to messages history
-      const responseText = replyText; // Use the latest replyText
+      const responseText = replyText;
 
+      // Check for report FIRST - if found, write it and exit immediately
+      // No need to process tool calls if we have a report since they would only be used in the next turn
+      const reportMatch = responseText.match(/<report>\s*([\s\S]*?)<\/report>/i);
+      if (reportMatch) {
+        const reportText = reportMatch[1].trim();
+        await writeReport(args.repoPath, args.session, args.id, reportText);
+        console.log(reportText);
+        process.exit(0);
+      }
 
-      // Handle MULTIPLE MCP tools (if any) - Parsing from responseText
+      // Only process tool calls if we don't have a report
       const toolCalls = responseText.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
       
       const parsedCalls = toolCalls.map((tc: string) => {
@@ -208,15 +217,6 @@ Hypothesis: ${args.hypothesis}`
               content: `Tool call failed: ${toolErr instanceof Error ? toolErr.message : String(toolErr)}`
             });
         }
-      }
-
-      // After tool calls, check for a report and save it directly
-      const reportMatch = responseText.match(/<report>\s*([\s\S]*?)<\/report>/i);
-      if (reportMatch) {
-        const reportText = reportMatch[1].trim();
-        await writeReport(args.repoPath, args.session, args.id, reportText);
-        console.log(reportText);
-        process.exit(0);
       }
 
       // Continue the conversation
