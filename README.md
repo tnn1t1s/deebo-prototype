@@ -4,7 +4,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/snagasuri/deebo-prototype?style=social)](https://github.com/snagasuri/deebo-prototype)
 [![Active installs](https://img.shields.io/endpoint?url=https://deebo-active-counter.ramnag2003.workers.dev/active)](https://github.com/snagasuri/deebo-prototype)
 
-Deebo is an autonomous debugging system that works alongside AI coding agents (Claude, Cline, Cursor, etc.) using the Model Context Protocol (MCP). It runs structured investigations in parallel Git branches to test hypotheses, validate fixes, and help you move faster when solving tricky bugs.
+Deebo is an autonomous debugging system that works alongside AI coding agents (Claude, Cline, Cursor, etc.) using the Model Context Protocol (MCP). It runs structured investigations in parallel Git branches to test hypotheses, validate fixes, and helps you move faster. If your main coding agent is like a single-threaded process, Deebo introduces multi-threadedness to your development workflow.
 
 **If you think your team can benefit from Deebo, we’d love to hear from you.**
 We’re partnering with teams who use AI agents to write production code and want to maximize their productivity.
