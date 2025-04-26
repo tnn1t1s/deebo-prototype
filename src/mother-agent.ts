@@ -21,13 +21,13 @@
     import { ChatCompletionMessageParam, ChatCompletionMessage } from 'openai/resources/chat/completions';
     import { createScenarioBranch } from './util/branch-manager.js';
     import { callLlm, getMotherAgentPrompt } from './util/agent-utils.js'; // Updated import
-    
+
     const MAX_RUNTIME = 60 * 60 * 1000; // 60 minutes
     const SCENARIO_TIMEOUT = 5 * 60 * 1000;
     const useMemoryBank = process.env.USE_MEMORY_BANK === 'true';
-    
+
     // Removed safeAssistantMessage function as it's no longer needed with callLlm
-    
+
     // Mother agent main loop
     export async function runMotherAgent(
       sessionId: string,
@@ -45,30 +45,33 @@
       const startTime = Date.now();
       const memoryBankPath = join(DEEBO_ROOT, 'memory-bank', projectId);
       let lastObservationCheck = 0;
-    
+
       try {
         // OBSERVE: Setup tools and LLM Client
         await log(sessionId, 'mother', 'info', 'OODA: observe', { repoPath });
         const { gitClient, filesystemClient } = await connectRequiredTools('mother', sessionId, repoPath);
-    
+
         // Read LLM configuration from environment variables
         const motherProvider = process.env.MOTHER_HOST; // Read provider name from MOTHER_HOST
         const motherModel = process.env.MOTHER_MODEL;
-        const openrouterApiKey = process.env.OPENROUTER_API_KEY; // Still needed if provider is 'openrouter'
+        const openrouterApiKey = process.env.OPENROUTER_API_KEY;
+        const openaiApiKey = process.env.OPENAI_API_KEY;
+        const openaiBaseUrl = process.env.OPENAI_BASE_URL;
         const geminiApiKey = process.env.GEMINI_API_KEY;
         const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-        // const motherHost = process.env.MOTHER_HOST; // No longer needed as separate URL
-    
+
         // Create the config object to pass to callLlm
         const llmConfig = {
-          provider: motherProvider, // Use the provider name from MOTHER_HOST
+          provider: motherProvider,
           model: motherModel,
-          apiKey: openrouterApiKey, // Pass the OpenRouter key (used only if provider is 'openrouter')
-          // baseURL: motherHost, // Removed - OpenRouter URL is hardcoded in callLlm
+          apiKey: openrouterApiKey,
+          openrouterApiKey: openrouterApiKey,
+          openaiApiKey: openaiApiKey,
+          baseURL: openaiBaseUrl,
           geminiApiKey: geminiApiKey,
           anthropicApiKey: anthropicApiKey
         };
-    
+
         // Initial conversation context
         const messages: ChatCompletionMessageParam[] = [{
           role: 'assistant',
@@ -83,7 +86,7 @@
     Session: ${sessionId}
     Project: ${projectId}
     ${useMemoryBank ? '\nPrevious debugging attempts and context are available in the memory-bank directory if needed.' : ''}
-    
+
     IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for perfect information.`
         }];
 
@@ -127,7 +130,7 @@
       // The assistant's response (replyText) is already added to messages before the loop starts and after each LLM call inside the loop.
 
       // Use the latest replyText directly
-      const responseText = replyText; 
+      const responseText = replyText;
 
       // Handle MULTIPLE MCP tools (if any) - Parsing from responseText
       const toolCalls = responseText.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
