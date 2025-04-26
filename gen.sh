@@ -1,13 +1,20 @@
 #!/bin/bash
 
-# Function to add file content with header
+MODE=${1:-core} 
+
 add_file_content() {
-  echo -e "\n=== $1 ===\n" >> core-files.txt
-  cat "$1" >> core-files.txt
+  if [ -f "$1" ]; then
+    echo -e "\n=== $1 ===\n" >> core-files.txt
+    cat "$1" >> core-files.txt
+  else
+    echo "Warning: File $1 not found, skipping." >&2
+  fi
 }
 
-# Clear existing file
+# Clear existing output file
 > core-files.txt
+
+echo "Generating core-files.txt in mode: $MODE"
 
 # Core source files
 add_file_content "src/util/sanitize.ts"
@@ -22,17 +29,20 @@ add_file_content "src/mother-agent.ts"
 add_file_content "src/index.ts"
 add_file_content "src/scenario-agent.ts"
 
-# Setup package
-add_file_content "packages/deebo-setup/src/utils.ts"
-add_file_content "packages/deebo-setup/src/types.ts"
-add_file_content "packages/deebo-setup/src/index.ts"
-add_file_content "packages/deebo-setup/package.json"
+# Only include packages if full mode is requested (just for deebo devs to look at installer stuff)
+if [ "$MODE" = "full" ]; then
+  echo "Including package files..."
 
-# Doctor package
-add_file_content "packages/deebo-doctor/src/types.ts"
-add_file_content "packages/deebo-doctor/src/checks.ts"
-add_file_content "packages/deebo-doctor/src/index.ts"
-add_file_content "packages/deebo-doctor/package.json"
+  add_file_content "packages/deebo-setup/src/utils.ts"
+  add_file_content "packages/deebo-setup/src/types.ts"
+  add_file_content "packages/deebo-setup/src/index.ts"
+  add_file_content "packages/deebo-setup/package.json"
+
+  add_file_content "packages/deebo-doctor/src/types.ts"
+  add_file_content "packages/deebo-doctor/src/checks.ts"
+  add_file_content "packages/deebo-doctor/src/index.ts"
+  add_file_content "packages/deebo-doctor/package.json"
+fi
 
 # Config files
 add_file_content "config/tools.json"
@@ -40,4 +50,4 @@ add_file_content "package.json"
 add_file_content "tsconfig.json"
 add_file_content "README.md"
 
-echo "Generated core files content in core-files.txt"
+echo "Done. Output written to core-files.txt."
