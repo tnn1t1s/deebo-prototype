@@ -1,0 +1,17 @@
+// ci/mcp-client/tsconfig.json
+{
+    "compilerOptions": {
+      "target": "ES2022",
+      "module": "NodeNext", // Use NodeNext
+      "moduleResolution": "NodeNext", // Use NodeNext
+      "outDir": "./build",
+      "rootDir": "./", // Compile files in this dir
+      "strict": true,
+      "esModuleInterop": true,
+      "skipLibCheck": true,
+      "forceConsistentCasingInFileNames": true,
+      "resolveJsonModule": true // If you import JSON
+    },
+    "include": ["index.ts"], // Only compile index.ts
+    "exclude": ["node_modules"]
+  }
