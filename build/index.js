@@ -274,6 +274,11 @@ server.tool("check", "Retrieves the current status of a debugging session, provi
         pulse += `--- Mother Agent ---\n`;
         pulse += `Status: ${status === 'in_progress' ? 'working' : status}\n`;
         pulse += `Last Activity: ${lastValidEvent ? lastValidEvent.timestamp : 'N/A'}\n`;
+        if (status === 'completed') {
+            // Get projectId from session directory path
+            const projectId = sessionDir.split('/memory-bank/')[1].split('/')[0];
+            pulse += `Progress Log: ${join(DEEBO_ROOT, 'memory-bank', projectId, 'progress.md')}\n`;
+        }
         // Update summary line to include terminated count
         pulse += `--- Scenario Agents (${scenarioLogs.filter(f => f.startsWith('scenario-')).length} Total: ${runningCount} Running, ${terminatedCount} Terminated, ${reportedCount} Reported) ---\n\n`;
         // For completed sessions, find and show solution
