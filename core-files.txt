@@ -54,8 +54,10 @@ interface LlmConfig {
   provider?: string;
   model?: string;
   maxTokens?: number;
-  apiKey?: string; // Generic key, specific keys passed within (used for OpenRouter)
-  // baseURL?: string; // Removed - OpenRouter URL will be hardcoded
+  apiKey?: string; // Generic key, primarily used for OpenRouter for backward compatibility
+  openrouterApiKey?: string; // Alias for apiKey, prefer this for new code
+  baseURL?: string; // For OpenAI-compatible APIs
+  openaiApiKey?: string; // For OpenAI and compatible providers
   geminiApiKey?: string;
   anthropicApiKey?: string;
 }
@@ -699,19 +701,36 @@ export async function callLlm(
     provider,
     model,
     maxTokens = 4096,
-    apiKey, // Keep generic apiKey for OpenRouter case
-    // baseURL, // Removed
+    apiKey,
+    openrouterApiKey,
+    baseURL,
+    openaiApiKey,
     geminiApiKey,
     anthropicApiKey
   } = config;
 
   const lowerCaseProvider = provider?.toLowerCase();
 
-  if (lowerCaseProvider === 'openrouter') {
-    if (!apiKey) throw new Error("OpenRouter API key is required for 'openrouter' provider.");
+  if (lowerCaseProvider === 'openai') {
+    if (!openaiApiKey) throw new Error("API key is required for 'openai' provider.");
+    if (!baseURL) throw new Error("Base URL is required for 'openai' provider.");
     const openai = new OpenAI({
-      apiKey: apiKey,
-      baseURL: 'https://openrouter.ai/api/v1', // Hardcoded OpenRouter URL
+      apiKey: openaiApiKey,
+      baseURL: baseURL,
+    });
+    const completion = await openai.chat.completions.create({
+      model: (model || 'gpt-4o') as ChatModel,
+      max_tokens: maxTokens,
+      messages
+    });
+    return completion.choices?.[0]?.message?.content || '';
+  }
+
+  if (lowerCaseProvider === 'openrouter') {
+    if (!openrouterApiKey && !apiKey) throw new Error("OpenRouter API key is required for 'openrouter' provider.");
+    const openai = new OpenAI({
+      apiKey: openrouterApiKey || apiKey, // Use new name if available, fall back to old name
+      baseURL: 'https://openrouter.ai/api/v1',
     });
     const completion = await openai.chat.completions.create({
       model: (model || 'openai/gpt-4o') as ChatModel, // Use provided model or default
@@ -762,7 +781,7 @@ export async function callLlm(
     return firstContent && firstContent.type === 'text' ? firstContent.text : '';
   }
 
-  throw new Error(`Unsupported provider '${lowerCaseProvider}'. Set LLM_PROVIDER env var to 'openrouter', 'gemini', or 'anthropic'`);
+  throw new Error(`Unsupported provider '${lowerCaseProvider}'. Set LLM_PROVIDER env var to 'openai', 'openrouter', 'gemini', or 'anthropic'`);
 }
 
 === src/util/mcp.ts ===
@@ -930,13 +949,13 @@ export async function writeObservation(repoPath: string, sessionId: string, agen
     import { ChatCompletionMessageParam, ChatCompletionMessage } from 'openai/resources/chat/completions';
     import { createScenarioBranch } from './util/branch-manager.js';
     import { callLlm, getMotherAgentPrompt } from './util/agent-utils.js'; // Updated import
-    
+
     const MAX_RUNTIME = 60 * 60 * 1000; // 60 minutes
     const SCENARIO_TIMEOUT = 5 * 60 * 1000;
     const useMemoryBank = process.env.USE_MEMORY_BANK === 'true';
-    
+
     // Removed safeAssistantMessage function as it's no longer needed with callLlm
-    
+
     // Mother agent main loop
     export async function runMotherAgent(
       sessionId: string,
@@ -954,30 +973,33 @@ export async function writeObservation(repoPath: string, sessionId: string, agen
       const startTime = Date.now();
       const memoryBankPath = join(DEEBO_ROOT, 'memory-bank', projectId);
       let lastObservationCheck = 0;
-    
+
       try {
         // OBSERVE: Setup tools and LLM Client
         await log(sessionId, 'mother', 'info', 'OODA: observe', { repoPath });
         const { gitClient, filesystemClient } = await connectRequiredTools('mother', sessionId, repoPath);
-    
+
         // Read LLM configuration from environment variables
         const motherProvider = process.env.MOTHER_HOST; // Read provider name from MOTHER_HOST
         const motherModel = process.env.MOTHER_MODEL;
-        const openrouterApiKey = process.env.OPENROUTER_API_KEY; // Still needed if provider is 'openrouter'
+        const openrouterApiKey = process.env.OPENROUTER_API_KEY;
+        const openaiApiKey = process.env.OPENAI_API_KEY;
+        const openaiBaseUrl = process.env.OPENAI_BASE_URL;
         const geminiApiKey = process.env.GEMINI_API_KEY;
         const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-        // const motherHost = process.env.MOTHER_HOST; // No longer needed as separate URL
-    
+
         // Create the config object to pass to callLlm
         const llmConfig = {
-          provider: motherProvider, // Use the provider name from MOTHER_HOST
+          provider: motherProvider,
           model: motherModel,
-          apiKey: openrouterApiKey, // Pass the OpenRouter key (used only if provider is 'openrouter')
-          // baseURL: motherHost, // Removed - OpenRouter URL is hardcoded in callLlm
+          apiKey: openrouterApiKey,
+          openrouterApiKey: openrouterApiKey,
+          openaiApiKey: openaiApiKey,
+          baseURL: openaiBaseUrl,
           geminiApiKey: geminiApiKey,
           anthropicApiKey: anthropicApiKey
         };
-    
+
         // Initial conversation context
         const messages: ChatCompletionMessageParam[] = [{
           role: 'assistant',
@@ -992,7 +1014,7 @@ export async function writeObservation(repoPath: string, sessionId: string, agen
     Session: ${sessionId}
     Project: ${projectId}
     ${useMemoryBank ? '\nPrevious debugging attempts and context are available in the memory-bank directory if needed.' : ''}
-    
+
     IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for perfect information.`
         }];
 
@@ -1036,7 +1058,7 @@ export async function writeObservation(repoPath: string, sessionId: string, agen
       // The assistant's response (replyText) is already added to messages before the loop starts and after each LLM call inside the loop.
 
       // Use the latest replyText directly
-      const responseText = replyText; 
+      const responseText = replyText;
 
       // Handle MULTIPLE MCP tools (if any) - Parsing from responseText
       const toolCalls = responseText.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
@@ -1953,8 +1975,10 @@ interface LlmConfig {
   provider?: string;
   model?: string;
   maxTokens?: number;
-  apiKey?: string; // Generic key, specific keys passed within (used for OpenRouter)
-  // baseURL?: string; // Removed - OpenRouter URL is hardcoded in agent-utils
+  apiKey?: string; // Generic key, primarily used for OpenRouter for backward compatibility
+  openrouterApiKey?: string; // Alias for apiKey, prefer this for new code
+  baseURL?: string; // For OpenAI-compatible APIs
+  openaiApiKey?: string; // For OpenAI and compatible providers
   geminiApiKey?: string;
   anthropicApiKey?: string;
 }
@@ -1996,7 +2020,7 @@ function parseArgs(args: string[]): ScenarioArgs {
     language: result.language || 'typescript',
     repoPath,
     filePath: result.file || undefined,
-    branch: result.branch || '' 
+    branch: result.branch || ''
   };
 }
 
@@ -2013,7 +2037,7 @@ export async function runScenarioAgent(args: ScenarioArgs) {
     // Set up tools
     await log(args.session, `scenario-${args.id}`, 'info', 'Connecting to tools...', { repoPath: args.repoPath });
   const { gitClient, filesystemClient } = await connectRequiredTools(
-    `scenario-${args.id}`, 
+    `scenario-${args.id}`,
     args.session,
     args.repoPath
   );
@@ -2055,16 +2079,19 @@ Hypothesis: ${args.hypothesis}`
     const scenarioProvider = process.env.SCENARIO_HOST; // Read provider name from SCENARIO_HOST
     const scenarioModel = process.env.SCENARIO_MODEL;
     const openrouterApiKey = process.env.OPENROUTER_API_KEY; // Still needed if provider is 'openrouter'
+    const openaiApiKey = process.env.OPENAI_API_KEY;
+    const openaiBaseUrl = process.env.OPENAI_BASE_URL;
     const geminiApiKey = process.env.GEMINI_API_KEY;
     const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-    // const scenarioHost = process.env.SCENARIO_HOST; // No longer needed as separate URL
 
     // Create the config object to pass to callLlm
     const llmConfig: LlmConfig = {
       provider: scenarioProvider, // Use the provider name from SCENARIO_HOST
       model: scenarioModel,
-      apiKey: openrouterApiKey, // Pass the OpenRouter key (used only if provider is 'openrouter')
-      // baseURL: scenarioHost, // Removed - OpenRouter URL is hardcoded in agent-utils
+      apiKey: openrouterApiKey,
+      openrouterApiKey: openrouterApiKey, // For OpenRouter
+      openaiApiKey: openaiApiKey, // For OpenAI and compatible providers
+      baseURL: openaiBaseUrl, // For OpenAI-compatible APIs
       geminiApiKey: geminiApiKey,
       anthropicApiKey: anthropicApiKey
     };
@@ -2076,7 +2103,7 @@ Hypothesis: ${args.hypothesis}`
       // Exit if the first call fails, as there's no response to process
       await writeReport(args.repoPath, args.session, args.id, 'Initial LLM call returned empty response.');
       console.log('Initial LLM call returned empty response.');
-      process.exit(1); 
+      process.exit(1);
     } else {
       messages.push({ role: 'assistant', content: replyText });
       await log(args.session, `scenario-${args.id}`, 'debug', 'Received from LLM', { response: { content: replyText }, repoPath: args.repoPath });
@@ -2104,7 +2131,7 @@ Hypothesis: ${args.hypothesis}`
 
       // Only process tool calls if we don't have a report
       const toolCalls = responseText.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
-      
+
       const parsedCalls = toolCalls.map((tc: string) => {
         try {
           const server = tc.includes('git-mcp') ? gitClient! : filesystemClient!;
@@ -2132,7 +2159,7 @@ Hypothesis: ${args.hypothesis}`
         // No need to clear assistantResponse here, just continue the loop
         continue;
       }
-      
+
       const validCalls = parsedCalls as { server: NonNullable<typeof gitClient>, tool: string, args: any }[];
 
       // Only now, execute each one
@@ -2426,6 +2453,8 @@ function getApiKeyEnvVar(host: string): string {
   switch (host) {
     case 'openrouter':
       return 'OPENROUTER_API_KEY';
+    case 'openai':
+      return 'OPENAI_API_KEY';
     case 'anthropic':
       return 'ANTHROPIC_API_KEY';
     case 'gemini':
@@ -2522,8 +2551,9 @@ async function main() {
     // Get Mother agent configuration
     const defaultModels: Record<string, string> = {
       openrouter: 'anthropic/claude-3.5-sonnet',
+      openai: 'gpt-4o',
       anthropic: 'claude-3-5-sonnet-20241022',
-      gemini: 'gemini-1.5-pro'
+      gemini: 'gemini-2.5-pro-preview-03-25'
     };
 
     // Get Mother agent configuration
@@ -2622,7 +2652,7 @@ main();
 
 {
   "name": "deebo-setup",
-  "version": "1.0.80",
+  "version": "1.0.81",
   "description": "System installer for Deebo debugging tool",
   "type": "module",
   "bin": {
@@ -2918,6 +2948,7 @@ export const apiKeysCheck: SystemCheck = {
       // Check each potential API key
       const keyChecks = {
         OPENROUTER_API_KEY: 'sk-or-v1-',
+        OPENAI_API_KEY: 'sk-',
         ANTHROPIC_API_KEY: 'sk-ant-',
         GEMINI_API_KEY: 'AI'
       };
@@ -3173,7 +3204,7 @@ main().catch(err => {
 [![GitHub stars](https://img.shields.io/github/stars/snagasuri/deebo-prototype?style=social)](https://github.com/snagasuri/deebo-prototype)
 [![Active installs](https://img.shields.io/endpoint?url=https://deebo-active-counter.ramnag2003.workers.dev/active)](https://github.com/snagasuri/deebo-prototype)
 
-Deebo is an autonomous debugging system that works alongside AI coding agents (Claude, Cline, Cursor, etc.) using the Model Context Protocol (MCP). It runs structured investigations in parallel Git branches to test hypotheses, validate fixes, and helps you move faster. If your main coding agent is like a single-threaded process, Deebo introduces multi-threadedness to your development workflow.
+Deebo is an autonomous debugging system that AI coding agents (Claude, Cline, Cursor, etc.) can delegate tricky bugs to using the Model Context Protocol (MCP). It runs structured investigations in parallel Git branches to test hypotheses, validate fixes, and helps you move faster. If your main coding agent is like a single-threaded process, Deebo introduces multi-threadedness to your development workflow.
 
 **feedback, questions/support? dm me on x @sriramenn or open an issue here**
 
@@ -3220,10 +3251,10 @@ If you're not using Cline or Claude Desktop, follow these steps:
    ```bash
    # Install uv/uvx
    curl -LsSf https://astral.sh/uv/install.sh | sh
-   
+
    # Install git-mcp
    uvx mcp-server-git --help
-   
+
    # Install desktop-commander
    npx @wonderwhy-er/desktop-commander@latest setup
    ```
@@ -3274,10 +3305,13 @@ If you're not using Cline or Claude Desktop, follow these steps:
 - **Claude Desktop:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 
 ### LLM Support
-Deebo supports OpenRouter, Anthropic, and Gemini models. Configure via environment variables:
+Deebo supports OpenRouter, Anthropic, OpenAI SDK, and Gemini models. Configure via environment variables:
 - `MOTHER_HOST`: LLM provider for mother agent
 - `SCENARIO_HOST`: LLM provider for scenario agents
 - `[PROVIDER]_API_KEY`: API key for chosen provider
+- Any other OpenAI-compatible API endpoint
+  - `OPENAI_API_KEY` to your API key (e.g., `'ollama'` for Ollama)
+  - `OPENAI_BASE_URL` to your API endpoint (e.g., `'http://localhost:11434/v1'` for Ollama)
 
 See `src/util/agent-utils.ts` for supported models and configuration details.
 </details>

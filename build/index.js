@@ -132,7 +132,11 @@ server.tool("start", "Begins an autonomous debugging session that investigates s
     return {
         content: [{
                 type: "text",
-                text: sessionId
+                text: `Session ${sessionId} started!\n\n` +
+                    `Check out the GitHub for tips and best practices:\n` +
+                    `https://github.com/snagasuri/deebo-prototype\n\n` +
+                    `Reminder: Deebo updates frequently.\n` +
+                    `Run npx deebo-setup@latest or pull the latest from GitHub occasionally to get bug fixes and improvements!`
             }]
     };
 });
@@ -163,13 +167,14 @@ server.tool("check", "Retrieves the current status of a debugging session, provi
         let status = 'in_progress'; // Default status
         let solutionFoundInScan = false;
         let lastValidEvent = null; // Store the last successfully parsed event
+        let solutionContent = ''; // Store solution content when found
         // Use module-level terminatedPids set
         for (let i = motherLines.length - 1; i >= 0; i--) {
             try {
                 const event = JSON.parse(motherLines[i]);
                 if (!lastValidEvent)
                     lastValidEvent = event; // Capture the last valid event
-                const content = event.data?.response?.content || event.message || '';
+                const content = event.data?.response || event.data?.response?.content || event.message || '';
                 // Check for process spawn and termination with comprehensive pattern
                 const SCENARIO_PID_PATTERN = /(?:Spawned|Removed|Terminated|Cancelled) Scenario .* PID (\d+)/;
                 const pidMatch = content.match(SCENARIO_PID_PATTERN);
@@ -185,11 +190,20 @@ server.tool("check", "Retrieves the current status of a debugging session, provi
                     status = 'cancelled';
                     break;
                 }
-                // Check for solution
+                // Check for solution tag or completion message
                 if (content.includes('<solution>')) {
+                    const match = content.match(/<solution>([\s\S]*?)<\/solution>/);
+                    if (match && match[1].trim()) {
+                        status = 'completed';
+                        solutionFoundInScan = true;
+                        solutionContent = match[1].trim();
+                        // Don't break - keep scanning to gather all info
+                    }
+                }
+                else if (content === 'Solution found or investigation concluded.') {
                     status = 'completed';
                     solutionFoundInScan = true;
-                    break;
+                    // Don't break - keep scanning to find solution content
                 }
                 // Check for error status
                 if (event.level === 'error') {
@@ -264,34 +278,14 @@ server.tool("check", "Retrieves the current status of a debugging session, provi
         pulse += `--- Scenario Agents (${scenarioLogs.filter(f => f.startsWith('scenario-')).length} Total: ${runningCount} Running, ${terminatedCount} Terminated, ${reportedCount} Reported) ---\n\n`;
         // For completed sessions, find and show solution
         if (status === 'completed') {
-            // Look for solution in mother log
-            let foundSolution = false;
-            // Scan backwards for efficiency (newer entries more likely to have solution)
-            for (let i = motherLines.length - 1; i >= 0; i--) {
-                try {
-                    const line = motherLines[i];
-                    const event = JSON.parse(line);
-                    const content = event.data?.response?.content || event.message || '';
-                    // Check for solution tag in content string
-                    if (content.includes('<solution>')) {
-                        const match = content.match(/<solution>([\s\S]*?)<\/solution>/);
-                        if (match && match[1]) {
-                            pulse += `MOTHER SOLUTION:\n`;
-                            pulse += `<<<<<<< SOLUTION\n`;
-                            pulse += match[1].trim() + '\n';
-                            pulse += `======= SOLUTION END >>>>>>>\n\n`;
-                            foundSolution = true;
-                            break;
-                        }
-                    }
-                }
-                catch (e) {
-                    // Skip invalid JSON lines
-                    continue;
-                }
+            // Display solution if found during scan
+            if (solutionContent) {
+                pulse += `MOTHER SOLUTION:\n`;
+                pulse += `<<<<<<< SOLUTION\n`;
+                pulse += solutionContent + '\n';
+                pulse += `======= SOLUTION END >>>>>>>\n\n`;
             }
-            // No solution found message
-            if (!foundSolution) {
+            else {
                 pulse += `STATUS COMPLETE BUT NO SOLUTION TAG FOUND IN LOGS\n`;
                 pulse += `Check the mother.log file for more details.\n\n`;
             }
@@ -436,7 +430,15 @@ server.tool("check", "Retrieves the current status of a debugging session, provi
                 continue;
             }
         }
-        pulse += `--- End Session Pulse ---`;
+        pulse += `--- End Session Pulse ---\n\n`;
+        if (status === 'completed' || status === 'failed') {
+            pulse += `\n=======================================\n`;
+            pulse += `Not the result you were looking for?\n`;
+            pulse += `Start another session and guide Deebo with what you learned!\n`;
+            pulse += `Need a refresher? Check out the Deebo GitHub:\n`;
+            pulse += `https://github.com/snagasuri/deebo-prototype\n`;
+            pulse += `=======================================\n`;
+        }
         return {
             content: [{
                     type: "text",

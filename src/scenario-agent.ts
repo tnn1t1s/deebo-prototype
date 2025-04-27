@@ -1,10 +1,11 @@
+// src/scenario-agent.ts
+
 import { log } from './util/logger.js';
 import { connectRequiredTools } from './util/mcp.js';
-import { writeReport } from './util/reports.js';  // System infrastructure for capturing output
-// import OpenAI from 'openai'; // Removed
-import { ChatCompletionMessageParam, ChatCompletionMessage } from 'openai/resources/chat/completions';
+import { writeReport } from './util/reports.js';
+import { ChatCompletionMessageParam } from 'openai/resources/chat/completions'; // Keep OpenAI type for structure
 import { writeObservation, getAgentObservations } from './util/observations.js';
-import { callLlm, getScenarioAgentPrompt } from './util/agent-utils.js'; // Updated import
+import { callLlm, getScenarioAgentPrompt } from './util/agent-utils.js';
 
 const MAX_RUNTIME = 15 * 60 * 1000; // 15 minutes
 
@@ -104,10 +105,10 @@ Repo: ${args.repoPath}
 Hypothesis: ${args.hypothesis}`
     }];
 
-    // Check for observations
-    const observations = await getAgentObservations(args.repoPath, args.session, `scenario-${args.id}`);
+    // Check for observations (initial load)
+    let observations = await getAgentObservations(args.repoPath, args.session, `scenario-${args.id}`);
     if (observations.length > 0) {
-      messages.push(...observations.map((obs: string) => ({
+      messages.push(...observations.map((obs: string): ChatCompletionMessageParam => ({ // Added explicit type
         role: 'user' as const,
         content: `Scientific observation: ${obs}`
       })));
@@ -137,7 +138,7 @@ Hypothesis: ${args.hypothesis}`
     await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to LLM', { model: llmConfig.model, provider: llmConfig.provider, messages, repoPath: args.repoPath });
     let replyText = await callLlm(messages, llmConfig);
     if (!replyText) {
-      await log(args.session, `scenario-${args.id}`, 'warn', 'Received empty/malformed response from LLM', { repoPath: args.repoPath });
+      await log(args.session, `scenario-${args.id}`, 'warn', 'Received empty/malformed response from LLM on initial call', { repoPath: args.repoPath });
       // Exit if the first call fails, as there's no response to process
       await writeReport(args.repoPath, args.session, args.id, 'Initial LLM call returned empty response.');
       console.log('Initial LLM call returned empty response.');
@@ -147,125 +148,188 @@ Hypothesis: ${args.hypothesis}`
       await log(args.session, `scenario-${args.id}`, 'debug', 'Received from LLM', { response: { content: replyText }, repoPath: args.repoPath });
     }
 
+    // --- Main Investigation Loop ---
     while (true) {
       if (Date.now() - startTime > MAX_RUNTIME) {
-        await writeReport(args.repoPath, args.session, args.id, 'Investigation exceeded maximum runtime');
-        console.log('Investigation exceeded maximum runtime');
+        const timeoutMsg = 'Investigation exceeded maximum runtime';
+        await log(args.session, `scenario-${args.id}`, 'warn', timeoutMsg, { repoPath: args.repoPath });
+        await writeReport(args.repoPath, args.session, args.id, timeoutMsg);
+        console.log(timeoutMsg);
         process.exit(1);
       }
 
-      // The assistant's response (replyText) is already added to messages history
-      const responseText = replyText;
+      // Get the latest assistant response
+      const responseText = replyText; // replyText holds the latest LLM response
 
-      // Check for report FIRST - if found, write it and exit immediately
-      // No need to process tool calls if we have a report since they would only be used in the next turn
-      const reportMatch = responseText.match(/<report>\s*([\s\S]*?)<\/report>/i);
-      if (reportMatch) {
-        const reportText = reportMatch[1].trim();
-        await writeReport(args.repoPath, args.session, args.id, reportText);
-        console.log(reportText);
-        process.exit(0);
-      }
-
-      // Only process tool calls if we don't have a report
+      // --- Check for Report and Tool Calls ---
       const toolCalls = responseText.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
+      const reportMatch = responseText.match(/<report>\s*([\s\S]*?)<\/report>/i);
 
-      const parsedCalls = toolCalls.map((tc: string) => {
-        try {
-          const server = tc.includes('git-mcp') ? gitClient! : filesystemClient!;
-          const toolMatch = tc.match(/<tool_name>(.*?)<\/tool_name>/);
-          if (!toolMatch || !toolMatch[1]) throw new Error('Missing tool');
-          const tool = toolMatch[1]!;
+      let executeToolsThisTurn = false;
+      let exitThisTurn = false;
 
-          const argsMatch = tc.match(/<arguments>(.*?)<\/arguments>/s);
-          if (!argsMatch || !argsMatch[1]) throw new Error('Missing arguments');
-          const args = JSON.parse(argsMatch[1]!);
-
-          return { server, tool, args };
-        } catch (err) {
-          return { error: err instanceof Error ? err.message : String(err) };
-        }
-      });
-
-      // Abort if *any* call fails to parse
-      const invalid = parsedCalls.find(p => 'error' in p);
-      if (invalid) {
-        messages.push({
-          role: 'user',
-          content: `One of your tool calls was malformed and none were run. Error: ${invalid.error}`
-        });
-        // No need to clear assistantResponse here, just continue the loop
-        continue;
-      }
-
-      const validCalls = parsedCalls as { server: NonNullable<typeof gitClient>, tool: string, args: any }[];
-
-      // Only now, execute each one
-      for (const { server, tool, args } of validCalls) {
-        if (tool === 'git_create_branch') {
+      if (reportMatch && toolCalls.length > 0) {
+          // LLM included both - prioritize executing tools, ignore report this turn
           messages.push({
-            role: 'user',
-            content: 'git_create_branch is not allowed — the branch was already created by the mother agent.'
+              role: 'user',
+              content: `Instructions conflict: You provided tool calls and a report in the same message. I will execute the tool calls now. Provide the report ONLY after analyzing the tool results in the next turn.`
           });
-          continue;
-        }
+          executeToolsThisTurn = true; // Signal to execute tools below
+          await log(args.session, `scenario-${args.id}`, 'warn', 'LLM provided tools and report simultaneously. Executing tools, ignoring report.', { repoPath: args.repoPath });
 
-        try {
-            const result = await server.callTool({ name: tool, arguments: args });
-            messages.push({
-              role: 'user',
-              content: JSON.stringify(result)
-            });
-        } catch (toolErr) {
-            messages.push({
-              role: 'user',
-              content: `Tool call failed: ${toolErr instanceof Error ? toolErr.message : String(toolErr)}`
-            });
-        }
+      } else if (reportMatch) {
+          // Only report found - process it and exit
+          const reportText = reportMatch[1].trim();
+          await log(args.session, `scenario-${args.id}`, 'info', 'Report found. Writing report and exiting.', { repoPath: args.repoPath });
+          await writeReport(args.repoPath, args.session, args.id, reportText);
+          console.log(reportText); // Print report to stdout for mother agent
+          exitThisTurn = true; // Signal to exit loop cleanly
+
+      } else if (toolCalls.length > 0) {
+           // Only tool calls found - execute them
+           executeToolsThisTurn = true; // Signal to execute tools below
+           await log(args.session, `scenario-${args.id}`, 'debug', `Found ${toolCalls.length} tool calls to execute.`, { repoPath: args.repoPath });
+      }
+      // If neither tools nor report found, the loop continues to the next LLM call
+
+      // Exit now if a report-only response was processed
+      if (exitThisTurn) {
+           process.exit(0);
       }
 
-      // Continue the conversation
-      // Check for new observations before each Claude call
+      // --- Execute Tools if Flagged ---
+      if (executeToolsThisTurn) {
+        const parsedCalls = toolCalls.map((tc: string) => {
+          try {
+            const serverNameMatch = tc.match(/<server_name>(.*?)<\/server_name>/);
+            if (!serverNameMatch || !serverNameMatch[1]) throw new Error('Missing server_name');
+            const serverName = serverNameMatch[1];
+            const server = serverName === 'git-mcp' ? gitClient! : filesystemClient!; // Select client based on name
+            if (!server) throw new Error(`Invalid server_name: ${serverName}`);
+
+            const toolMatch = tc.match(/<tool_name>(.*?)<\/tool_name>/);
+            if (!toolMatch || !toolMatch[1]) throw new Error('Missing tool_name');
+            const tool = toolMatch[1]!;
+
+            const argsMatch = tc.match(/<arguments>(.*?)<\/arguments>/s);
+            if (!argsMatch || !argsMatch[1]) throw new Error('Missing arguments');
+            const args = JSON.parse(argsMatch[1]!);
+
+            return { server, tool, args };
+          } catch (err) {
+            const errorMsg = err instanceof Error ? err.message : String(err);
+            log(args.session, `scenario-${args.id}`, 'error', `Failed to parse tool call: ${errorMsg}`, { toolCall: tc, repoPath: args.repoPath });
+            return { error: errorMsg }; // Return error object for specific call
+          }
+        });
+
+        // Process each parsed call - add results or errors back to messages
+        let toolCallFailed = false;
+        for (const parsed of parsedCalls) {
+          if ('error' in parsed) {
+            messages.push({
+              role: 'user',
+              content: `Tool call parsing failed: ${parsed.error}`
+            });
+            toolCallFailed = true; // Mark failure, but continue processing other calls if needed, or let LLM handle it next turn
+            continue; // Skip execution for this malformed call
+          }
+
+          // Prevent disallowed tools
+          if (parsed.tool === 'git_create_branch') {
+              messages.push({
+                role: 'user',
+                content: 'Error: Tool call `git_create_branch` is not allowed. The branch was already created by the mother agent.'
+              });
+              await log(args.session, `scenario-${args.id}`, 'warn', `Attempted disallowed tool call: ${parsed.tool}`, { repoPath: args.repoPath });
+              continue; // Skip this specific call
+          }
+
+          try {
+              await log(args.session, `scenario-${args.id}`, 'debug', `Executing tool: ${parsed.tool}`, { args: parsed.args, repoPath: args.repoPath });
+              const result = await parsed.server.callTool({ name: parsed.tool, arguments: parsed.args });
+              messages.push({
+                role: 'user',
+                content: JSON.stringify(result) // Tool results are added as user messages
+              });
+              await log(args.session, `scenario-${args.id}`, 'debug', `Tool result for ${parsed.tool}`, { result: result, repoPath: args.repoPath });
+          } catch (toolErr) {
+              const errorMsg = toolErr instanceof Error ? toolErr.message : String(toolErr);
+              messages.push({
+                role: 'user',
+                content: `Tool call failed for '${parsed.tool}': ${errorMsg}`
+              });
+              await log(args.session, `scenario-${args.id}`, 'error', `Tool call execution failed: ${parsed.tool}`, { error: errorMsg, repoPath: args.repoPath });
+              toolCallFailed = true; // Mark failure
+          }
+        }
+        // Decide if we should immediately ask LLM again after tool failure, or let the loop naturally continue.
+        // Current logic lets loop continue, LLM will see the error messages.
+      }
+
+      // --- Check for New Observations ---
       const newObservations = await getAgentObservations(args.repoPath, args.session, `scenario-${args.id}`);
       if (newObservations.length > observations.length) {
         const latestObservations = newObservations.slice(observations.length);
         messages.push(...latestObservations.map((obs: string): ChatCompletionMessageParam => ({
-          role: 'user', // No 'as const' needed here
+          role: 'user',
           content: `Scientific observation: ${obs}`
         })));
-        // Update the baseline observations count after processing
-        // This was the bug in the previous attempt - it needs to be updated *outside* the if block
-        // observations = newObservations; // Let's remove this line as it wasn't in the original and might be incorrect logic introduced by me. The original logic only checked length difference.
+        observations = newObservations; // Update the baseline observation list
+        await log(args.session, `scenario-${args.id}`, 'debug', `Added ${latestObservations.length} new observations to context.`, { repoPath: args.repoPath });
       }
 
-      // Make next LLM call
-      await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to LLM', { model: llmConfig.model, provider: llmConfig.provider, messages, repoPath: args.repoPath });
-      replyText = await callLlm(messages, llmConfig); // Update replyText
+      // --- Make Next LLM Call ---
+      await log(args.session, `scenario-${args.id}`, 'debug', `Sending message history (${messages.length} items) to LLM`, { model: llmConfig.model, provider: llmConfig.provider, repoPath: args.repoPath });
+      replyText = await callLlm(messages, llmConfig); // Update replyText for the next loop iteration
       if (!replyText) {
-        await log(args.session, `scenario-${args.id}`, 'warn', 'Received empty/malformed response from LLM', { provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
-        // If the LLM fails mid-conversation, write a report and exit
-        await writeReport(args.repoPath, args.session, args.id, 'LLM returned empty response mid-investigation.');
-        console.log('LLM returned empty response mid-investigation.');
+        // LLM failed mid-conversation
+        const errorMsg = 'LLM returned empty response mid-investigation.';
+        await log(args.session, `scenario-${args.id}`, 'error', errorMsg, { provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
+        await writeReport(args.repoPath, args.session, args.id, errorMsg);
+        console.log(errorMsg);
         process.exit(1);
       } else {
+        // Add the valid response to messages history for the *next* turn
         messages.push({ role: 'assistant', content: replyText });
-        await log(args.session, `scenario-${args.id}`, 'debug', 'Received from LLM', { response: { content: replyText }, provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
+        await log(args.session, `scenario-${args.id}`, 'debug', 'Received response from LLM', { responseLength: replyText.length, provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
       }
 
+      // Small delay before next iteration (optional)
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
   } catch (error) {
-    const errorText = error instanceof Error ? error.message : String(error);
-    await writeReport(args.repoPath, args.session, args.id, `SCENARIO ERROR: ${errorText}`);
-    console.log(`SCENARIO ERROR: ${errorText}`);
+    // Catch unexpected errors during setup or within the loop if not handled
+    const errorText = error instanceof Error ? `${error.message}${error.stack ? `\nStack: ${error.stack}` : ''}` : String(error);
+    await log(args.session, `scenario-${args.id}`, 'error', `Unhandled scenario error: ${errorText}`, { repoPath: args.repoPath });
+    await writeReport(args.repoPath, args.session, args.id, `SCENARIO FAILED UNEXPECTEDLY: ${errorText}`);
+    console.error(`SCENARIO FAILED UNEXPECTEDLY: ${errorText}`); // Log error to stderr as well
     process.exit(1);
   }
 }
 
-// Parse args and run
-const args = parseArgs(process.argv);
-runScenarioAgent(args).catch(err => {
-  const errorText = err instanceof Error ? err.message : String(err);
-  console.log(`SCENARIO ERROR: ${errorText}`);
-  process.exit(1);
+// --- Script Entry Point ---
+try {
+    const args = parseArgs(process.argv.slice(2)); // Pass relevant args, skipping node path and script path
+    runScenarioAgent(args); // No await here, let the async function run
+} catch (err) {
+    // Handle argument parsing errors
+    const errorText = err instanceof Error ? err.message : String(err);
+    console.error(`Scenario agent failed to start due to arg parsing error: ${errorText}`);
+    // Attempt to log if possible, though session info might be missing
+    // log(args.session || 'unknown', `scenario-${args.id || 'unknown'}`, 'error', `Arg parsing failed: ${errorText}`, {}).catch();
+    process.exit(1);
+}
+
+// Optional: Add unhandled rejection/exception handlers for more robustness
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Log this? Might be hard without session context.
+  process.exit(1); // Exit on unhandled promise rejection
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  // Log this?
+  process.exit(1); // Exit on uncaught exception
 });
