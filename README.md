@@ -105,7 +105,7 @@ If you're not using Cline or Claude Desktop, follow these steps:
 - **Claude Desktop:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 
 ### LLM Support
-Deebo supports OpenRouter, Anthropic, and Gemini models. Configure via environment variables:
+Deebo supports OpenRouter, Anthropic, OpenAI SDK, and Gemini models. Configure via environment variables:
 - `MOTHER_HOST`: LLM provider for mother agent
 - `SCENARIO_HOST`: LLM provider for scenario agents
 - `[PROVIDER]_API_KEY`: API key for chosen provider
