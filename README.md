@@ -4,7 +4,9 @@
 [![GitHub stars](https://img.shields.io/github/stars/snagasuri/deebo-prototype?style=social)](https://github.com/snagasuri/deebo-prototype)
 [![Active installs](https://img.shields.io/endpoint?url=https://deebo-active-counter.ramnag2003.workers.dev/active)](https://github.com/snagasuri/deebo-prototype)
 
-Deebo is an autonomous debugging system that works alongside AI coding agents (Claude, Cline, Cursor, etc.) using the Model Context Protocol (MCP). It runs structured investigations in parallel Git branches to test hypotheses, validate fixes, and helps you move faster. If your main coding agent is like a single-threaded process, Deebo introduces multi-threadedness to your development workflow.
+Deebo is an autonomous debugging system that AI coding agents (Claude, Cline, Cursor, etc.) can delegate tricky bugs to using the Model Context Protocol (MCP). It runs structured investigations in parallel Git branches to test hypotheses, validate fixes, and helps you move faster. If your main coding agent is like a single-threaded process, Deebo introduces multi-threadedness to your development workflow.
+
+**feedback, questions/support? dm me on x @sriramenn or open an issue here**
 
 **If you think your team can benefit from Deebo, we’d love to hear from you.**
 We’re partnering with teams who use AI agents to write production code and want to maximize their productivity.
@@ -16,8 +18,7 @@ Reach out for a live walkthrough, custom setup support, or to explore early acce
 
 Deebo scales to production codebases, too. Here's [an example of Deebo solving the test53 linearizer failure $100 tinygrad bug bounty](https://github.com/snagasuri/deebo-prototype/tree/master/memory-bank/9bd38e9840d3/sessions/session-1744006973678) by spawning 17 scenario agents and coming up with 2 valid fixes. Check out [progress.md](https://github.com/snagasuri/deebo-prototype/blob/master/memory-bank/9bd38e9840d3/progress.md) for just the solution.
 
-## 🚀 Quick Install (for Cline/Claude Desktop users) questions/support? dm me on x @sriramenn or open an issue here
-
+## 🚀 Quick Install (for Cline/Claude Desktop users) 
 ```bash
 npx deebo-setup
 ```
@@ -27,29 +28,7 @@ That's it! Follow the prompts to configure your API key and you're ready to go.
 ```bash
 npx deebo-setup ping
 ```
-
-
-<details>
-<summary>🔍 What exactly does Deebo do?</summary>
-
-Deebo is your AI agent's debugging partner. When your agent encounters a tricky bug, Deebo:
-
-- Spawns multiple "scenario agents" to test different hypotheses in parallel
-- Runs each experiment in an isolated Git branch
-- Validates or falsifies each approach
-- Returns structured reports and solutions
-- Optionally logs session history for learning
-
-Instead of going back and forth with your AI agent about bugs, let Deebo handle the investigation while you focus on building features.
-
-### Exposed MCP Tools
-| Tool             | Description                                                          |
-| ---------------- | -------------------------------------------------------------------- |
-| `start`          | Begins a debugging session                                           |
-| `check`          | Returns current status of debugging session                          |
-| `cancel`         | Terminates all processes for a given debugging session               |
-| `add_observation`| Logs external observations for an agent                              |
-</details>
+## Cursor users: https://cursor.directory/mcp/deebo
 
 <details>
 <summary>🛠️ Manual Installation (for other setups)</summary>
@@ -80,19 +59,7 @@ If you're not using Cline or Claude Desktop, follow these steps:
    npx @wonderwhy-er/desktop-commander@latest setup
    ```
 
-4. Configure your MCP client to use Deebo (see Technical Details section for configuration format)
-</details>
-
-<details>
-<summary>📚 Technical Details</summary>
-
-### Memory Bank
-If `USE_MEMORY_BANK=true` is set, Deebo enables structured memory logging:
-- `activeContext.md`: Editable live journal for the Mother agent
-- `progress.md`: Summarized results of completed debug sessions
-- `sessions/<id>/reports/`: Structured scenario agent reports
-- `sessions/<id>/logs/`: Raw logs from Mother and scenarios
-- `sessions/<id>/observations/`: Logs of external observations
+4. Configure your MCP client to use Deebo 
 
 ### MCP Configuration
 ```json
@@ -123,12 +90,6 @@ If `USE_MEMORY_BANK=true` is set, Deebo enables structured memory logging:
   }
 }
 ```
-
-### Design Principles
-- **Tool-isolated:** All mutations via MCP tools (no raw fs/git calls)
-- **Stateless scenarios:** No shared memory between agents
-- **Raw logs:** Human-readable, tailable logs and reports
-- **Delegation-first:** Built to be called by other agents, not humans
 </details>
 
 <details>
@@ -309,4 +270,6 @@ When a bug requires specific test cases:
 
 ## 📜 License
 
-Apache 2.0
+This project is licensed under the Apache License, Version 2.0 - see the [LICENSE](LICENSE) file for details.
+
+Copyright 2025 Sriram Nagasuri

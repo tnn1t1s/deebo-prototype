@@ -83,6 +83,9 @@ const processRegistry = new Map<string, {
   scenarioPids: Set<number>; // Store PIDs of spawned scenario agents
 }>();
 
+// Track terminated PIDs across all tools
+const terminatedPids = new Set<number>();
+
 // Load environment variables from .env file
 config();
 
@@ -202,10 +205,11 @@ server.tool(
       const firstEvent = JSON.parse(motherLines[0]);
       const durationMs = Date.now() - new Date(firstEvent.timestamp).getTime();
 
-      // Determine status by scanning for solution tag first, then check for errors
+      // Determine status by scanning for solution tag, cancellation, or errors
       let status = 'in_progress'; // Default status
       let solutionFoundInScan = false;
       let lastValidEvent: any = null; // Store the last successfully parsed event
+      // Use module-level terminatedPids set
 
       for (let i = motherLines.length - 1; i >= 0; i--) {
         try {
@@ -213,16 +217,35 @@ server.tool(
           if (!lastValidEvent) lastValidEvent = event; // Capture the last valid event
 
           const content = event.data?.response?.content || event.message || '';
+          
+          // Check for process spawn and termination with comprehensive pattern
+          const SCENARIO_PID_PATTERN = /(?:Spawned|Removed|Terminated|Cancelled) Scenario .* PID (\d+)/;
+          const pidMatch = content.match(SCENARIO_PID_PATTERN);
+          if (pidMatch) {
+            const pid = parseInt(pidMatch[1]);
+            // Check for any termination-related terms
+            if (content.match(/(Removed|Terminated|Cancelled)/)) {
+              terminatedPids.add(pid);
+            }
+          }
+          
+          // Check for session cancellation
+          if (content.includes('Session cancelled by user request')) {
+            status = 'cancelled';
+            break;
+          }
+          
+          // Check for solution
           if (content.includes('<solution>')) {
             status = 'completed';
             solutionFoundInScan = true;
-            break; // Found the solution tag
+            break;
           }
-          // Check for error status *after* checking for solution tag
+          
+          // Check for error status
           if (event.level === 'error') {
-             status = 'failed';
-             // Don't break here; allow checking earlier messages for a potential solution
-             // that might have been logged before a subsequent error.
+            status = 'failed';
+            // Continue scanning for potential solution or cancellation
           }
         } catch (e) {
           // Skip invalid JSON lines
@@ -231,19 +254,59 @@ server.tool(
       }
 
       // If status is still 'in_progress' after scan, check the last valid event's level
-      // This handles cases where the session ends without solution or explicit error log
       if (status === 'in_progress' && lastValidEvent && lastValidEvent.level === 'error') {
-          status = 'failed';
+        status = 'failed';
       }
-      // Note: If the loop completes and status is still 'in_progress', it remains 'in_progress'.
+
+      // Helper functions for PID mapping and status
+      function buildScenarioPIDMapping(motherLines: string[]): Map<string, number> {
+        const mapping = new Map<string, number>();
+        for (const line of motherLines) {
+          try {
+            const event = JSON.parse(line);
+            const message = event.message || '';
+            const matches = message.match(/Spawned Scenario ([^ ]+) with PID (\d+)/);
+            if (matches) {
+              const [_, scenarioId, pidStr] = matches;
+              mapping.set(scenarioId, parseInt(pidStr));
+            }
+          } catch (e) {
+            continue;
+          }
+        }
+        return mapping;
+      }
+
+      function getScenarioStatus(scenarioId: string, pidMapping: Map<string, number>): string {
+        const pid = pidMapping.get(scenarioId);
+        if (!pid) return 'Unknown';
+        return terminatedPids.has(pid) ? 'Terminated' : 'Running';
+      }
+
+      // Build PID mapping from mother log
+      const pidMapping = buildScenarioPIDMapping(motherLines);
 
       // Count scenario statuses
       const reportsDir = join(sessionDir, 'reports');
       const scenarioLogs = await readdir(logsDir);
       const reportFiles = await readdir(reportsDir);
       
-      const totalScenarios = scenarioLogs.filter(f => f.startsWith('scenario-')).length;
-      const reportedScenarios = reportFiles.length;
+      // Count scenarios by status
+      let runningCount = 0;
+      let terminatedCount = 0;
+      let reportedCount = reportFiles.length;
+
+      // Check each scenario's status using the PID mapping
+      for (const logFile of scenarioLogs.filter(f => f.startsWith('scenario-'))) {
+        const scenarioId = logFile.replace('scenario-', '').replace('.log', '');
+        const status = getScenarioStatus(scenarioId, pidMapping);
+        
+        if (status === 'Terminated') {
+          terminatedCount++;
+        } else if (!reportFiles.includes(scenarioId + '.json')) {
+          runningCount++;
+        }
+      }
 
       // Build the pulse
       let pulse = `=== Deebo Session Pulse: ${sessionId} ===\n`;
@@ -254,6 +317,9 @@ server.tool(
       pulse += `--- Mother Agent ---\n`;
       pulse += `Status: ${status === 'in_progress' ? 'working' : status}\n`;
       pulse += `Last Activity: ${lastValidEvent ? lastValidEvent.timestamp : 'N/A'}\n`;
+
+      // Update summary line to include terminated count
+      pulse += `--- Scenario Agents (${scenarioLogs.filter(f => f.startsWith('scenario-')).length} Total: ${runningCount} Running, ${terminatedCount} Terminated, ${reportedCount} Reported) ---\n\n`;
 
       // For completed sessions, find and show solution
       if (status === 'completed') {
@@ -306,7 +372,6 @@ server.tool(
 
       }
 
-      pulse += `--- Scenario Agents (${totalScenarios} Total: ${totalScenarios - reportedScenarios} Running, ${reportedScenarios} Reported) ---\n\n`;
 
       // Process reported scenarios
       for (const file of reportFiles) {
@@ -390,12 +455,12 @@ server.tool(
         pulse += `  (Full report: ${join(reportsDir, `${scenarioId}.json`)})\n\n`;
       }
 
-      // Process running scenarios
-      const runningScenarios = scenarioLogs
+      // Process unreported scenarios (either running or terminated without report)
+      const unreportedScenarios = scenarioLogs
         .filter(f => f.startsWith('scenario-'))
         .filter(f => !reportFiles.includes(f.replace('scenario-', '').replace('.log', '.json')));
       
-      for (const file of runningScenarios) {
+      for (const file of unreportedScenarios) {
         const scenarioId = file.replace('scenario-', '').replace('.log', '');
         
         let scenarioLog;
@@ -408,29 +473,29 @@ server.tool(
         const scenarioLines = scenarioLog.split('\n').filter(Boolean);
         if (!scenarioLines.length) continue;
 
-        // Get hypothesis - more efficient scan
+        // Get hypothesis and events from scenario log
         let hypothesis = 'Unknown hypothesis';
-        for (let i = 0; i < scenarioLines.length; i++) {
-          try {
-            const event = JSON.parse(scenarioLines[i]);
-            if (event.data?.hypothesis) {
-              hypothesis = event.data.hypothesis;
-              break;
-            }
-          } catch (e) {
-            continue;
-          }
-        }
-
-        // First and last events
         let firstEvent, lastEvent;
+        
         try {
-          firstEvent = JSON.parse(scenarioLines[0]);
-          lastEvent = JSON.parse(scenarioLines[scenarioLines.length - 1]);
-          const runtime = Math.floor((Date.now() - new Date(firstEvent.timestamp).getTime()) / 1000);
+          // Extract hypothesis and events
+          for (const line of scenarioLines) {
+            try {
+              const event = JSON.parse(line);
+              if (event.data?.hypothesis) {
+                hypothesis = event.data.hypothesis;
+              }
+              if (!firstEvent) firstEvent = event;
+              lastEvent = event;
+            } catch (e) {
+              continue;
+            }
+          }
 
+          // Calculate runtime and add to pulse
+          const runtime = Math.floor((Date.now() - new Date(firstEvent.timestamp).getTime()) / 1000);
           pulse += `* Scenario: ${scenarioId}\n`;
-          pulse += `  Status: Running\n`;
+          pulse += `  Status: ${getScenarioStatus(scenarioId, pidMapping)}\n`;
           pulse += `  Hypothesis: "${hypothesis}"\n`;
           pulse += `  Runtime: ${runtime}s\n`;
           pulse += `  Latest Activity: ${lastEvent.message}\n`;
@@ -465,8 +530,6 @@ server.tool(
   "cancel",
   "Terminates all processes related to a debugging session. This will stop the mother agent and all scenario agents, releasing system resources. Use this when you have your solution or want to abandon the debugging process.",
   {
-    agentId: z.string().describe("ID of the agent to receive the observation (e.g., 'mother' or 'scenario-session-1712268439123-2')"),
-    observation: z.string().describe("The observation content - insights, test results, or guidance to help the investigation"),
     sessionId: z.string().describe("The session ID returned by the start tool when the debugging session was initiated")
   },
   async ({ sessionId }, extra) => {
@@ -498,6 +561,7 @@ server.tool(
           // Use SIGTERM first for graceful shutdown
           process.kill(pid, 'SIGTERM');
           killedScenarios++;
+          terminatedPids.add(pid); // Add to terminated set right away
           // console.log(`Sent SIGTERM to scenario PID ${pid}`); // Removed informational log
         } catch (err: any) {
           // Ignore errors if process is already gone (e.g., ESRCH)
@@ -506,6 +570,7 @@ server.tool(
             failedKills++;
           } else {
             // Process already gone
+            terminatedPids.add(pid); // Still mark as terminated if process is already gone
           }
         }
       }
