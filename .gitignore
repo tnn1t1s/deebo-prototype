@@ -1,41 +1,42 @@
+# Node modules
 node_modules/
-memory-bank/
-build/
-.env
-*.log
 
-# Environment variables
+# Local env files
 .env
 .env.local
 .env.*.local
-core-files.txt
-# Build output
-dist/
-build/
 
-# IDE and editor files
+# Logs
+logs/
+*.log
+
+# Build outputs (for root only)
+dist/
+
+# Editor and OS files
 .idea/
 .vscode/
 *.swp
 *.swo
 .DS_Store
 
-# Coverage directory used by tools like istanbul
+# Test coverage
 coverage/
 
-# Optional npm cache directory
-.npm
+# npm cache
+.npm/
 
-# Optional eslint cache
+# eslint cache
 .eslintcache
 
-logs/
-*.log
-reports/
-memory-bank/
+# Python virtual environments
 venv/
-# Project specific directories
+
+# Project-specific folders
 workers/
-packages/
 notes/
 TODO.md
+
+# Deebo runtime output
+memory-bank/
+reports/
