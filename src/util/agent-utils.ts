@@ -10,8 +10,10 @@ interface LlmConfig {
   provider?: string;
   model?: string;
   maxTokens?: number;
-  apiKey?: string; // Generic key, specific keys passed within (used for OpenRouter)
-  // baseURL?: string; // Removed - OpenRouter URL will be hardcoded
+  apiKey?: string; // Generic key, primarily used for OpenRouter for backward compatibility
+  openrouterApiKey?: string; // Alias for apiKey, prefer this for new code
+  baseURL?: string; // For OpenAI-compatible APIs
+  openaiApiKey?: string; // For OpenAI and compatible providers
   geminiApiKey?: string;
   anthropicApiKey?: string;
 }
@@ -655,19 +657,36 @@ export async function callLlm(
     provider,
     model,
     maxTokens = 4096,
-    apiKey, // Keep generic apiKey for OpenRouter case
-    // baseURL, // Removed
+    apiKey,
+    openrouterApiKey,
+    baseURL,
+    openaiApiKey,
     geminiApiKey,
     anthropicApiKey
   } = config;
 
   const lowerCaseProvider = provider?.toLowerCase();
 
-  if (lowerCaseProvider === 'openrouter') {
-    if (!apiKey) throw new Error("OpenRouter API key is required for 'openrouter' provider.");
+  if (lowerCaseProvider === 'openai') {
+    if (!openaiApiKey) throw new Error("API key is required for 'openai' provider.");
+    if (!baseURL) throw new Error("Base URL is required for 'openai' provider.");
     const openai = new OpenAI({
-      apiKey: apiKey,
-      baseURL: 'https://openrouter.ai/api/v1', // Hardcoded OpenRouter URL
+      apiKey: openaiApiKey,
+      baseURL: baseURL,
+    });
+    const completion = await openai.chat.completions.create({
+      model: (model || 'gpt-4o') as ChatModel,
+      max_tokens: maxTokens,
+      messages
+    });
+    return completion.choices?.[0]?.message?.content || '';
+  }
+
+  if (lowerCaseProvider === 'openrouter') {
+    if (!openrouterApiKey && !apiKey) throw new Error("OpenRouter API key is required for 'openrouter' provider.");
+    const openai = new OpenAI({
+      apiKey: openrouterApiKey || apiKey, // Use new name if available, fall back to old name
+      baseURL: 'https://openrouter.ai/api/v1',
     });
     const completion = await openai.chat.completions.create({
       model: (model || 'openai/gpt-4o') as ChatModel, // Use provided model or default
@@ -718,5 +737,5 @@ export async function callLlm(
     return firstContent && firstContent.type === 'text' ? firstContent.text : '';
   }
 
-  throw new Error(`Unsupported provider '${lowerCaseProvider}'. Set LLM_PROVIDER env var to 'openrouter', 'gemini', or 'anthropic'`);
+  throw new Error(`Unsupported provider '${lowerCaseProvider}'. Set LLM_PROVIDER env var to 'openai', 'openrouter', 'gemini', or 'anthropic'`);
 }

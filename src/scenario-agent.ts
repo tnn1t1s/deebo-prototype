@@ -13,8 +13,10 @@ interface LlmConfig {
   provider?: string;
   model?: string;
   maxTokens?: number;
-  apiKey?: string; // Generic key, specific keys passed within (used for OpenRouter)
-  // baseURL?: string; // Removed - OpenRouter URL is hardcoded in agent-utils
+  apiKey?: string; // Generic key, primarily used for OpenRouter for backward compatibility
+  openrouterApiKey?: string; // Alias for apiKey, prefer this for new code
+  baseURL?: string; // For OpenAI-compatible APIs
+  openaiApiKey?: string; // For OpenAI and compatible providers
   geminiApiKey?: string;
   anthropicApiKey?: string;
 }
@@ -56,7 +58,7 @@ function parseArgs(args: string[]): ScenarioArgs {
     language: result.language || 'typescript',
     repoPath,
     filePath: result.file || undefined,
-    branch: result.branch || '' 
+    branch: result.branch || ''
   };
 }
 
@@ -73,7 +75,7 @@ export async function runScenarioAgent(args: ScenarioArgs) {
     // Set up tools
     await log(args.session, `scenario-${args.id}`, 'info', 'Connecting to tools...', { repoPath: args.repoPath });
   const { gitClient, filesystemClient } = await connectRequiredTools(
-    `scenario-${args.id}`, 
+    `scenario-${args.id}`,
     args.session,
     args.repoPath
   );
@@ -115,16 +117,19 @@ Hypothesis: ${args.hypothesis}`
     const scenarioProvider = process.env.SCENARIO_HOST; // Read provider name from SCENARIO_HOST
     const scenarioModel = process.env.SCENARIO_MODEL;
     const openrouterApiKey = process.env.OPENROUTER_API_KEY; // Still needed if provider is 'openrouter'
+    const openaiApiKey = process.env.OPENAI_API_KEY;
+    const openaiBaseUrl = process.env.OPENAI_BASE_URL;
     const geminiApiKey = process.env.GEMINI_API_KEY;
     const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-    // const scenarioHost = process.env.SCENARIO_HOST; // No longer needed as separate URL
 
     // Create the config object to pass to callLlm
     const llmConfig: LlmConfig = {
       provider: scenarioProvider, // Use the provider name from SCENARIO_HOST
       model: scenarioModel,
-      apiKey: openrouterApiKey, // Pass the OpenRouter key (used only if provider is 'openrouter')
-      // baseURL: scenarioHost, // Removed - OpenRouter URL is hardcoded in agent-utils
+      apiKey: openrouterApiKey,
+      openrouterApiKey: openrouterApiKey, // For OpenRouter
+      openaiApiKey: openaiApiKey, // For OpenAI and compatible providers
+      baseURL: openaiBaseUrl, // For OpenAI-compatible APIs
       geminiApiKey: geminiApiKey,
       anthropicApiKey: anthropicApiKey
     };
@@ -136,7 +141,7 @@ Hypothesis: ${args.hypothesis}`
       // Exit if the first call fails, as there's no response to process
       await writeReport(args.repoPath, args.session, args.id, 'Initial LLM call returned empty response.');
       console.log('Initial LLM call returned empty response.');
-      process.exit(1); 
+      process.exit(1);
     } else {
       messages.push({ role: 'assistant', content: replyText });
       await log(args.session, `scenario-${args.id}`, 'debug', 'Received from LLM', { response: { content: replyText }, repoPath: args.repoPath });
@@ -164,7 +169,7 @@ Hypothesis: ${args.hypothesis}`
 
       // Only process tool calls if we don't have a report
       const toolCalls = responseText.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
-      
+
       const parsedCalls = toolCalls.map((tc: string) => {
         try {
           const server = tc.includes('git-mcp') ? gitClient! : filesystemClient!;
@@ -192,7 +197,7 @@ Hypothesis: ${args.hypothesis}`
         // No need to clear assistantResponse here, just continue the loop
         continue;
       }
-      
+
       const validCalls = parsedCalls as { server: NonNullable<typeof gitClient>, tool: string, args: any }[];
 
       // Only now, execute each one
