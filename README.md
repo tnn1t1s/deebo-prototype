@@ -6,6 +6,8 @@
 
 Deebo is an autonomous debugging system that works alongside AI coding agents (Claude, Cline, Cursor, etc.) using the Model Context Protocol (MCP). It runs structured investigations in parallel Git branches to test hypotheses, validate fixes, and helps you move faster. If your main coding agent is like a single-threaded process, Deebo introduces multi-threadedness to your development workflow.
 
+**questions/support? dm me on x @sriramenn or open an issue here**
+
 **If you think your team can benefit from Deebo, we’d love to hear from you.**
 We’re partnering with teams who use AI agents to write production code and want to maximize their productivity.
 Reach out for a live walkthrough, custom setup support, or to explore early access to enterprise features.
@@ -16,8 +18,7 @@ Reach out for a live walkthrough, custom setup support, or to explore early acce
 
 Deebo scales to production codebases, too. Here's [an example of Deebo solving the test53 linearizer failure $100 tinygrad bug bounty](https://github.com/snagasuri/deebo-prototype/tree/master/memory-bank/9bd38e9840d3/sessions/session-1744006973678) by spawning 17 scenario agents and coming up with 2 valid fixes. Check out [progress.md](https://github.com/snagasuri/deebo-prototype/blob/master/memory-bank/9bd38e9840d3/progress.md) for just the solution.
 
-## 🚀 Quick Install (for Cline/Claude Desktop users) questions/support? dm me on x @sriramenn or open an issue here
-
+## 🚀 Quick Install (for Cline/Claude Desktop users) 
 ```bash
 npx deebo-setup
 ```
@@ -27,7 +28,7 @@ That's it! Follow the prompts to configure your API key and you're ready to go.
 ```bash
 npx deebo-setup ping
 ```
-
+## Cursor users: https://cursor.directory/mcp/deebo
 
 <details>
 <summary>🔍 What exactly does Deebo do?</summary>
