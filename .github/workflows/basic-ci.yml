@@ -15,7 +15,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 25 # Allow ample time for the test run
 
     steps:
       - name: Checkout Deebo code
@@ -26,7 +26,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'npm'
+          cache: 'npm' # Enable npm caching
 
       # --- OS Specific Setup for uv ---
       - name: Install uv (Linux/macOS)
@@ -34,12 +34,12 @@ jobs:
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
       - name: Add uv to PATH (Linux/macOS)
         if: runner.os == 'Linux' || runner.os == 'macOS'
-        # Ensure the correct path for uv installed via script is added
-        run: echo "$HOME/.local/bin" >> $GITHUB_PATH # Adjusted path based on common uv install location
+        # Add the typical uv install location to the PATH for subsequent steps
+        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Install uv (Windows)
         if: runner.os == 'Windows'
-        run: pip install uv
+        run: pip install uv # Assumes Python (usually available) and pip are present
       - name: Get Python location (Windows)
         if: runner.os == 'Windows'
         id: python_location
@@ -50,75 +50,79 @@ jobs:
           echo "python_dir=$pythonDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
       - name: Add Python Scripts to PATH (Windows, reliable)
         if: runner.os == 'Windows'
+        # Add Python's Scripts dir (where pip installs executables like uv) to PATH
         run: echo "${{ steps.python_location.outputs.python_dir }}\Scripts" >> $GITHUB_PATH
 
-      # --- UPDATED: Determine Tool Paths (Exports Dirs) ---
+      # --- Determine Tool Paths (Exports paths and dirs for logging/potential future use) ---
       - name: Determine Tool Paths
         id: tool_paths
         shell: bash
         run: |
+          # Function to find command path
           find_command() {
             local cmd=$1
             local where_cmd=$([[ "${{ runner.os }}" == "Windows" ]] && echo "where" || echo "which")
             local found_path=$($where_cmd $cmd 2>/dev/null | head -n 1)
             echo "$found_path"
           }
+          # Find paths using the function
           NPX_PATH=$(find_command npx)
           UVX_PATH=$(find_command uvx)
-          NPM_BIN=$(dirname "$NPX_PATH") # Approximation
+          # Approximate NPM bin directory
+          NPM_BIN=$(dirname "$NPX_PATH")
 
-          if [[ -z "$NPX_PATH" || -z "$UVX_PATH" ]]; then echo "Error: Could not find npx or uvx path."; exit 1; fi
+          # Error out if essential tools aren't found
+          if [[ -z "$NPX_PATH" || -z "$UVX_PATH" ]]; then echo "Error: Could not find npx or uvx path in the PATH."; echo "Current PATH: $PATH"; exit 1; fi
 
-          # --- Get directories ---
+          # Get directories containing the tools
           NPX_DIR=$(dirname "$NPX_PATH")
           UVX_DIR=$(dirname "$UVX_PATH")
 
-          # Escape paths for GITHUB_ENV
+          # Escape paths/dirs for GITHUB_ENV (useful if needed later)
           NPX_PATH_ESC=$(echo "$NPX_PATH" | sed 's/\\/\\\\/g')
           UVX_PATH_ESC=$(echo "$UVX_PATH" | sed 's/\\/\\\\/g')
           NPM_BIN_ESC=$(echo "$NPM_BIN" | sed 's/\\/\\\\/g')
-          # --- Escape directories ---
           NPX_DIR_ESC=$(echo "$NPX_DIR" | sed 's/\\/\\\\/g')
           UVX_DIR_ESC=$(echo "$UVX_DIR" | sed 's/\\/\\\\/g')
 
+          # Export to environment for potential use by later steps or scripts
           echo "DEEBO_NPX_PATH=${NPX_PATH_ESC}" >> $GITHUB_ENV
           echo "DEEBO_UVX_PATH=${UVX_PATH_ESC}" >> $GITHUB_ENV
           echo "DEEBO_NPM_BIN=${NPM_BIN_ESC}" >> $GITHUB_ENV
-          # --- Export directories ---
           echo "DEEBO_NPX_DIR=${NPX_DIR_ESC}" >> $GITHUB_ENV
           echo "DEEBO_UVX_DIR=${UVX_DIR_ESC}" >> $GITHUB_ENV
 
+          # Log found paths for debugging
           echo "Found NPX: $NPX_PATH (in $NPX_DIR)"
           echo "Found UVX: $UVX_PATH (in $UVX_DIR)"
           echo "Using NPM BIN: $NPM_BIN"
 
-
       # --- Setup MSVC for Windows Builds ---
       - name: Set up MSVC (Windows Only)
         if: runner.os == 'Windows'
-        uses: microsoft/setup-msbuild@v2
+        uses: microsoft/setup-msbuild@v2 # Use v2 or latest stable
 
       # --- Install Deebo Dependencies (with GITHUB_TOKEN) ---
       - name: Install Deebo Dependencies
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Use token to avoid GitHub API rate limits
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Authenticate GitHub API calls
         run: npm install --loglevel error # Reduce log noise
 
       - name: Build Deebo
-        run: npm run build
+        run: npm run build # Compile TypeScript code
 
       # --- Build Minimal MCP Client (with GITHUB_TOKEN) ---
       - name: Build Minimal MCP Client
-        working-directory: ./ci/mcp-client
+        working-directory: ./ci/mcp-client # Navigate to client directory
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Token needed if client deps download too
         run: |
           npm install --loglevel error
           npm run build
 
       - name: Clone Task Manager Fixture Repo
         run: |
-          rm -rf task-manager-fixture # Clean first
+          rm -rf task-manager-fixture # Ensure clean state
           git clone https://github.com/snagasuri/task-manager.git task-manager-fixture
           echo "Cloned fixture repo into $(pwd)/task-manager-fixture"
 
@@ -129,10 +133,11 @@ jobs:
         shell: bash
         run: |
           echo "Checking OpenRouter API Key status..."
+          # Perform check and validate response structure using .data.label
           if curl -fsS -G "https://openrouter.ai/api/v1/auth/key" \
              -H "Authorization: Bearer $OPENROUTER_API_KEY" \
              -o key_status.json && \
-             jq -e '.data.label' key_status.json > /dev/null; then # Check .data.label
+             jq -e '.data.label' key_status.json > /dev/null; then
             echo "OpenRouter API Key status check passed."
           else
             echo "Error: OpenRouter API key check failed based on response structure or API error."
@@ -141,67 +146,68 @@ jobs:
             exit 1
           fi
 
-      # --- UPDATED: Run Deebo Server and Test Client (Explicit PATH) ---
+      # --- Run Deebo Server and Test Client (REMOVED Explicit PATH Override) ---
       - name: Run Deebo Server and Test Client (Direct Tool Calls)
         id: deebo_run
         shell: bash
         env:
-          # --- Explicitly prepend tool directories to PATH ---
-          PATH: ${{ env.DEEBO_NPX_DIR }}${{ runner.os == 'Windows' && ';' || ':' }}${{ env.DEEBO_UVX_DIR }}${{ runner.os == 'Windows' && ';' || ':' }}${{ env.PATH }}
-          # Other required env vars
+          # NOTE: Explicit PATH setting removed. Relying on PATH built by previous steps.
+          # Required Environment Variables for Deebo & Test
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          CI_LLM_MODEL: "deepseek/deepseek-chat" # For optional analysis
+          CI_LLM_MODEL: "deepseek/deepseek-chat" # Model for optional analysis step
           MOTHER_HOST: "openrouter"
-          MOTHER_MODEL: "deepseek/deepseek-chat" # Cheap model for Deebo itself
+          MOTHER_MODEL: "deepseek/deepseek-chat" # Cheap model for Deebo test run
           SCENARIO_HOST: "openrouter"
           SCENARIO_MODEL: "deepseek/deepseek-chat"
           USE_MEMORY_BANK: "true"
           NODE_ENV: "development"
-          # DEEBO_* paths are also available if needed elsewhere via GITHUB_ENV
+          # DEEBO_* paths set by "Determine Tool Paths" are available via GITHUB_ENV
         run: |
-          set -e # Exit on error
-          # set -x # Uncomment for verbose debugging
+          set -e # Exit script immediately on error
+          # set -x # Uncomment for verbose command tracing
 
+          # Define absolute paths needed by the script and client
           DEEBO_BUILD_PATH_ABS=$(pwd)/build/index.js
           CLIENT_BUILD_PATH_ABS=$(pwd)/ci/mcp-client/build/index.js
           REPO_FIXTURE_PATH_ABS=$(pwd)/task-manager-fixture
 
-          # Convert paths if on Windows for Node.js usage
+          # Convert paths for Windows Node.js compatibility if necessary
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             DEEBO_BUILD_PATH_ABS=$(cygpath -w "$DEEBO_BUILD_PATH_ABS")
             CLIENT_BUILD_PATH_ABS=$(cygpath -w "$CLIENT_BUILD_PATH_ABS")
             REPO_FIXTURE_PATH_ABS=$(cygpath -w "$REPO_FIXTURE_PATH_ABS")
           fi
 
-          # Ensure memory-bank dir doesn't exist
-          rm -rf memory-bank
+          # Clean up any previous memory bank
+          echo "--- Cleaning up previous run artifacts ---"
+          rm -rf memory-bank deebo_server.log client_output.log key_status.json
 
           echo "--- Starting Deebo Server ---"
-          echo "Using PATH: $PATH" # Log the PATH being used
-          # Start node, redirect stdout/stderr
+          echo "Effective PATH for this step: $PATH" # Log the PATH being used
+          # Start Deebo server in background, redirect logs
           node --experimental-specifier-resolution=node --experimental-modules --max-old-space-size=4096 "$DEEBO_BUILD_PATH_ABS" > deebo_server.log 2>&1 &
           SERVER_PID=$!
           echo "Server PID: $SERVER_PID"
 
-          # Robust cleanup trap
+          # Setup robust cleanup trap for script exit/error
           trap 'echo "--- Cleaning up Server PID $SERVER_PID ---"; kill $SERVER_PID || echo "Server already stopped"; rm -rf task-manager-fixture memory-bank deebo_server.log client_output.log key_status.json' EXIT
 
           # --- Wait for server readiness using grep ---
           echo "--- Waiting for server to be ready (max 60s) ---"
           attempt=0
-          max_attempts=12
+          max_attempts=12 # 12 attempts * 5s = 60s
           ready=false
-          # --- NOTE: Adjust the grep string below if the actual readiness log message from src/index.ts is different ---
-          readiness_message="McpServer transport connected." # Message logged after server.connect() succeeds
+          # Adjust readiness_message if Deebo's successful startup log changes
+          readiness_message="McpServer transport connected."
           while [ $attempt -lt $max_attempts ]; do
-            # Check if the server process is still running
+            # Check if the server process is still alive
             if ! kill -0 $SERVER_PID 2>/dev/null; then
               echo "Error: Server process $SERVER_PID exited prematurely!"
-              echo "--- Server Log ---"
+              echo "--- Server Log (deebo_server.log) ---"
               cat deebo_server.log || echo "Server log not found."
               exit 1
             fi
-            # Check the log file for the readiness message
+            # Check the log file for the readiness message (case-insensitive)
             if grep -q -i "$readiness_message" deebo_server.log; then
                 echo "Server appears ready (found: '$readiness_message')."
                 ready=true
@@ -212,22 +218,23 @@ jobs:
             attempt=$((attempt+1))
           done
 
+          # Exit if server never became ready
           if [ "$ready" = false ]; then
               echo "Error: Server did not become ready in time! Readiness message not found: '$readiness_message'"
-              echo "--- Server Log ---"
+              echo "--- Server Log (deebo_server.log) ---"
               cat deebo_server.log || echo "Server log not found."
               exit 1
           fi
           # --- End Server Readiness Check ---
 
-
           echo "--- Running MCP Client Script (forceStart/forceCheck) ---"
           CLIENT_OUTPUT_FILE="client_output.log"
-          # Execute the client script
+          # Execute the client, piping output to log file and stdout
           node "$CLIENT_BUILD_PATH_ABS" "$DEEBO_BUILD_PATH_ABS" "$REPO_FIXTURE_PATH_ABS" | tee $CLIENT_OUTPUT_FILE
-          CLIENT_EXIT_CODE=${PIPESTATUS[0]}
+          CLIENT_EXIT_CODE=${PIPESTATUS[0]} # Capture exit code of the node command
 
           echo "--- MCP Client Script Finished (Exit Code: $CLIENT_EXIT_CODE) ---"
+          # Check if the client script itself failed
           if [[ $CLIENT_EXIT_CODE -ne 0 ]]; then
             echo "Error: MCP Client script failed! See output above."
             echo "--- Server Log Snippet (Last 50 lines) ---"
@@ -236,13 +243,17 @@ jobs:
           fi
 
           # --- Extract Session ID from Client Output ---
+          # Look for the specific marker logged by the client script
           SESSION_ID=$(grep 'FINAL_SESSION_ID_MARKER:' $CLIENT_OUTPUT_FILE | cut -d':' -f2)
+          # Fallback to parsing the initial start message if marker not found
           if [[ -z "$SESSION_ID" ]]; then
               SESSION_ID=$(grep '✅ Started session: ' $CLIENT_OUTPUT_FILE | sed 's/✅ Started session: //')
           fi
 
+          # Error if session ID couldn't be determined
           if [[ -z "$SESSION_ID" ]]; then
               echo "Error: Could not extract session ID from client output log."
+              echo "--- Client Log (client_output.log) ---"
               cat $CLIENT_OUTPUT_FILE
               echo "--- Server Log Snippet (Last 50 lines) ---"
               tail -n 50 deebo_server.log || echo "Server log not found or empty."
@@ -250,24 +261,27 @@ jobs:
           fi
           echo "Extracted Session ID for verification: $SESSION_ID"
 
-          # --- Verify Memory Bank ---
+          # --- Verify Memory Bank Creation (Core Assertion) ---
           echo "--- Checking Memory Bank ---"
-          # Calculate project ID using Node.js for consistency
+          # Calculate project ID using Node.js and the Deebo utility for consistency
+          # Ensure the require path is correct relative to the CWD (repo root)
           PROJECT_ID_CMD="console.log(require('./build/util/sanitize.js').getProjectId(process.argv[1]))"
-          # Use node -e for inline execution; pass path as argument
           PROJECT_ID=$(node -e "$PROJECT_ID_CMD" -- "$REPO_FIXTURE_PATH_ABS")
 
+          # Error if project ID calculation failed
           if [[ -z "$PROJECT_ID" ]]; then echo "Error: Could not calculate project ID using Node.js"; exit 1; fi
           echo "Calculated Project ID: $PROJECT_ID"
 
+          # Define expected paths
           SESSIONS_DIR="memory-bank/$PROJECT_ID/sessions"
           SESSION_PATH="$SESSIONS_DIR/$SESSION_ID"
+          LOG_FILE="$SESSION_PATH/logs/mother.log"
 
           # Check session directory existence
           if [[ ! -d "$SESSION_PATH" ]]; then
               echo "Error: Specific session directory '$SESSION_PATH' not found!"
               echo "Listing memory-bank contents:"
-              ls -lR memory-bank || echo "memory-bank dir missing or empty"
+              ls -lR memory-bank || echo "memory-bank dir does not exist."
               echo "--- Server Log Snippet (Last 50 lines) ---"
               tail -n 50 deebo_server.log || echo "Server log not found or empty."
               exit 1
@@ -275,20 +289,19 @@ jobs:
           echo "Session directory '$SESSION_PATH' found: OK"
 
           # Check mother.log existence
-          LOG_FILE="$SESSION_PATH/logs/mother.log"
           if [[ ! -f "$LOG_FILE" ]]; then
               echo "Error: Log file '$LOG_FILE' not found!"
               echo "Listing session path contents:"
-              ls -lR "$SESSION_PATH"
+              ls -lR "$SESSION_PATH" || echo "Session path does not exist."
               echo "--- Server Log Snippet (Last 50 lines) ---"
               tail -n 50 deebo_server.log || echo "Server log not found or empty."
               exit 1
           fi
           echo "Log file '$LOG_FILE' found: OK"
 
-          # Check line count
+          # Check mother.log line count (basic sanity check)
           LINE_COUNT=$(wc -l < "$LOG_FILE")
-          MIN_LINES=5 # Minimal check
+          MIN_LINES=5 # Minimum expected lines for a basic run
           if [[ $LINE_COUNT -lt $MIN_LINES ]]; then
               echo "Error: Log file '$LOG_FILE' has only $LINE_COUNT lines (expected >= $MIN_LINES)."
               echo "--- mother.log Content ---"
@@ -300,17 +313,17 @@ jobs:
           echo "Log file '$LOG_FILE' has $LINE_COUNT lines (>= $MIN_LINES): OK"
 
           echo "--- Basic CI Assertion Passed (Client Succeeded + Memory Bank Log Created) ---"
-          # Cleanup is handled by the trap
+          # Successful exit, cleanup is handled by the trap
 
-      # Upload logs and client output as artifacts
+      # Upload logs and client output as artifacts regardless of success/failure
       - name: Upload Artifacts
-        if: always() # Run even if previous steps fail
+        if: always() # Ensure artifacts are uploaded even if previous steps fail
         uses: actions/upload-artifact@v4
         with:
-          name: ci-logs-${{ matrix.os }}
+          name: ci-logs-${{ matrix.os }} # Include OS in artifact name
           path: |
-            memory-bank/ # Upload the whole memory bank if it exists
-            client_output.log # Upload the client script's output
-            deebo_server.log # Upload the server's log
-            key_status.json # Upload API key check response
-          retention-days: 7
+            memory-bank/ # Upload the whole memory bank directory if it exists
+            client_output.log # Upload the client script's output log
+            deebo_server.log # Upload the Deebo server's log
+            key_status.json # Upload the API key check response JSON
+          retention-days: 7 # Keep artifacts for 7 days
