@@ -1,4 +1,4 @@
-name: Deebo Basic CI (Direct Tool Call)
+name: Deebo Basic CI 
 
 on:
   push:
