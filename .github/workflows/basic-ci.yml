@@ -108,14 +108,12 @@ jobs:
           CLIENT_BUILD_PATH_ABS=$(pwd)/ci/mcp-client/build/index.js
           REPO_FIXTURE_PATH_ABS=$(pwd)/task-manager-fixture
           rm -rf memory-bank
-          echo "--- Starting Deebo server ---"
-          node --experimental-specifier-resolution=node --experimental-modules "$DEEBO_BUILD_PATH_ABS" &
-          SERVER_PID=$!
-          trap 'echo "--- Cleaning up ---"; kill $SERVER_PID || echo "Server stopped"; rm -rf task-manager-fixture memory-bank' EXIT
-          echo "--- Waiting for server boot (20s) ---"
-          sleep 20
           echo "--- Running MCP client script ---"
           CLIENT_OUTPUT_FILE="client_output.log"
+          DEBUG_LOG="debug_output.log"
+          echo "Running client with debug output..."
+          node "$CLIENT_BUILD_PATH_ABS" "$DEEBO_BUILD_PATH_ABS" "$REPO_FIXTURE_PATH_ABS" 2>&1 | tee $DEBUG_LOG
+          cat $DEBUG_LOG
           node "$CLIENT_BUILD_PATH_ABS" "$DEEBO_BUILD_PATH_ABS" "$REPO_FIXTURE_PATH_ABS" | tee $CLIENT_OUTPUT_FILE
           CLIENT_EXIT_CODE=${PIPESTATUS[0]}
           if [[ $CLIENT_EXIT_CODE -ne 0 ]]; then

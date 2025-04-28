@@ -32,7 +32,22 @@ export async function connectMcpTool(name, toolName, sessionId, repoPath) {
         .replace(/{memoryRoot}/g, memoryRoot));
     // No shell: spawn the .cmd/binary directly on all platforms
     const options = {};
-    const transport = new StdioClientTransport({ command, args, ...options });
+    const transport = new StdioClientTransport({
+        command,
+        args,
+        ...options,
+        env: {
+            ...process.env, // Inherit all environment variables
+            // Explicitly set critical variables
+            NODE_ENV: process.env.NODE_ENV,
+            USE_MEMORY_BANK: process.env.USE_MEMORY_BANK,
+            MOTHER_HOST: process.env.MOTHER_HOST,
+            MOTHER_MODEL: process.env.MOTHER_MODEL,
+            SCENARIO_HOST: process.env.SCENARIO_HOST,
+            SCENARIO_MODEL: process.env.SCENARIO_MODEL,
+            OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY
+        }
+    });
     const client = new Client({ name, version: '1.0.0' }, { capabilities: { tools: true } });
     await client.connect(transport);
     return client;
