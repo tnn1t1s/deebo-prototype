@@ -2937,3 +2937,392 @@ Let me also search specifically for configuration-related files:
 Please provide any existing configuration files or tool resolution code that would be relevant to implementing this approach. I can then refine my hypothesis or generate a new one based on the actual codebase structure.
 
 ==================
+
+==================
+AUTOMATED HYPOTHESIS RECORD
+Timestamp: 2025-04-26T17:36:47.968Z
+Error: Scenario status not showing as Terminated after cancellation
+
+I'll start investigating this issue. Let me first check the current state of the code and then form initial hypotheses.
+
+<use_mcp_tool>
+  <server_name>git-mcp</server_name>
+  <tool_name>git_status</tool_name>
+  <arguments>
+    {
+      "repo_path": "/Users/sriram/Documents/Cline/MCP/deebo-prototype"
+    }
+  </arguments>
+</use_mcp_tool>
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>read_file</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/Cline/MCP/deebo-prototype/src/index.ts"
+    }
+  </arguments>
+</use_mcp_tool>
+
+Based on the initial context, I can already form two hypotheses:
+
+<hypothesis>The PID tracking for cancellation is happening in a different way than normal termination, causing a mismatch in the terminatedPids set. The regex pattern looking for "Spawned" or "Removed" might not catch cancellation events.</hypothesis>
+
+<hypothesis>There might be a race condition where we check the status before the PID is actually added to the terminatedPids set during cancellation.</hypothesis>
+
+Let me check how cancellation is logged by looking at the memory bank:
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>read_file</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/Cline/MCP/deebo-prototype/memory-bank/7d4cacd8ed6f/activeContext.md"
+    }
+  </arguments>
+</use_mcp_tool>
+
+Let me also search through the codebase for any cancellation-related logs:
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>search_code</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/Cline/MCP/deebo-prototype/src",
+      "pattern": "cancel|terminate",
+      "filePattern": "*.ts",
+      "contextLines": 5,
+      "ignoreCase": true
+    }
+  </arguments>
+</use_mcp_tool>
+
+This gives me enough to form a third hypothesis:
+
+<hypothesis>The cancellation logging might be using different terminology than "Spawned" or "Removed" (e.g., "Cancelled" or "Terminated"), causing the regex pattern to miss these events. We need to expand the regex to catch all termination-related events.</hypothesis>
+
+I'd like to verify the actual log format during cancellation. Could you provide a sample log output when a scenario is cancelled? This will help me confirm which of these hypotheses is correct.
+
+In the meantime, I'm going to check how the PID tracking is implemented in more detail:
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>search_code</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/Cline/MCP/deebo-prototype/src",
+      "pattern": "terminatedPids",
+      "filePattern": "*.ts",
+      "contextLines": 5,
+      "ignoreCase": false
+    }
+  </arguments>
+</use_mcp_tool>
+
+Please provide a sample log output from when a scenario is cancelled so I can verify which hypothesis is most likely correct and propose a solution.
+
+==================
+
+==================
+AUTOMATED HYPOTHESIS RECORD
+Timestamp: 2025-04-26T18:06:51.446Z
+Error: TypeError: Cannot read property 'data' of undefined when processing API response
+
+I'll start investigating this API response error right away. Let me check the current context and generate initial hypotheses.
+
+First, let me look at the active context file:
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>read_file</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/Cline/MCP/deebo-prototype/memory-bank/7d4cacd8ed6f/activeContext.md"
+    }
+  </arguments>
+</use_mcp_tool>
+
+Let me also check the specific file where the error occurs:
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>read_file</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/Cline/MCP/deebo-prototype/src/util/api-client.ts"
+  }
+  </arguments>
+</use_mcp_tool>
+
+Based on the error message and initial context, I'll generate my first hypotheses:
+
+<hypothesis>H1: API request is failing silently and returning undefined instead of a proper response object
+- Possible causes:
+  - Missing error handling in try/catch block
+  - Network timeout not being caught
+  - API endpoint returning 204 No Content without proper handling</hypothesis>
+
+<hypothesis>H2: Race condition in async/await chain
+- The response processing may be happening before the API call completes
+- Promise chain could be broken or missing await keywords</hypothesis>
+
+Let me search the code for related API handling patterns:
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>search_code</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/Cline/MCP/deebo-prototype/src/util",
+      "pattern": "response.data",
+      "filePattern": "*.ts",
+      "contextLines": 5,
+      "ignoreCase": true
+    }
+  </arguments>
+</use_mcp_tool>
+
+Could you please provide:
+1. Is this error happening consistently or intermittently?
+2. Are there specific API endpoints where this occurs more frequently?
+3. Any patterns in timing or load conditions when the error happens?
+
+This will help me refine these hypotheses and determine which to investigate first.
+
+==================
+
+==================
+AUTOMATED HYPOTHESIS RECORD
+Timestamp: 2025-04-26T18:09:02.382Z
+Error: Bug: Scenario status reporting incorrect after cancellation
+
+I'll start investigating this bug by checking the current state and forming initial hypotheses.
+
+First, let me check the memory bank context to see what we already know:
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>read_file</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/Cline/MCP/deebo-prototype/memory-bank/7d4cacd8ed6f/activeContext.md"
+    }
+  </arguments>
+</use_mcp_tool>
+
+Let me check the relevant code in src/index.ts:
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>read_file</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/Cline/MCP/deebo-prototype/src/index.ts"
+    }
+  </arguments>
+</use_mcp_tool>
+
+Based on the initial context, I can form some hypotheses:
+
+<hypothesis>Race Condition Hypothesis: There may be a race condition between the cancel operation and status check. The terminatedPids array is updated asynchronously, but the check tool might be querying the status before this update is complete.</hypothesis>
+
+<hypothesis>State Sync Hypothesis: The terminatedPids array and the scenario status tracking might be maintained in separate places that aren't properly synchronized. When a scenario is cancelled, only one of these gets updated.</hypothesis>
+
+To investigate further, I'll check if there are any relevant status tracking or cancellation-related functions:
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>search_code</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/Cline/MCP/deebo-prototype/src",
+      "pattern": "(checkStatus|terminatePid|cancel|getStatus)",
+      "filePattern": "*.ts",
+      "contextLines": 5
+    }
+  </arguments>
+</use_mcp_tool>
+
+Would you please let me know if you see the search results? This will help me refine my hypotheses and dig deeper into the specific implementation details.
+
+==================
+
+==================
+AUTOMATED HYPOTHESIS RECORD
+Timestamp: 2025-04-26T18:15:06.229Z
+Error: Testing scenario status reporting after fix
+
+I'll start investigating this issue with scenario status reporting. Let me first check the context and recent changes.
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>read_file</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/Cline/MCP/deebo-prototype/memory-bank/7d4cacd8ed6f/activeContext.md"
+    }
+  </arguments>
+</use_mcp_tool>
+
+<use_mcp_tool>
+  <server_name>git-mcp</server_name>
+  <tool_name>git_diff</tool_name>
+  <arguments>
+    {
+      "repo_path": "/Users/sriram/Documents/Cline/MCP/deebo-prototype",
+      "target": "HEAD~1"
+    }
+  </arguments>
+</use_mcp_tool>
+
+Let me check the relevant code handling scenario status:
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>search_code</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/Cline/MCP/deebo-prototype/src",
+      "pattern": "scenario.*status",
+      "filePattern": "*.ts",
+      "contextLines": 5,
+      "ignoreCase": true
+    }
+  </arguments>
+</use_mcp_tool>
+
+Based on the initial information, I'll generate my first hypothesis:
+
+<hypothesis>
+The PID mapping implementation may not be properly updating the scenario status when processes terminate. This could be because:
+1. The process termination event isn't being properly detected/handled
+2. The PID-to-scenario mapping might be getting cleared too early
+3. There might be a race condition between status updates and process termination events
+</hypothesis>
+
+Let me check the specific implementation of the PID mapping:
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>search_code</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/Cline/MCP/deebo-prototype/src",
+      "pattern": "pidMap|processMap",
+      "filePattern": "*.ts",
+      "contextLines": 5,
+      "ignoreCase": true
+    }
+  </arguments>
+</use_mcp_tool>
+
+Let me also check any recent terminal sessions to see if there are running processes that might give us clues:
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>list_sessions</tool_name>
+  <arguments>
+    {}
+  </arguments>
+</use_mcp_tool>
+
+Based on what I'm seeing, I'll generate a second hypothesis:
+
+<hypothesis>
+There might be an issue with asynchronous process status updates. When a process terminates, the status update might be happening before the termination handler completes its cleanup, causing scenarios to show incorrect status. This could be particularly visible if:
+1. The process.on('exit') handler runs after the status has already been checked
+2. The status check is not waiting for process termination confirmation
+</hypothesis>
+
+To verify this, I'd like to look at the process handling code more specifically:
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>search_code</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/Cline/MCP/deebo-prototype/src",
+      "pattern": "process\\.on\\('exit'\\)|process\\.on\\('close'\\)",
+      "filePattern": "*.ts",
+      "contextLines": 10,
+      "ignoreCase": true
+    }
+  </arguments>
+</use_mcp_tool>
+
+Would you be able to provide:
+1. An example of the incorrect status being reported?
+2. Is this happening for all scenarios or just some specific ones?
+3. Are you seeing any error messages in the logs when this occurs?
+
+This will help me narrow down which of these hypotheses is most likely correct and form a more targeted solution approach.
+
+==================
+
+==================
+AUTOMATED HYPOTHESIS RECORD
+Timestamp: 2025-04-26T18:55:55.832Z
+Error: Memory leak detected: heap usage growing steadily
+
+I'll start investigating this memory leak issue. Let me check what we know and form initial hypotheses.
+
+First, let me check the memory bank for any previous debugging context:
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>read_file</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/Cline/MCP/deebo-prototype/memory-bank/7d4cacd8ed6f/activeContext.md"
+    }
+  </arguments>
+</use_mcp_tool>
+
+From the error message and code snippet, I can already form some initial hypotheses:
+
+<hypothesis>The memory leak is caused by unbounded array growth in the sessions object, where old session data is never cleaned up or removed</hypothesis>
+
+This hypothesis is based on:
+1. The sessions object stores arrays that only grow (push operations)
+2. There's no visible cleanup mechanism
+3. Each sessionId creates a new array that persists in memory
+
+Let me check the full implementation to see if there's any cleanup code:
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>read_file</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/Cline/MCP/deebo-prototype/src/util/membank.ts"
+    }
+  </arguments>
+</use_mcp_tool>
+
+<hypothesis>The memoryBank constant at module scope may be accumulating references that prevent garbage collection of old sessions</hypothesis>
+
+To validate these hypotheses, I need to:
+1. Check if there's any session cleanup code
+2. Look for where/how sessions are terminated
+3. Examine the relationship between memoryBank and MemoryBankManager
+
+Let me search for any session-related cleanup code:
+
+<use_mcp_tool>
+  <server_name>desktop-commander</server_name>
+  <tool_name>search_code</tool_name>
+  <arguments>
+    {
+      "path": "/Users/sriram/Documents/Cline/MCP/deebo-prototype/src",
+      "pattern": "session|cleanup|clear|dispose",
+      "filePattern": "*.ts",
+      "contextLines": 5
+    }
+  </arguments>
+</use_mcp_tool>
+
+Would you like me to continue investigating these hypotheses to find a solution for the memory leak?
+
+==================

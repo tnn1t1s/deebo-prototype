@@ -38,6 +38,19 @@ export async function connectMcpTool(name: string, toolName: string, sessionId: 
       .replace(/{memoryRoot}/g, memoryRoot)
   );
 
+  // Handle environment variable substitutions
+  if (def.env) {
+    for (const [key, value] of Object.entries(def.env)) {
+      if (typeof value === 'string') {
+        def.env[key] = value
+          .replace(/{ripgrepPath}/g, process.env.RIPGREP_PATH!)
+          .replace(/{repoPath}/g, repoPath)
+          .replace(/{memoryPath}/g, memoryPath)
+          .replace(/{memoryRoot}/g, memoryRoot);
+      }
+    }
+  }
+
   // No shell: spawn the .cmd/binary directly on all platforms
   const options = {};
 

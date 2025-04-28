@@ -34,13 +34,15 @@ jobs:
           node-version: '18'
           cache: 'npm'
 
-      - name: Install uv (macOS)
+      - name: Install dependencies (macOS)
         run: |
+          brew install ripgrep
           curl -LsSf https://astral.sh/uv/install.sh | sh
 
-      - name: Add uv to PATH (macOS)
+      - name: Add tools to PATH (macOS)
         run: |
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          echo "RIPGREP_PATH=$(which rg)" >> $GITHUB_ENV
 
       - name: Determine tool paths
         id: tool_paths
