@@ -1,4 +1,4 @@
-name: Deebo Basic CI (Direct Tool Call with Comprehensive Logging)
+name: Deebo Basic CI (macOS Only, Comprehensive Logging)
 
 on:
   push:
@@ -10,17 +10,14 @@ on:
 
 jobs:
   basic-test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-latest
     timeout-minutes: 25
 
     steps:
       - name: Checkout Deebo code
         uses: actions/checkout@v4
-        with: { fetch-depth: 1 }
+        with:
+          fetch-depth: 1
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -32,33 +29,20 @@ jobs:
         shell: bash
         run: |
           echo "--- Initial Environment Info ---"
-          echo "Runner OS: ${{ runner.os }}"
+          echo "Runner OS: $RUNNER_OS"
           echo "Node Version: $(node -v)"
           echo "NPM Version: $(npm -v)"
           echo "Initial PATH: $PATH"
           echo "--------------------------------"
 
-      - name: Install uv (Linux/macOS)
-        if: runner.os == 'Linux' || runner.os == 'macOS'
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
-      - name: Add uv to PATH (Linux/macOS)
-        if: runner.os == 'Linux' || runner.os == 'macOS'
-        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
-
-      - name: Install uv (Windows)
-        if: runner.os == 'Windows'
-        run: pip install uv
-      - name: Get Python location (Windows)
-        if: runner.os == 'Windows'
-        id: python_location
-        shell: pwsh
+      - name: Install uv (macOS)
         run: |
-          try { $pythonPath = (Get-Command python).Source } catch { Write-Error "Python not found"; exit 1 }
-          $pythonDir = Split-Path $pythonPath -Parent
-          echo "python_dir=$pythonDir" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-      - name: Add Python Scripts to PATH (Windows, reliable)
-        if: runner.os == 'Windows'
-        run: echo "${{ steps.python_location.outputs.python_dir }}\Scripts" >> $GITHUB_PATH
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+        shell: bash
+
+      - name: Add uv to PATH (macOS)
+        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
+        shell: bash
 
       - name: Verify uv Installation and Log Path
         shell: bash
@@ -76,100 +60,65 @@ jobs:
         run: |
           echo "--- Determining Tool Paths ---"
           find_command() {
-            local cmd=$1
-            local where_cmd=$([[ "${{ runner.os }}" == "Windows" ]] && echo "where" || echo "which")
-            echo "Searching for '$cmd' using '$where_cmd'..."
-            local found_path=$($where_cmd $cmd 2>/dev/null | head -n 1)
-            if [[ -z "$found_path" ]]; then
-              echo "ERROR: Command '$cmd' not found using '$where_cmd'!"
-              echo "Current PATH: $PATH"
-              return 1
+            cmd=$1
+            where_cmd="which"
+            echo "Searching for '$cmd'..."
+            path=$($where_cmd $cmd 2>/dev/null | head -n 1)
+            if [[ -z "$path" ]]; then
+              echo "ERROR: '$cmd' not found!"
+              echo "PATH: $PATH"
+              exit 1
             fi
-            echo "Found '$cmd' at: $found_path"
-            echo "$found_path"
-            return 0
+            echo "Found '$cmd' at: $path"
+            echo "$path"
           }
-          NPX_PATH=$(find_command npx) || exit 1
-          UVX_PATH=$(find_command uvx) || exit 1
+          NPX_PATH=$(find_command npx)
+          UVX_PATH=$(find_command uvx)
           NPM_BIN=$(dirname "$NPX_PATH")
-
-          NPX_DIR=$(dirname "$NPX_PATH")
-          UVX_DIR=$(dirname "$UVX_PATH")
-
-          echo "Determined NPX Path: $NPX_PATH"
-          echo "Determined UVX Path: $UVX_PATH"
-          echo "Determined NPM Bin: $NPM_BIN"
-          echo "Determined NPX Dir: $NPX_DIR"
-          echo "Determined UVX Dir: $UVX_DIR"
-
-          NPX_PATH_ESC=$(echo "$NPX_PATH" | sed 's/\\/\\\\/g')
-          UVX_PATH_ESC=$(echo "$UVX_PATH" | sed 's/\\/\\\\/g')
-          NPM_BIN_ESC=$(echo "$NPM_BIN" | sed 's/\\/\\\\/g')
-          NPX_DIR_ESC=$(echo "$NPX_DIR" | sed 's/\\/\\\\/g')
-          UVX_DIR_ESC=$(echo "$UVX_DIR" | sed 's/\\/\\\\/g')
-
           echo "Exporting to GITHUB_ENV..."
-          echo "DEEBO_NPX_PATH=${NPX_PATH_ESC}" >> $GITHUB_ENV
-          echo "DEEBO_UVX_PATH=${UVX_PATH_ESC}" >> $GITHUB_ENV
-          echo "DEEBO_NPM_BIN=${NPM_BIN_ESC}" >> $GITHUB_ENV
-          echo "DEEBO_NPX_DIR=${NPX_DIR_ESC}" >> $GITHUB_ENV
-          echo "DEEBO_UVX_DIR=${UVX_DIR_ESC}" >> $GITHUB_ENV
+          echo "DEEBO_NPX_PATH=$NPX_PATH" >> $GITHUB_ENV
+          echo "DEEBO_UVX_PATH=$UVX_PATH" >> $GITHUB_ENV
+          echo "DEEBO_NPM_BIN=$NPM_BIN" >> $GITHUB_ENV
           echo "----------------------------"
-
-      - name: Set up MSVC (Windows Only)
-        if: runner.os == 'Windows'
-        uses: microsoft/setup-msbuild@v2
 
       - name: Install Deebo Dependencies
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
           echo "--- Installing Deebo Dependencies ---"
-          echo "Current Directory: $(pwd)"
-          echo "Node Version: $(node -v)"
-          echo "NPM Version: $(npm -v)"
           npm install --loglevel info
-          echo "NPM Install completed."
-          echo "Listing node_modules directory (first level):"
-          ls -l node_modules | head -n 10 || echo "node_modules not found or empty."
+          echo "Listing node_modules (first 10 entries):"
+          ls -1 node_modules | head -n 10
           echo "-----------------------------------"
 
       - name: Build Deebo
+        shell: bash
         run: |
-           echo "--- Building Deebo ---"
-           echo "Current Directory: $(pwd)"
-           echo "Running npm run build..."
-           npm run build
-           echo "Build completed."
-           echo "Checking build output directory:"
-           ls -l build/ || echo "'build' directory not found."
-           echo "----------------------"
+          echo "--- Building Deebo ---"
+          npm run build
+          echo "Build output:"
+          ls -l build/
 
       - name: Build Minimal MCP Client
         working-directory: ./ci/mcp-client
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
-          echo "--- Building Minimal MCP Client ---"
-          echo "Current Directory: $(pwd)"
-          echo "Running npm install..."
+          echo "--- Building MCP Client ---"
           npm install --loglevel info
-          echo "Client NPM Install completed."
-          echo "Running npm run build..."
           npm run build
-          echo "Client build completed."
-          echo "Checking client build output directory:"
-          ls -l build/ || echo "'build' directory not found."
-          echo "---------------------------------"
+          echo "Client build output:"
+          ls -l build/
 
       - name: Clone Task Manager Fixture Repo
+        shell: bash
         run: |
           echo "--- Cloning Fixture Repo ---"
           rm -rf task-manager-fixture
           git clone https://github.com/snagasuri/task-manager.git task-manager-fixture
-          echo "Cloned fixture repo into $(pwd)/task-manager-fixture"
-          ls -l task-manager-fixture || echo "Fixture directory not found."
-          echo "--------------------------"
+          ls -l task-manager-fixture
 
       - name: Check OpenRouter API Key Status
         env:
@@ -181,16 +130,13 @@ jobs:
              -H "Authorization: Bearer $OPENROUTER_API_KEY" \
              -o key_status.json && \
              jq -e '.data.label' key_status.json > /dev/null; then
-            echo "OpenRouter API Key status check passed."
-            echo "Response:"
-            cat key_status.json || echo "key_status.json not found"
+            echo "API key check passed."
+            cat key_status.json
           else
-            echo "Error: OpenRouter API key check failed based on response structure or API error."
-            echo "Response JSON:"
-            cat key_status.json || echo "No response file generated."
+            echo "API key check failed."
+            cat key_status.json
             exit 1
           fi
-          echo "----------------------------------------"
 
       - name: Debug Deebo Server startup
         shell: bash
@@ -208,16 +154,15 @@ jobs:
           set -x
           echo "=== PATH and tool locations ==="
           echo "PATH=$PATH"
-          which node
-          node -v
-          which npx
-          which uvx
-          echo "=== Running Deebo server in foreground to capture any startup error ==="
+          which node; node -v
+          which npx; npx -v
+          which uvx; uvx --version
+          echo "=== Running Deebo server in foreground ==="
           node --trace-uncaught --experimental-specifier-resolution=node \
             --experimental-modules --max-old-space-size=4096 build/index.js \
             2>&1 | tee deebo_server.log
-          echo "=== Exit code: $? ==="
-          echo "=== Server log ==="
+          echo "Exit code: $?"
+          echo "Server log contents:"
           cat deebo_server.log
           exit 1
 
@@ -225,11 +170,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-logs-${{ matrix.os }}
+          name: ci-logs-macos
           path: |
             memory-bank/
-            client_output.log
             deebo_server.log
             key_status.json
           retention-days: 7
-          if-no-files-found: warn
