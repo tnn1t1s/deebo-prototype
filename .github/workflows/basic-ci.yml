@@ -1,20 +1,18 @@
-name: Deebo Basic CI (macOS Only, Comprehensive Logging)
+name: Deebo CI (macOS Only)
 
 on:
   push:
-    branches:
-      - master
+    branches: [master]
   pull_request:
-    branches:
-      - master
+    branches: [master]
 
 jobs:
   basic-test:
     runs-on: macos-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
 
     steps:
-      - name: Checkout Deebo code
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
@@ -25,148 +23,44 @@ jobs:
           node-version: '18'
           cache: 'npm'
 
-      - name: Log Initial Environment Info
+      - name: Install uv and uvx
         shell: bash
-        run: |
-          echo "--- Initial Environment Info ---"
-          echo "Runner OS: $RUNNER_OS"
-          echo "Node Version: $(node -v)"
-          echo "NPM Version: $(npm -v)"
-          echo "Initial PATH: $PATH"
-          echo "--------------------------------"
-
-      - name: Install uv (macOS)
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
-        shell: bash
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Add uv to PATH (macOS)
-        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
-        shell: bash
-
-      - name: Verify uv Installation and Log Path
+      - name: Install dependencies
         shell: bash
         run: |
-          echo "--- Verifying uv Installation ---"
-          echo "Attempting to run uvx --version..."
-          uvx --version || (echo "ERROR: uvx command failed!" && exit 1)
-          echo "uvx found successfully."
-          echo "Current PATH after uv setup: $PATH"
-          echo "---------------------------------"
+          npm install
+          cd ci/mcp-client
+          npm install
 
-      - name: Determine Tool Paths
-        id: tool_paths
+      - name: Build Deebo and MCP client
         shell: bash
         run: |
-          echo "--- Determining Tool Paths ---"
-          find_command() {
-            cmd=$1
-            where_cmd="which"
-            echo "Searching for '$cmd'..."
-            path=$($where_cmd $cmd 2>/dev/null | head -n 1)
-            if [[ -z "$path" ]]; then
-              echo "ERROR: '$cmd' not found!"
-              echo "PATH: $PATH"
-              exit 1
-            fi
-            echo "Found '$cmd' at: $path"
-            echo "$path"
-          }
-          NPX_PATH=$(find_command npx)
-          UVX_PATH=$(find_command uvx)
-          NPM_BIN=$(dirname "$NPX_PATH")
-          echo "Exporting to GITHUB_ENV..."
-          echo "DEEBO_NPX_PATH=$NPX_PATH" >> $GITHUB_ENV
-          echo "DEEBO_UVX_PATH=$UVX_PATH" >> $GITHUB_ENV
-          echo "DEEBO_NPM_BIN=$NPM_BIN" >> $GITHUB_ENV
-          echo "----------------------------"
-
-      - name: Install Deebo Dependencies
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          echo "--- Installing Deebo Dependencies ---"
-          npm install --loglevel info
-          echo "Listing node_modules (first 10 entries):"
-          ls -1 node_modules | head -n 10
-          echo "-----------------------------------"
-
-      - name: Build Deebo
-        shell: bash
-        run: |
-          echo "--- Building Deebo ---"
           npm run build
-          echo "Build output:"
-          ls -l build/
-
-      - name: Build Minimal MCP Client
-        working-directory: ./ci/mcp-client
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          echo "--- Building MCP Client ---"
-          npm install --loglevel info
+          cd ci/mcp-client
           npm run build
-          echo "Client build output:"
-          ls -l build/
 
-      - name: Clone Task Manager Fixture Repo
+      - name: Clone fixture repo
         shell: bash
         run: |
-          echo "--- Cloning Fixture Repo ---"
           rm -rf task-manager-fixture
           git clone https://github.com/snagasuri/task-manager.git task-manager-fixture
-          ls -l task-manager-fixture
 
-      - name: Check OpenRouter API Key Status
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        shell: bash
-        run: |
-          echo "--- Checking OpenRouter API Key Status ---"
-          if curl -fsS -G "https://openrouter.ai/api/v1/auth/key" \
-             -H "Authorization: Bearer $OPENROUTER_API_KEY" \
-             -o key_status.json && \
-             jq -e '.data.label' key_status.json > /dev/null; then
-            echo "API key check passed."
-            cat key_status.json
-          else
-            echo "API key check failed."
-            cat key_status.json
-            exit 1
-          fi
-
-      - name: Debug Deebo Server startup
+      - name: Run CI client
         shell: bash
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          CI_LLM_MODEL: "deepseek/deepseek-chat"
-          MOTHER_HOST: "openrouter"
-          MOTHER_MODEL: "deepseek/deepseek-chat"
-          SCENARIO_HOST: "openrouter"
-          SCENARIO_MODEL: "deepseek/deepseek-chat"
-          USE_MEMORY_BANK: "true"
-          NODE_ENV: "development"
+          CI_LLM_MODEL: deepseek/deepseek-chat
         run: |
-          set -o pipefail
-          set -x
-          echo "=== PATH and tool locations ==="
-          echo "PATH=$PATH"
-          which node; node -v
-          which npx; npx -v
-          which uvx; uvx --version
-          echo "=== Running Deebo server in foreground ==="
-          node --trace-uncaught --experimental-specifier-resolution=node \
-            --experimental-modules --max-old-space-size=4096 build/index.js \
-            2>&1 | tee deebo_server.log
-          echo "Exit code: $?"
-          echo "Server log contents:"
-          cat deebo_server.log
-          exit 1
+          # arguments: <path to deebo build> <path to fixture>
+          node ci/mcp-client/build/index.js \
+            build/index.js \
+            $(pwd)/task-manager-fixture
 
-      - name: Upload Artifacts
+      - name: Upload logs and memory-bank
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -174,5 +68,4 @@ jobs:
           path: |
             memory-bank/
             deebo_server.log
-            key_status.json
-          retention-days: 7
+            client_output.log

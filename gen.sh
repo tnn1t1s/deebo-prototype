@@ -17,16 +17,17 @@ add_file_content() {
 echo "Generating core-files.txt in mode: $MODE"
 
 # Core source files
+add_file_content "src/index.ts"
+add_file_content "src/util/mcp.ts"
+add_file_content "config/tools.json"
 add_file_content "src/util/sanitize.ts"
 add_file_content "src/util/reports.ts"
 add_file_content "src/util/branch-manager.ts"
 add_file_content "src/util/agent-utils.ts"
-add_file_content "src/util/mcp.ts"
 add_file_content "src/util/logger.ts"
 add_file_content "src/util/membank.ts"
 add_file_content "src/util/observations.ts"
 add_file_content "src/mother-agent.ts"
-add_file_content "src/index.ts"
 add_file_content "src/scenario-agent.ts"
 
 # Only include packages if full mode is requested (just for deebo devs to look at installer stuff)
@@ -45,7 +46,6 @@ if [ "$MODE" = "full" ]; then
 fi
 
 # Config files
-add_file_content "config/tools.json"
 add_file_content "package.json"
 add_file_content "tsconfig.json"
 add_file_content "README.md"

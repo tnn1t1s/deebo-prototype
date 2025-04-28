@@ -1,4 +1,750 @@
 
+=== src/index.ts ===
+
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+import { readFile, mkdir, readdir, access, writeFile } from 'fs/promises';
+import { config } from 'dotenv';
+import { dirname, join } from 'path';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
+import { runMotherAgent } from './mother-agent.js';
+import { getProjectId } from './util/sanitize.js';
+import { writeObservation } from './util/observations.js';
+import { exec, spawn, ChildProcess } from 'child_process';
+import { promisify } from 'util';
+import { homedir } from "node:os";
+
+const execPromise = promisify(exec);
+
+function winRoamingBin(): string {
+  // VS Code spawns MCP servers with a clean env (no APPDATA)
+  const base = process.env.APPDATA ?? path.join(homedir(), "AppData", "Roaming");
+  return path.join(base, "npm");
+}
+
+// Function to find tool paths during initialization
+async function findToolPaths() {
+  const isWindows = process.platform === 'win32';
+  
+  let npxPath, uvxPath;
+
+  if (isWindows) {
+    try {
+      const npxPaths = (await execPromise('cmd.exe /c where npx.cmd')).stdout.trim().split('\n');
+      // Favor Program Files to get direct executable
+      const foundNpxPath = npxPaths.find(p => p.includes('Program Files'));
+      if (!foundNpxPath) {
+        throw new Error('Could not find npx.cmd in Program Files');
+      }
+      npxPath = path.normalize(foundNpxPath).trim();
+
+      uvxPath = path.normalize((await execPromise('cmd.exe /c where uvx.exe')).stdout.trim().split('\n')[0]).trim();
+    } catch (err) {
+      throw new Error(`Failed to find tool paths: ${err}`);
+    }
+  }else {
+    npxPath = (await execPromise('which npx')).stdout.trim();
+    uvxPath = (await execPromise('which uvx')).stdout.trim();
+  }
+
+  // Store normalized paths
+  process.env.DEEBO_NPX_PATH = npxPath;
+  process.env.DEEBO_UVX_PATH = uvxPath;
+
+  // Get npm bin directory for Windows desktop-commander.cmd
+  const npmBin = isWindows
+    ? winRoamingBin()                                  // Use homedir() when VS Code strips env
+    : path.dirname(npxPath);                           // same folder as npx on *nix
+
+  process.env.DEEBO_NPM_BIN = npmBin;                 // <-- expose for later
+  
+  return { npxPath, uvxPath, npmBin };
+}
+
+// Helper to find session directory
+async function findSessionDir(sessionId: string): Promise<string | null> {
+  const memoryBank = join(DEEBO_ROOT, 'memory-bank');
+  const projects = await readdir(memoryBank);
+  
+  for (const project of projects) {
+    const sessionPath = join(memoryBank, project, 'sessions', sessionId);
+    try {
+      await access(sessionPath);
+      return sessionPath;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+// Registry to track active sessions and their associated processes/controllers
+const processRegistry = new Map<string, {
+  motherController: AbortController;
+  scenarioPids: Set<number>; // Store PIDs of spawned scenario agents
+}>();
+
+// Track terminated PIDs across all tools
+const terminatedPids = new Set<number>();
+
+// Load environment variables from .env file
+config();
+
+// Validate required environment variables
+if (!process.env.MOTHER_MODEL) {
+  throw new Error('MOTHER_MODEL environment variable is required');
+}
+if (!process.env.SCENARIO_MODEL) {
+  throw new Error('SCENARIO_MODEL environment variable is required');
+}
+
+
+// Set up basic directories
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+export const DEEBO_ROOT = join(__dirname, '..');
+
+// Create required directories
+await mkdir(join(DEEBO_ROOT, 'memory-bank'), { recursive: true });
+
+// Find and configure tool paths
+await findToolPaths();
+
+// Create MCP server
+const server = new McpServer({
+ name: "Deebo",
+ version: "1.0.0"
+});
+
+// Register start tool - begins a debug session
+server.tool(
+  "start",
+  "Begins an autonomous debugging session that investigates software bugs through multiple competing hypotheses. This tool launches a mother agent that analyzes errors, generates diverse hypotheses about potential causes, and spawns isolated scenario agents to test each hypothesis in separate git branches. The mother agent coordinates the investigation, evaluates scenario reports, and synthesizes a validated solution when sufficient evidence is found.",
+  {
+    error: z.string().describe("The error message or description of the bug to investigate"),
+    repoPath: z.string().describe("Absolute path to the git repository containing the code to debug"),
+    context: z.string().optional().describe("Additional context like code snippets, previous attempts, or relevant information"),
+    language: z.string().optional().describe("Programming language of the code being debugged (e.g., 'typescript', 'python')"),
+    filePath: z.string().optional().describe("Relative path to the specific file containing the bug, if known")
+  },
+  async ({ error, repoPath, context, language, filePath }, extra) => {
+    const projectId = getProjectId(repoPath);
+    const sessionId = `session-${Date.now()}`;
+    await mkdir(join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'logs'), { recursive: true });
+    await mkdir(join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'reports'), { recursive: true });
+
+    // Create controller and PID set for this session
+    const motherController = new AbortController();
+    const scenarioPids = new Set<number>();
+
+    // Register the session
+    processRegistry.set(sessionId, {
+      motherController,
+      scenarioPids
+    });
+    // console.log(`Registered session ${sessionId}`); // Removed informational log
+
+    // Run mother agent in background, passing the signal and PID set
+    // Note: runMotherAgent signature needs to be updated in mother-agent.ts to accept these
+    runMotherAgent(
+      sessionId,
+      error,
+      context ?? "",
+      language ?? "typescript",
+      filePath ?? "",
+      repoPath,
+      motherController.signal, // Pass the signal
+      scenarioPids // Pass the Set for tracking scenario PIDs
+    ).catch(err => {
+      console.error(`Debug session ${sessionId} failed during execution:`, err);
+      // Clean up registry if mother agent fails during execution
+      processRegistry.delete(sessionId);
+    }).finally(() => {
+      // Optional: Could also remove from registry on normal completion,
+      // but cancel needs to handle the case where it's still running.
+      // For now, only removing on error/cancel.
+      // console.log(`Mother agent promise settled for session ${sessionId}.`); // Removed internal log
+    });
+
+    // Return session ID immediately
+    return {
+      content: [{
+        type: "text",
+        text:
+          `Session ${sessionId} started!\n\n` +
+          `Check out the GitHub for tips and best practices:\n` +
+          `https://github.com/snagasuri/deebo-prototype\n\n` +
+          `Reminder: Deebo updates frequently.\n` +
+          `Run npx deebo-setup@latest or pull the latest from GitHub occasionally to get bug fixes and improvements!`
+      }]
+    };
+  }
+);
+
+// Register check tool - gets status of a debug session
+server.tool(
+  "check",
+  "Retrieves the current status of a debugging session, providing a detailed pulse report. For in-progress sessions, the pulse includes the mother agent's current stage in the OODA loop, running scenario agents with their hypotheses, and any preliminary findings. For completed sessions, the pulse contains the final solution with a comprehensive explanation, relevant code changes, and outcome summaries from all scenario agents that contributed to the solution. Use this tool to monitor ongoing progress or retrieve the final validated fix.",
+  {
+    sessionId: z.string().describe("The session ID returned by the start tool when the debugging session was initiated")
+  },
+  async ({ sessionId }, extra) => {
+    try {
+      const sessionDir = await findSessionDir(sessionId);
+      if (!sessionDir) {
+        return {
+          content: [{ 
+            type: "text",
+            text: `Session ${sessionId} not found`
+          }]
+        };
+      }
+
+      // Get time metrics and mother status
+      const logsDir = join(sessionDir, 'logs');
+      const motherLogPath = join(logsDir, 'mother.log');
+      const motherLog = await readFile(motherLogPath, 'utf8');
+      const motherLines = motherLog.split('\n').filter(Boolean);
+
+      if (!motherLines.length) return { content: [{ type: "text", text: 'Session initializing' }] };
+
+      const firstEvent = JSON.parse(motherLines[0]);
+      const durationMs = Date.now() - new Date(firstEvent.timestamp).getTime();
+
+      // Determine status by scanning for solution tag, cancellation, or errors
+      let status = 'in_progress'; // Default status
+      let solutionFoundInScan = false;
+      let lastValidEvent: any = null; // Store the last successfully parsed event
+      let solutionContent = ''; // Store solution content when found
+      // Use module-level terminatedPids set
+
+      for (let i = motherLines.length - 1; i >= 0; i--) {
+        try {
+          const event = JSON.parse(motherLines[i]);
+          if (!lastValidEvent) lastValidEvent = event; // Capture the last valid event
+
+          const content = event.data?.response || event.data?.response?.content || event.message || '';
+          
+          // Check for process spawn and termination with comprehensive pattern
+          const SCENARIO_PID_PATTERN = /(?:Spawned|Removed|Terminated|Cancelled) Scenario .* PID (\d+)/;
+          const pidMatch = content.match(SCENARIO_PID_PATTERN);
+          if (pidMatch) {
+            const pid = parseInt(pidMatch[1]);
+            // Check for any termination-related terms
+            if (content.match(/(Removed|Terminated|Cancelled)/)) {
+              terminatedPids.add(pid);
+            }
+          }
+          
+          // Check for session cancellation
+          if (content.includes('Session cancelled by user request')) {
+            status = 'cancelled';
+            break;
+          }
+          
+          // Check for solution tag or completion message
+          if (content.includes('<solution>')) {
+            const match = content.match(/<solution>([\s\S]*?)<\/solution>/);
+            if (match && match[1].trim()) {
+              status = 'completed';
+              solutionFoundInScan = true;
+              solutionContent = match[1].trim();
+              // Don't break - keep scanning to gather all info
+            }
+          } else if (content === 'Solution found or investigation concluded.') {
+            status = 'completed';
+            solutionFoundInScan = true;
+            // Don't break - keep scanning to find solution content
+          }
+          
+          // Check for error status
+          if (event.level === 'error') {
+            status = 'failed';
+            // Continue scanning for potential solution or cancellation
+          }
+        } catch (e) {
+          // Skip invalid JSON lines
+          continue;
+        }
+      }
+
+      // If status is still 'in_progress' after scan, check the last valid event's level
+      if (status === 'in_progress' && lastValidEvent && lastValidEvent.level === 'error') {
+        status = 'failed';
+      }
+
+      // Helper functions for PID mapping and status
+      function buildScenarioPIDMapping(motherLines: string[]): Map<string, number> {
+        const mapping = new Map<string, number>();
+        for (const line of motherLines) {
+          try {
+            const event = JSON.parse(line);
+            const message = event.message || '';
+            const matches = message.match(/Spawned Scenario ([^ ]+) with PID (\d+)/);
+            if (matches) {
+              const [_, scenarioId, pidStr] = matches;
+              mapping.set(scenarioId, parseInt(pidStr));
+            }
+          } catch (e) {
+            continue;
+          }
+        }
+        return mapping;
+      }
+
+      function getScenarioStatus(scenarioId: string, pidMapping: Map<string, number>): string {
+        const pid = pidMapping.get(scenarioId);
+        if (!pid) return 'Unknown';
+        return terminatedPids.has(pid) ? 'Terminated' : 'Running';
+      }
+
+      // Build PID mapping from mother log
+      const pidMapping = buildScenarioPIDMapping(motherLines);
+
+      // Count scenario statuses
+      const reportsDir = join(sessionDir, 'reports');
+      const scenarioLogs = await readdir(logsDir);
+      const reportFiles = await readdir(reportsDir);
+      
+      // Count scenarios by status
+      let runningCount = 0;
+      let terminatedCount = 0;
+      let reportedCount = reportFiles.length;
+
+      // Check each scenario's status using the PID mapping
+      for (const logFile of scenarioLogs.filter(f => f.startsWith('scenario-'))) {
+        const scenarioId = logFile.replace('scenario-', '').replace('.log', '');
+        const status = getScenarioStatus(scenarioId, pidMapping);
+        
+        if (status === 'Terminated') {
+          terminatedCount++;
+        } else if (!reportFiles.includes(scenarioId + '.json')) {
+          runningCount++;
+        }
+      }
+
+      // Build the pulse
+      let pulse = `=== Deebo Session Pulse: ${sessionId} ===\n`;
+      pulse += `Timestamp: ${new Date().toISOString()}\n`;
+      pulse += `Overall Status: ${status}\n`;
+      pulse += `Session Duration: ${Math.floor(durationMs / 1000)}s\n\n`;
+
+      pulse += `--- Mother Agent ---\n`;
+      pulse += `Status: ${status === 'in_progress' ? 'working' : status}\n`;
+      pulse += `Last Activity: ${lastValidEvent ? lastValidEvent.timestamp : 'N/A'}\n`;
+      if (status === 'completed') {
+        // Get projectId from session directory path
+        const projectId = sessionDir.split('/memory-bank/')[1].split('/')[0];
+        pulse += `Progress Log: ${join(DEEBO_ROOT, 'memory-bank', projectId, 'progress.md')}\n`;
+      }
+
+      // Update summary line to include terminated count
+      pulse += `--- Scenario Agents (${scenarioLogs.filter(f => f.startsWith('scenario-')).length} Total: ${runningCount} Running, ${terminatedCount} Terminated, ${reportedCount} Reported) ---\n\n`;
+
+      // For completed sessions, find and show solution
+      if (status === 'completed') {
+        // Display solution if found during scan
+        if (solutionContent) {
+          pulse += `MOTHER SOLUTION:\n`;
+          pulse += `<<<<<<< SOLUTION\n`;
+          pulse += solutionContent + '\n';
+          pulse += `======= SOLUTION END >>>>>>>\n\n`;
+        } else {
+          pulse += `STATUS COMPLETE BUT NO SOLUTION TAG FOUND IN LOGS\n`;
+          pulse += `Check the mother.log file for more details.\n\n`;
+        }
+      } else if (status === 'in_progress' || status === 'failed') {
+        // For in-progress or failed, show last known stage or last message
+        let stageMessage = 'No stage information found.';
+        if (lastValidEvent) { // Use the last valid event captured during status scan
+             stageMessage = lastValidEvent.message || JSON.stringify(lastValidEvent.data); // Show message or data
+             if (lastValidEvent.message && lastValidEvent.message.includes('OODA:')) {
+                 pulse += `Last Stage: ${lastValidEvent.message}\n\n`;
+             } else {
+                 pulse += `Last Log Message: ${stageMessage.substring(0, 100)}${stageMessage.length > 100 ? '...' : ''}\n\n`;
+             }
+        } else {
+             pulse += `Last Stage: ${stageMessage}\n\n`;
+        }
+
+      }
+
+
+      // Process reported scenarios
+      for (const file of reportFiles) {
+        const scenarioId = file.replace('.json', '');
+        
+        const scenarioLogPath = join(logsDir, `scenario-${scenarioId}.log`);
+        let scenarioLog;
+        try {
+          scenarioLog = await readFile(scenarioLogPath, 'utf8');
+        } catch (e) {
+          continue; // Skip if log file doesn't exist
+        }
+        
+        const scenarioLines = scenarioLog.split('\n').filter(Boolean);
+        if (!scenarioLines.length) continue;
+
+        // Get hypothesis - scan once
+        let hypothesis = 'Unknown hypothesis';
+        for (let i = 0; i < scenarioLines.length; i++) {
+          try {
+            const event = JSON.parse(scenarioLines[i]);
+            if (event.data?.hypothesis) {
+              hypothesis = event.data.hypothesis;
+              break;
+            }
+          } catch (e) {
+            continue;
+          }
+        }
+
+        pulse += `* Scenario: ${scenarioId}\n`;
+        pulse += `  Status: Reported\n`;
+
+        if (status === 'completed') {
+          // Show summary for completed scenarios in completed sessions
+          try {
+            const reportRaw = await readFile(join(reportsDir, `${scenarioId}.json`), 'utf8');
+            const report = JSON.parse(reportRaw);
+            
+            // Extract key information from report
+            const reportStr = typeof report === 'string' ? report : JSON.stringify(report, null, 2);
+            const lines = reportStr.split('\n');
+            
+            // Find CONFIRMED status and INVESTIGATION section
+            let confirmed = 'Unknown';
+            let investigationLines: string[] = [];
+            let inInvestigation = false;
+            
+            for (let i = 0; i < lines.length; i++) {
+              const line = lines[i].trim();
+              if (line.startsWith('CONFIRMED:')) {
+                confirmed = line.split(':')[1].trim();
+              }
+              if (line === 'INVESTIGATION:') {
+                inInvestigation = true;
+                continue;
+              }
+              if (inInvestigation && line && !line.startsWith('CONCLUSION:')) {
+                investigationLines.push(line);
+              }
+              if (line.startsWith('CONCLUSION:')) {
+                break;
+              }
+            }
+            
+            pulse += `  Outcome Summary:\n`;
+            pulse += `  <<<<<<< OUTCOME ${scenarioId}\n`;
+            pulse += `  HYPOTHESIS: ${hypothesis}\n\n`;
+            pulse += `  CONFIRMED: ${confirmed}\n\n`;
+            if (investigationLines.length > 0) {
+              pulse += `  INVESTIGATION:\n`;
+              pulse += `  ${investigationLines.join('\n  ')}\n`;
+            }
+            pulse += `  ======= OUTCOME ${scenarioId} END >>>>>>>\n`;
+          } catch (e) {
+            const error = e as Error;
+            pulse += `  Error reading report: ${error.message}\n`;
+          }
+        }
+
+        pulse += `  (Full report: ${join(reportsDir, `${scenarioId}.json`)})\n\n`;
+      }
+
+      // Process unreported scenarios (either running or terminated without report)
+      const unreportedScenarios = scenarioLogs
+        .filter(f => f.startsWith('scenario-'))
+        .filter(f => !reportFiles.includes(f.replace('scenario-', '').replace('.log', '.json')));
+      
+      for (const file of unreportedScenarios) {
+        const scenarioId = file.replace('scenario-', '').replace('.log', '');
+        
+        let scenarioLog;
+        try {
+          scenarioLog = await readFile(join(logsDir, file), 'utf8');
+        } catch (e) {
+          continue; // Skip if log file doesn't exist
+        }
+        
+        const scenarioLines = scenarioLog.split('\n').filter(Boolean);
+        if (!scenarioLines.length) continue;
+
+        // Get hypothesis and events from scenario log
+        let hypothesis = 'Unknown hypothesis';
+        let firstEvent, lastEvent;
+        
+        try {
+          // Extract hypothesis and events
+          for (const line of scenarioLines) {
+            try {
+              const event = JSON.parse(line);
+              if (event.data?.hypothesis) {
+                hypothesis = event.data.hypothesis;
+              }
+              if (!firstEvent) firstEvent = event;
+              lastEvent = event;
+            } catch (e) {
+              continue;
+            }
+          }
+
+          // Calculate runtime and add to pulse
+          const runtime = Math.floor((Date.now() - new Date(firstEvent.timestamp).getTime()) / 1000);
+          pulse += `* Scenario: ${scenarioId}\n`;
+          pulse += `  Status: ${getScenarioStatus(scenarioId, pidMapping)}\n`;
+          pulse += `  Hypothesis: "${hypothesis}"\n`;
+          pulse += `  Runtime: ${runtime}s\n`;
+          pulse += `  Latest Activity: ${lastEvent.message}\n`;
+          pulse += `  (Log: ${join(logsDir, file)})\n\n`;
+        } catch (e) {
+          // Skip scenarios with invalid JSON
+          continue;
+        }
+      }
+
+      pulse += `--- End Session Pulse ---\n\n`;
+
+if (status === 'completed' || status === 'failed') {
+  pulse += `\n=======================================\n`;
+  pulse += `Not the result you were looking for?\n`;
+  pulse += `Start another session and guide Deebo with what you learned!\n`;
+  pulse += `Need a refresher? Check out the Deebo GitHub:\n`;
+  pulse += `https://github.com/snagasuri/deebo-prototype\n`;
+  pulse += `=======================================\n`;
+}
+
+      return {
+        content: [{ 
+          type: "text",
+          text: pulse
+        }]
+      };
+
+    } catch (err) {
+      return {
+        content: [{ 
+          type: "text",
+          text: `Error generating pulse: ${err}`
+        }]
+      };
+    }
+  }
+);
+
+server.tool(
+  "cancel",
+  "Terminates all processes related to a debugging session. This will stop the mother agent and all scenario agents, releasing system resources. Use this when you have your solution or want to abandon the debugging process.",
+  {
+    sessionId: z.string().describe("The session ID returned by the start tool when the debugging session was initiated")
+  },
+  async ({ sessionId }, extra) => {
+    // No need to sanitize ID when using the registry Map key
+    const sessionEntry = processRegistry.get(sessionId);
+
+    if (!sessionEntry) {
+      return {
+        content: [{
+          type: "text",
+          text: `Session ${sessionId} not found in registry. It might have already completed or failed.`
+        }]
+      };
+    }
+
+    const { motherController, scenarioPids } = sessionEntry;
+    let killedScenarios = 0;
+    let failedKills = 0;
+
+    try {
+      // 1. Signal the Mother agent to stop its loop cooperatively
+      // console.log(`Signaling Mother Agent for session ${sessionId} to stop.`); // Removed informational log
+      motherController.abort();
+
+      // 2. Terminate any tracked Scenario agent processes
+      // console.log(`Terminating ${scenarioPids.size} tracked Scenario Agents for session ${sessionId}.`); // Removed informational log
+      for (const pid of scenarioPids) {
+        try {
+          // Use SIGTERM first for graceful shutdown
+          process.kill(pid, 'SIGTERM');
+          killedScenarios++;
+          terminatedPids.add(pid); // Add to terminated set right away
+          // console.log(`Sent SIGTERM to scenario PID ${pid}`); // Removed informational log
+        } catch (err: any) {
+          // Ignore errors if process is already gone (e.g., ESRCH)
+          if (err.code !== 'ESRCH') {
+            // console.warn(`Failed to send SIGTERM to scenario PID ${pid}: ${err.message}`); // Removed console.warn
+            failedKills++;
+          } else {
+            // Process already gone
+            terminatedPids.add(pid); // Still mark as terminated if process is already gone
+          }
+        }
+      }
+
+      // Optional: Add a short delay and SIGKILL survivors if needed.
+      // For simplicity, we'll rely on SIGTERM for now.
+
+      // 3. Clean up the registry entry *after* attempting kills
+      processRegistry.delete(sessionId);
+      // console.log(`Removed session ${sessionId} from process registry.`); // Removed informational log
+
+      return {
+          content: [{
+            type: "text",
+            text: `Cancellation request sent for session ${sessionId}:\n` +
+                  `- Mother agent signaled to stop.\n` +
+                  `- Targeted ${killedScenarios} scenario processes (includes already exited).\n` +
+                  `- ${failedKills} termination signals failed (excluding already exited).`
+          }]
+        };
+
+      } catch (err: any) {
+        // Handle potential errors during the cancellation process itself
+        const errorMessage = err.message || String(err);
+        // console.error(`Error during cancellation for session ${sessionId}: ${errorMessage}`); // Removed console.error
+        // Attempt to clean up registry even if cancellation had issues
+        processRegistry.delete(sessionId); // Ensure cleanup
+        return {
+          content: [{
+            type: "text",
+            text: `Error during cancellation for session ${sessionId}: ${errorMessage}. Registry entry removed.`
+          }]
+        };
+      }
+    }
+  );
+
+// Register add_observation tool
+server.tool(
+  "add_observation",
+  "Adds an external observation to an agent in the debugging session. This allows other tools or human insights to be incorporated into the ongoing investigation. Observations are logged and considered by the agent in subsequent reasoning steps.",
+  {
+    agentId: z.string(),
+    observation: z.string(),
+    sessionId: z.string()
+  },
+  async ({ agentId, observation, sessionId }, extra) => {
+    try {
+      // Get session directory
+      const sessionDir = await findSessionDir(sessionId);
+      if (!sessionDir) {
+        throw new Error('Session not found');
+      }
+
+      // Get repoPath from agent log
+      const logFile = join(sessionDir, 'logs', `${agentId}.log`);
+      const agentLog = await readFile(logFile, 'utf8');
+      const firstLine = agentLog.split('\n')[0];
+      const firstEvent = JSON.parse(firstLine);
+      const repoPath = firstEvent.data?.repoPath;
+
+      if (!repoPath) {
+        throw new Error('Could not find repoPath in agent log');
+      }
+
+      await writeObservation(repoPath, sessionId, agentId, observation);
+      return {
+        content: [{
+          type: "text",
+          text: "Observation logged"
+        }]
+      };
+    } catch (err) {
+      throw new Error(`Observation write failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+);
+
+// Connect transport
+const transport = new StdioServerTransport();
+await server.connect(transport);
+
+=== src/util/mcp.ts ===
+
+// src/util/mcp.ts
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { readFile, writeFile } from 'fs/promises';
+import { join } from 'path';
+import * as path from 'path';
+import { DEEBO_ROOT } from '../index.js';
+import { getProjectId } from './sanitize.js';
+
+// Map to track active connections
+const activeConnections: Map<string, Promise<Client>> = new Map();
+
+export async function connectMcpTool(name: string, toolName: string, sessionId: string, repoPath: string) {
+  const rawConfig = JSON.parse(await readFile(join(DEEBO_ROOT, 'config', 'tools.json'), 'utf-8'));
+  const def = rawConfig.tools[toolName];
+  const memoryPath = join(DEEBO_ROOT, 'memory-bank', getProjectId(repoPath));
+  const memoryRoot = join(DEEBO_ROOT, 'memory-bank');
+
+  /* --- WINDOWS-ONLY PATCH ----------------------------------------- */
+  if (process.platform === "win32" && toolName === "desktopCommander") {
+    // Use the real *.cmd so the process owns stdin/stdout
+    const cmdPath = path.join(process.env.DEEBO_NPM_BIN!, "desktop-commander.cmd");
+    def.command = cmdPath;
+    def.args = ["serve"];            // same behaviour as 'npx … serve'
+  }
+  /* ---------------------------------------------------------------- */
+
+  // Substitute npx/uvx paths directly in the command
+  let command = def.command
+    .replace(/{npxPath}/g, process.env.DEEBO_NPX_PATH!)
+    .replace(/{uvxPath}/g, process.env.DEEBO_UVX_PATH!);
+  
+  // Replace placeholders in all args
+  let args = def.args.map((arg: string) =>
+    arg
+      .replace(/{repoPath}/g, repoPath)
+      .replace(/{memoryPath}/g, memoryPath)
+      .replace(/{memoryRoot}/g, memoryRoot)
+  );
+
+  // No shell: spawn the .cmd/binary directly on all platforms
+  const options = {};
+
+  const transport = new StdioClientTransport({ command, args, ...options });
+  const client = new Client({ name, version: '1.0.0' }, { capabilities: { tools: true } });
+  await client.connect(transport);
+  return client;
+}
+
+export async function connectRequiredTools(agentName: string, sessionId: string, repoPath: string): Promise<{
+  gitClient: Client;
+  filesystemClient: Client;
+}> {
+  const [gitClient, filesystemClient] = await Promise.all([
+    connectMcpTool(`${agentName}-git`, 'git-mcp', sessionId, repoPath),
+    // Switch from "filesystem-mcp" to "desktop-commander"
+    connectMcpTool(`${agentName}-desktop-commander`, 'desktopCommander', sessionId, repoPath)
+  ]);
+
+  return { gitClient, filesystemClient };
+}
+
+=== config/tools.json ===
+
+{
+  "tools": {
+    "desktopCommander": {
+      "command": "{npxPath}",
+      "args": [
+        "@wonderwhy-er/desktop-commander"
+      ]
+    },
+    "git-mcp": {
+      "command": "{uvxPath}",
+      "args": [
+        "mcp-server-git",
+        "--repository",
+        "{repoPath}"
+      ]
+    }
+  }
+}
 === src/util/sanitize.ts ===
 
 // src/util/sanitize.ts
@@ -784,70 +1530,6 @@ export async function callLlm(
   throw new Error(`Unsupported provider '${lowerCaseProvider}'. Set LLM_PROVIDER env var to 'openai', 'openrouter', 'gemini', or 'anthropic'`);
 }
 
-=== src/util/mcp.ts ===
-
-// src/util/mcp.ts
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { readFile, writeFile } from 'fs/promises';
-import { join } from 'path';
-import * as path from 'path';
-import { DEEBO_ROOT } from '../index.js';
-import { getProjectId } from './sanitize.js';
-
-// Map to track active connections
-const activeConnections: Map<string, Promise<Client>> = new Map();
-
-export async function connectMcpTool(name: string, toolName: string, sessionId: string, repoPath: string) {
-  const rawConfig = JSON.parse(await readFile(join(DEEBO_ROOT, 'config', 'tools.json'), 'utf-8'));
-  const def = rawConfig.tools[toolName];
-  const memoryPath = join(DEEBO_ROOT, 'memory-bank', getProjectId(repoPath));
-  const memoryRoot = join(DEEBO_ROOT, 'memory-bank');
-
-  /* --- WINDOWS-ONLY PATCH ----------------------------------------- */
-  if (process.platform === "win32" && toolName === "desktopCommander") {
-    // Use the real *.cmd so the process owns stdin/stdout
-    const cmdPath = path.join(process.env.DEEBO_NPM_BIN!, "desktop-commander.cmd");
-    def.command = cmdPath;
-    def.args = ["serve"];            // same behaviour as 'npx … serve'
-  }
-  /* ---------------------------------------------------------------- */
-
-  // Substitute npx/uvx paths directly in the command
-  let command = def.command
-    .replace(/{npxPath}/g, process.env.DEEBO_NPX_PATH!)
-    .replace(/{uvxPath}/g, process.env.DEEBO_UVX_PATH!);
-  
-  // Replace placeholders in all args
-  let args = def.args.map((arg: string) =>
-    arg
-      .replace(/{repoPath}/g, repoPath)
-      .replace(/{memoryPath}/g, memoryPath)
-      .replace(/{memoryRoot}/g, memoryRoot)
-  );
-
-  // No shell: spawn the .cmd/binary directly on all platforms
-  const options = {};
-
-  const transport = new StdioClientTransport({ command, args, ...options });
-  const client = new Client({ name, version: '1.0.0' }, { capabilities: { tools: true } });
-  await client.connect(transport);
-  return client;
-}
-
-export async function connectRequiredTools(agentName: string, sessionId: string, repoPath: string): Promise<{
-  gitClient: Client;
-  filesystemClient: Client;
-}> {
-  const [gitClient, filesystemClient] = await Promise.all([
-    connectMcpTool(`${agentName}-git`, 'git-mcp', sessionId, repoPath),
-    // Switch from "filesystem-mcp" to "desktop-commander"
-    connectMcpTool(`${agentName}-desktop-commander`, 'desktopCommander', sessionId, repoPath)
-  ]);
-
-  return { gitClient, filesystemClient };
-}
-
 === src/util/logger.ts ===
 
 import { writeFile, mkdir } from 'fs/promises';
@@ -929,12 +1611,13 @@ export async function writeObservation(repoPath: string, sessionId: string, agen
 // src/mother-agent.ts
 /**
  * 📌 Why this is the best version:
-    •	✅ Keeps full message history without resetting
-    •	✅ Supports multiple tool calls per Claude response
-    •	✅ Spawns scenarios from multiple hypotheses
-    •	✅ Never throws on malformed XML, logs gently instead
-    •	✅ Doesn't force memory bank writes — Mother can directly choose via filesystem-mcp
-    •	✅ Maintains Deebo's spirit: autonomy, freedom to fail, and graceful continuation
+    • ✅ Keeps full message history without resetting
+    • ✅ Supports multiple tool calls per Claude response
+    • ✅ Spawns scenarios from multiple hypotheses
+    • ✅ Never throws on malformed XML, logs gently instead
+    • ✅ Doesn't force memory bank writes — Mother can directly choose via filesystem-mcp
+    • ✅ Maintains Deebo's spirit: autonomy, freedom to fail, and graceful continuation
+    • ✅ FIXED: Processes tool calls before hypotheses from the same LLM turn.
  */
 
     import { spawn } from 'child_process';
@@ -945,17 +1628,14 @@ export async function writeObservation(repoPath: string, sessionId: string, agen
     import { DEEBO_ROOT } from './index.js';
     import { updateMemoryBank } from './util/membank.js';
     import { getProjectId } from './util/sanitize.js';
-    // import OpenAI from 'openai'; // Removed
-    import { ChatCompletionMessageParam, ChatCompletionMessage } from 'openai/resources/chat/completions';
+    import { ChatCompletionMessageParam } from 'openai/resources/chat/completions'; // Keep structure type
     import { createScenarioBranch } from './util/branch-manager.js';
-    import { callLlm, getMotherAgentPrompt } from './util/agent-utils.js'; // Updated import
-
+    import { callLlm, getMotherAgentPrompt } from './util/agent-utils.js';
+    
     const MAX_RUNTIME = 60 * 60 * 1000; // 60 minutes
     const SCENARIO_TIMEOUT = 5 * 60 * 1000;
     const useMemoryBank = process.env.USE_MEMORY_BANK === 'true';
-
-    // Removed safeAssistantMessage function as it's no longer needed with callLlm
-
+    
     // Mother agent main loop
     export async function runMotherAgent(
       sessionId: string,
@@ -972,34 +1652,34 @@ export async function writeObservation(repoPath: string, sessionId: string, agen
       let scenarioCounter = 0; // Simple counter for unique scenario IDs within the session
       const startTime = Date.now();
       const memoryBankPath = join(DEEBO_ROOT, 'memory-bank', projectId);
-      let lastObservationCheck = 0;
-
+      let lastObservationCheck = 0; // Removed unused variable
+    
       try {
         // OBSERVE: Setup tools and LLM Client
         await log(sessionId, 'mother', 'info', 'OODA: observe', { repoPath });
         const { gitClient, filesystemClient } = await connectRequiredTools('mother', sessionId, repoPath);
-
+    
         // Read LLM configuration from environment variables
-        const motherProvider = process.env.MOTHER_HOST; // Read provider name from MOTHER_HOST
+        const motherProvider = process.env.MOTHER_HOST;
         const motherModel = process.env.MOTHER_MODEL;
         const openrouterApiKey = process.env.OPENROUTER_API_KEY;
         const openaiApiKey = process.env.OPENAI_API_KEY;
         const openaiBaseUrl = process.env.OPENAI_BASE_URL;
         const geminiApiKey = process.env.GEMINI_API_KEY;
         const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-
+    
         // Create the config object to pass to callLlm
         const llmConfig = {
           provider: motherProvider,
           model: motherModel,
-          apiKey: openrouterApiKey,
+          apiKey: openrouterApiKey, // Keep for backward compatibility/other uses
           openrouterApiKey: openrouterApiKey,
           openaiApiKey: openaiApiKey,
           baseURL: openaiBaseUrl,
           geminiApiKey: geminiApiKey,
           anthropicApiKey: anthropicApiKey
         };
-
+    
         // Initial conversation context
         const messages: ChatCompletionMessageParam[] = [{
           role: 'assistant',
@@ -1007,966 +1687,394 @@ export async function writeObservation(repoPath: string, sessionId: string, agen
         }, {
           role: 'user',
           content: `Error: ${error}
-    Context: ${context}
-    Language: ${language}
-    File: ${filePath}
-    Repo: ${repoPath}
-    Session: ${sessionId}
-    Project: ${projectId}
-    ${useMemoryBank ? '\nPrevious debugging attempts and context are available in the memory-bank directory if needed.' : ''}
-
-    IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for perfect information.`
+        Context: ${context}
+        Language: ${language}
+        File: ${filePath}
+        Repo: ${repoPath}
+        Session: ${sessionId}
+        Project: ${projectId}
+        ${useMemoryBank ? '\nPrevious debugging attempts and context are available in the memory-bank directory if needed.' : ''}
+    
+        IMPORTANT: Generate your first hypothesis within 2-3 responses. Don't wait for perfect information.`
         }];
-
-    // Check for new observations
-    let observations = await getAgentObservations(repoPath, sessionId, 'mother'); // Changed const to let
-    if (observations.length > 0) {
-      messages.push(...observations.map(obs => ({
-        role: 'user' as const,
-        content: `Scientific observation: ${obs}`
-      })));
-    }
-
-    // Initial LLM call using the new utility function with config
-    await log(sessionId, 'mother', 'debug', 'Sending to LLM', { model: llmConfig.model, provider: llmConfig.provider, messages, repoPath });
-    let replyText = await callLlm(messages, llmConfig);
-    if (!replyText) {
-      messages.push({ role: 'user', content: 'LLM returned empty or malformed response' });
-      await log(sessionId, 'mother', 'warn', 'Received empty/malformed response from LLM', { provider: llmConfig.provider, model: llmConfig.model, repoPath });
-    } else {
-      // Add the valid response to messages history
-      messages.push({ role: 'assistant', content: replyText });
-      await log(sessionId, 'mother', 'debug', 'Received from LLM', { response: { content: replyText }, repoPath });
-    }
-
-    // ORIENT: Begin investigation loop
-    await log(sessionId, 'mother', 'info', 'OODA: orient', { repoPath });
-
-    // Loop while the last reply exists, doesn't contain the solution tag, AND cancellation hasn't been requested
-    while (replyText && !replyText.includes('<solution>') && !signal.aborted) { // Check signal in loop condition
-      if (Date.now() - startTime > MAX_RUNTIME) {
-        await log(sessionId, 'mother', 'warn', 'Investigation exceeded maximum runtime', { repoPath });
-        throw new Error('Investigation exceeded maximum runtime');
-      }
-
-      // Check for cancellation signal before processing response
-      if (signal.aborted) {
-        await log(sessionId, 'mother', 'info', 'Cancellation signal received, stopping loop.', { repoPath });
-        break; // Exit loop if cancelled
-      }
-
-      // The assistant's response (replyText) is already added to messages before the loop starts and after each LLM call inside the loop.
-
-      // Use the latest replyText directly
-      const responseText = replyText;
-
-      // Handle MULTIPLE MCP tools (if any) - Parsing from responseText
-      const toolCalls = responseText.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
-
-      const parsedCalls = toolCalls.map((tc: string) => {
-        try {
-          const server = tc.includes('git-mcp') ? gitClient! : filesystemClient!;
-          const toolMatch = tc.match(/<tool_name>(.*?)<\/tool_name>/);
-          if (!toolMatch || !toolMatch[1]) throw new Error('Missing tool');
-          const tool = toolMatch[1]!;
-
-          const argsMatch = tc.match(/<arguments>(.*?)<\/arguments>/s);
-          if (!argsMatch || !argsMatch[1]) throw new Error('Missing arguments');
-          const args = JSON.parse(argsMatch[1]!);
-
-          return { server, tool, args };
-        } catch (err) {
-          return { error: err instanceof Error ? err.message : String(err) };
+    
+        // Check for initial observations
+        let observations = await getAgentObservations(repoPath, sessionId, 'mother');
+        if (observations.length > 0) {
+          messages.push(...observations.map(obs => ({
+            role: 'user' as const,
+            content: `Scientific observation: ${obs}`
+          })));
         }
-      });
-
-      // Process each parsed call
-      for (const parsed of parsedCalls) {
-        if ('error' in parsed) {
-          messages.push({
-            role: 'user',
-            content: `One of your tool calls was malformed and skipped. Error: ${parsed.error}`
-          });
-          continue;
-        }
-
-        try {
-          const result = await parsed.server.callTool({ name: parsed.tool, arguments: parsed.args });
-          messages.push({
-            role: 'user',
-            content: JSON.stringify(result)
-          });
-        } catch (err) {
-          messages.push({
-            role: 'user',
-            content: `Tool call failed: ${err instanceof Error ? err.message : String(err)}`
-          });
-        }
-      }
-
-
-      // Handle Hypotheses → Scenario agents - Parsing from responseText
-      if (responseText.includes('<hypothesis>')) {
-        const hypotheses = [...responseText.matchAll(/<hypothesis>([\s\S]*?)<\/hypothesis>/g)].map(match => match[1].trim());
-
-        if (useMemoryBank) {
-          await updateMemoryBank(projectId, `==================
-AUTOMATED HYPOTHESIS RECORD
-Timestamp: ${new Date().toISOString()}
-Error: ${error || 'No error provided'}
-
-${responseText}
-
-==================
-`, 'activeContext');
-        }
-
-        const scenarioPromises = hypotheses.map(async (hypothesis: string) => {
-          const scenarioId = `${sessionId}-${scenarioCounter++}`; // Use counter for unique ID
-
-          await new Promise(resolve => setTimeout(resolve, 100)); // Small delay
-          const branchName = await createScenarioBranch(repoPath, scenarioId); // Branch name generation
-
-          const scenarioArgs = [ // Define args for spawn
-            join(DEEBO_ROOT, 'build/scenario-agent.js'),
-            '--id', scenarioId,
-            '--session', sessionId,
-            '--error', error,
-            '--context', context,
-            '--hypothesis', hypothesis,
-            '--language', language,
-            '--file', filePath || '',
-            '--repo', repoPath,
-            '--branch', branchName
-          ];
-
-          const child = spawn('node', scenarioArgs, {
-               cwd: repoPath,             // ensure all file‑based tools run in the repo root
-               env: { ...process.env }    // explicitly pass the full Deebo env (incl. DEEBO_NPX_PATH)
-             });
-          let output = '';
-
-          // Track the PID in the shared Set
-          if (child.pid) {
-            scenarioPids.add(child.pid);
-            await log(sessionId, 'mother', 'info', `Spawned Scenario ${scenarioId} with PID ${child.pid}`, { repoPath, hypothesis, args: scenarioArgs });
-          } else {
-             await log(sessionId, 'mother', 'warn', `Spawned Scenario ${scenarioId} but PID was unavailable`, { repoPath, hypothesis, args: scenarioArgs });
-          }
-
-          child.stdout.on('data', data => output += data);
-          child.stderr.on('data', data => output += data);
-
-          // Wait for process exit OR timeout
-          return new Promise<string>((resolve) => {
-              let resolved = false;
-              const scenarioPid = child.pid; // Capture PID for cleanup logic
-
-              // Function to handle cleanup and resolution
-              const cleanupAndResolve = (exitInfo: string) => {
-                if (resolved) return;
-                resolved = true;
-                if (scenarioPid) {
-                  scenarioPids.delete(scenarioPid); // Remove PID from registry
-                  log(sessionId, 'mother', 'debug', `Removed scenario PID ${scenarioPid} from registry`, { repoPath });
-                }
-                output += `\n${exitInfo}`;
-                resolve(output);
-              };
-
-              // Handle process exit
-              child.on('exit', (code, signal) => {
-                cleanupAndResolve(`Scenario ${scenarioId} (PID: ${scenarioPid}) exited with code ${code}, signal ${signal}`);
-              });
-
-              // Handle process spawn errors
-              child.on('error', err => {
-                if (resolved) return;
-                resolved = true;
-                output += `\nProcess spawn error: ${err}`;
-                resolve(output); // Resolve immediately on spawn error
-              });
-
-              // Capture stream-level errors (don't resolve promise)
-              child.stdout.on('error', err => { output += `\nStdout error: ${err}`; });
-              child.stderr.on('error', err => { output += `\nStderr error: ${err}`; });
-
-              // Set a timeout for the scenario
-              const timeoutHandle = setTimeout(() => {
-                 if (!resolved) {
-                    child.kill(); // Force kill the scenario on timeout
-                    cleanupAndResolve(`Scenario ${scenarioId} (PID: ${scenarioPid}) timed out after ${SCENARIO_TIMEOUT / 1000}s`);
-                 }
-              }, SCENARIO_TIMEOUT);
-
-              // Clear timeout if process exits or errors first
-              child.on('exit', () => clearTimeout(timeoutHandle));
-              child.on('error', () => clearTimeout(timeoutHandle));
-            });
-        });
-
-        // Wait for all spawned scenarios for this turn to complete
-        const scenarioOutputs = await Promise.all(scenarioPromises);
-
-        messages.push({ role: 'user', content: scenarioOutputs.join('\n\n---\n\n') }); // Add separator for readability
-      }
-
-      // Mother can optionally edit memory bank directly via filesystem-mcp. No forced writes.
-
-      // Check for new observations before each Claude call
-      const newObservations = await getAgentObservations(repoPath, sessionId, 'mother');
-      if (newObservations.length > observations.length) {
-        const latestObservations = newObservations.slice(observations.length);
-        messages.push(...latestObservations.map(obs => ({
-          role: 'user' as const,
-          content: `Scientific observation: ${obs}`
-        })));
-        observations = newObservations; // Update the baseline observation list
-      }
-
-      // Check for cancellation signal again before the next LLM call
-      if (signal.aborted) {
-        await log(sessionId, 'mother', 'info', 'Cancellation signal received before next LLM call.', { repoPath });
-        break; // Exit loop if cancelled
-      }
-
-      // Make next LLM call using the new utility function with config
-      await log(sessionId, 'mother', 'debug', 'Sending to LLM', { model: llmConfig.model, provider: llmConfig.provider, messages, repoPath });
-      replyText = await callLlm(messages, llmConfig); // Update replyText
-      if (!replyText) {
-        messages.push({ role: 'user', content: 'LLM returned empty or malformed response' });
-        await log(sessionId, 'mother', 'warn', 'Received empty/malformed response from LLM', { provider: llmConfig.provider, model: llmConfig.model, repoPath });
-        // replyText is already falsy, loop will terminate naturally
-      } else {
-        // Add the valid response to messages history
-        messages.push({ role: 'assistant', content: replyText });
-        await log(sessionId, 'mother', 'debug', 'Received from LLM', { response: { content: replyText }, provider: llmConfig.provider, model: llmConfig.model, repoPath });
-      }
-
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-
-    // Determine final status based on whether loop was aborted or completed naturally
-    let finalStatusMessage: string;
-    if (signal.aborted) {
-      finalStatusMessage = 'Session cancelled by user request.';
-      await log(sessionId, 'mother', 'info', finalStatusMessage, { repoPath });
-    } else if (replyText?.includes('<solution>')) {
-      finalStatusMessage = 'Solution found or investigation concluded.';
-      await log(sessionId, 'mother', 'info', finalStatusMessage, { repoPath });
-    } else {
-      finalStatusMessage = 'Loop terminated unexpectedly (e.g., LLM error).';
-       await log(sessionId, 'mother', 'warn', finalStatusMessage, { repoPath });
-    }
-
-    const finalContent = replyText || finalStatusMessage; // Use last reply or status message
-
-    // Structured record at the end
-    if (useMemoryBank) {
-      await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - ${new Date().toISOString()}
-${error ? `Initial Error: ${error}` : ''}
-Final Status: ${finalStatusMessage}
-${finalContent.includes('<solution>') ? finalContent : `Last Response/Status: ${finalContent}`}
-Scenarios Spawned: ${scenarioCounter}
-Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress');
-    }
-
-    return finalContent; // Return the last reply or status
-
-  } catch (err) {
-    const caughtError = err instanceof Error ? err : new Error(String(err));
-    // Check if the error was due to cancellation signal during an operation
-     if (signal.aborted) {
-       await log(sessionId, 'mother', 'info', `Operation aborted during execution: ${caughtError.message}`, { repoPath });
-       // Optionally update progress log for aborted state
-       if (useMemoryBank) {
-         await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - ABORTED - ${new Date().toISOString()}\nError during abort: ${caughtError.message}`, 'progress');
-       }
-       return 'Session cancelled during operation.'; // Return specific cancellation message
-     } else {
-       // Log and record other errors
-       await log(sessionId, 'mother', 'error', `Failed: ${caughtError.message}`, { repoPath, stack: caughtError.stack });
-       if (useMemoryBank) {
-         await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - FAILED - ${new Date().toISOString()}\nError: ${caughtError.message}\nStack: ${caughtError.stack}`, 'progress');
-       }
-       throw caughtError; // Re-throw unexpected errors
-     }
-  } finally {
-     // Ensure any remaining scenario PIDs are cleaned up if the mother agent exits unexpectedly
-     // (though the 'exit' handler should cover most cases)
-     if (scenarioPids.size > 0) {
-       await log(sessionId, 'mother', 'warn', `Mother agent exiting with ${scenarioPids.size} scenario PIDs still in registry.`, { repoPath, pids: Array.from(scenarioPids) });
-       // Optionally attempt to kill them here, though 'cancel' is the primary mechanism
-     }
-  }
-}
-
-=== src/index.ts ===
-
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { z } from "zod";
-import { readFile, mkdir, readdir, access, writeFile } from 'fs/promises';
-import { config } from 'dotenv';
-import { dirname, join } from 'path';
-import * as path from 'path';
-import { fileURLToPath } from 'url';
-import { runMotherAgent } from './mother-agent.js';
-import { getProjectId } from './util/sanitize.js';
-import { writeObservation } from './util/observations.js';
-import { exec, spawn, ChildProcess } from 'child_process';
-import { promisify } from 'util';
-import { homedir } from "node:os";
-
-const execPromise = promisify(exec);
-
-function winRoamingBin(): string {
-  // VS Code spawns MCP servers with a clean env (no APPDATA)
-  const base = process.env.APPDATA ?? path.join(homedir(), "AppData", "Roaming");
-  return path.join(base, "npm");
-}
-
-// Function to find tool paths during initialization
-async function findToolPaths() {
-  const isWindows = process.platform === 'win32';
-  
-  let npxPath, uvxPath;
-
-  if (isWindows) {
-    try {
-      const npxPaths = (await execPromise('cmd.exe /c where npx.cmd')).stdout.trim().split('\n');
-      // Favor Program Files to get direct executable
-      const foundNpxPath = npxPaths.find(p => p.includes('Program Files'));
-      if (!foundNpxPath) {
-        throw new Error('Could not find npx.cmd in Program Files');
-      }
-      npxPath = path.normalize(foundNpxPath).trim();
-
-      uvxPath = path.normalize((await execPromise('cmd.exe /c where uvx.exe')).stdout.trim().split('\n')[0]).trim();
-    } catch (err) {
-      throw new Error(`Failed to find tool paths: ${err}`);
-    }
-  }else {
-    npxPath = (await execPromise('which npx')).stdout.trim();
-    uvxPath = (await execPromise('which uvx')).stdout.trim();
-  }
-
-  // Store normalized paths
-  process.env.DEEBO_NPX_PATH = npxPath;
-  process.env.DEEBO_UVX_PATH = uvxPath;
-
-  // Get npm bin directory for Windows desktop-commander.cmd
-  const npmBin = isWindows
-    ? winRoamingBin()                                  // Use homedir() when VS Code strips env
-    : path.dirname(npxPath);                           // same folder as npx on *nix
-
-  process.env.DEEBO_NPM_BIN = npmBin;                 // <-- expose for later
-  
-  return { npxPath, uvxPath, npmBin };
-}
-
-// Helper to find session directory
-async function findSessionDir(sessionId: string): Promise<string | null> {
-  const memoryBank = join(DEEBO_ROOT, 'memory-bank');
-  const projects = await readdir(memoryBank);
-  
-  for (const project of projects) {
-    const sessionPath = join(memoryBank, project, 'sessions', sessionId);
-    try {
-      await access(sessionPath);
-      return sessionPath;
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
-// Registry to track active sessions and their associated processes/controllers
-const processRegistry = new Map<string, {
-  motherController: AbortController;
-  scenarioPids: Set<number>; // Store PIDs of spawned scenario agents
-}>();
-
-// Track terminated PIDs across all tools
-const terminatedPids = new Set<number>();
-
-// Load environment variables from .env file
-config();
-
-// Validate required environment variables
-if (!process.env.MOTHER_MODEL) {
-  throw new Error('MOTHER_MODEL environment variable is required');
-}
-if (!process.env.SCENARIO_MODEL) {
-  throw new Error('SCENARIO_MODEL environment variable is required');
-}
-
-
-// Set up basic directories
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-export const DEEBO_ROOT = join(__dirname, '..');
-
-// Create required directories
-await mkdir(join(DEEBO_ROOT, 'memory-bank'), { recursive: true });
-
-// Find and configure tool paths
-await findToolPaths();
-
-// Create MCP server
-const server = new McpServer({
- name: "Deebo",
- version: "1.0.0"
-});
-
-// Register start tool - begins a debug session
-server.tool(
-  "start",
-  "Begins an autonomous debugging session that investigates software bugs through multiple competing hypotheses. This tool launches a mother agent that analyzes errors, generates diverse hypotheses about potential causes, and spawns isolated scenario agents to test each hypothesis in separate git branches. The mother agent coordinates the investigation, evaluates scenario reports, and synthesizes a validated solution when sufficient evidence is found.",
-  {
-    error: z.string().describe("The error message or description of the bug to investigate"),
-    repoPath: z.string().describe("Absolute path to the git repository containing the code to debug"),
-    context: z.string().optional().describe("Additional context like code snippets, previous attempts, or relevant information"),
-    language: z.string().optional().describe("Programming language of the code being debugged (e.g., 'typescript', 'python')"),
-    filePath: z.string().optional().describe("Relative path to the specific file containing the bug, if known")
-  },
-  async ({ error, repoPath, context, language, filePath }, extra) => {
-    const projectId = getProjectId(repoPath);
-    const sessionId = `session-${Date.now()}`;
-    await mkdir(join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'logs'), { recursive: true });
-    await mkdir(join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'reports'), { recursive: true });
-
-    // Create controller and PID set for this session
-    const motherController = new AbortController();
-    const scenarioPids = new Set<number>();
-
-    // Register the session
-    processRegistry.set(sessionId, {
-      motherController,
-      scenarioPids
-    });
-    // console.log(`Registered session ${sessionId}`); // Removed informational log
-
-    // Run mother agent in background, passing the signal and PID set
-    // Note: runMotherAgent signature needs to be updated in mother-agent.ts to accept these
-    runMotherAgent(
-      sessionId,
-      error,
-      context ?? "",
-      language ?? "typescript",
-      filePath ?? "",
-      repoPath,
-      motherController.signal, // Pass the signal
-      scenarioPids // Pass the Set for tracking scenario PIDs
-    ).catch(err => {
-      console.error(`Debug session ${sessionId} failed during execution:`, err);
-      // Clean up registry if mother agent fails during execution
-      processRegistry.delete(sessionId);
-    }).finally(() => {
-      // Optional: Could also remove from registry on normal completion,
-      // but cancel needs to handle the case where it's still running.
-      // For now, only removing on error/cancel.
-      // console.log(`Mother agent promise settled for session ${sessionId}.`); // Removed internal log
-    });
-
-    // Return session ID immediately
-    return {
-      content: [{
-        type: "text",
-        text: sessionId
-      }]
-    };
-  }
-);
-
-// Register check tool - gets status of a debug session
-server.tool(
-  "check",
-  "Retrieves the current status of a debugging session, providing a detailed pulse report. For in-progress sessions, the pulse includes the mother agent's current stage in the OODA loop, running scenario agents with their hypotheses, and any preliminary findings. For completed sessions, the pulse contains the final solution with a comprehensive explanation, relevant code changes, and outcome summaries from all scenario agents that contributed to the solution. Use this tool to monitor ongoing progress or retrieve the final validated fix.",
-  {
-    sessionId: z.string().describe("The session ID returned by the start tool when the debugging session was initiated")
-  },
-  async ({ sessionId }, extra) => {
-    try {
-      const sessionDir = await findSessionDir(sessionId);
-      if (!sessionDir) {
-        return {
-          content: [{ 
-            type: "text",
-            text: `Session ${sessionId} not found`
-          }]
-        };
-      }
-
-      // Get time metrics and mother status
-      const logsDir = join(sessionDir, 'logs');
-      const motherLogPath = join(logsDir, 'mother.log');
-      const motherLog = await readFile(motherLogPath, 'utf8');
-      const motherLines = motherLog.split('\n').filter(Boolean);
-
-      if (!motherLines.length) return { content: [{ type: "text", text: 'Session initializing' }] };
-
-      const firstEvent = JSON.parse(motherLines[0]);
-      const durationMs = Date.now() - new Date(firstEvent.timestamp).getTime();
-
-      // Determine status by scanning for solution tag, cancellation, or errors
-      let status = 'in_progress'; // Default status
-      let solutionFoundInScan = false;
-      let lastValidEvent: any = null; // Store the last successfully parsed event
-      // Use module-level terminatedPids set
-
-      for (let i = motherLines.length - 1; i >= 0; i--) {
-        try {
-          const event = JSON.parse(motherLines[i]);
-          if (!lastValidEvent) lastValidEvent = event; // Capture the last valid event
-
-          const content = event.data?.response?.content || event.message || '';
-          
-          // Check for process spawn and termination with comprehensive pattern
-          const SCENARIO_PID_PATTERN = /(?:Spawned|Removed|Terminated|Cancelled) Scenario .* PID (\d+)/;
-          const pidMatch = content.match(SCENARIO_PID_PATTERN);
-          if (pidMatch) {
-            const pid = parseInt(pidMatch[1]);
-            // Check for any termination-related terms
-            if (content.match(/(Removed|Terminated|Cancelled)/)) {
-              terminatedPids.add(pid);
-            }
-          }
-          
-          // Check for session cancellation
-          if (content.includes('Session cancelled by user request')) {
-            status = 'cancelled';
-            break;
-          }
-          
-          // Check for solution
-          if (content.includes('<solution>')) {
-            status = 'completed';
-            solutionFoundInScan = true;
-            break;
-          }
-          
-          // Check for error status
-          if (event.level === 'error') {
-            status = 'failed';
-            // Continue scanning for potential solution or cancellation
-          }
-        } catch (e) {
-          // Skip invalid JSON lines
-          continue;
-        }
-      }
-
-      // If status is still 'in_progress' after scan, check the last valid event's level
-      if (status === 'in_progress' && lastValidEvent && lastValidEvent.level === 'error') {
-        status = 'failed';
-      }
-
-      // Helper functions for PID mapping and status
-      function buildScenarioPIDMapping(motherLines: string[]): Map<string, number> {
-        const mapping = new Map<string, number>();
-        for (const line of motherLines) {
-          try {
-            const event = JSON.parse(line);
-            const message = event.message || '';
-            const matches = message.match(/Spawned Scenario ([^ ]+) with PID (\d+)/);
-            if (matches) {
-              const [_, scenarioId, pidStr] = matches;
-              mapping.set(scenarioId, parseInt(pidStr));
-            }
-          } catch (e) {
-            continue;
-          }
-        }
-        return mapping;
-      }
-
-      function getScenarioStatus(scenarioId: string, pidMapping: Map<string, number>): string {
-        const pid = pidMapping.get(scenarioId);
-        if (!pid) return 'Unknown';
-        return terminatedPids.has(pid) ? 'Terminated' : 'Running';
-      }
-
-      // Build PID mapping from mother log
-      const pidMapping = buildScenarioPIDMapping(motherLines);
-
-      // Count scenario statuses
-      const reportsDir = join(sessionDir, 'reports');
-      const scenarioLogs = await readdir(logsDir);
-      const reportFiles = await readdir(reportsDir);
-      
-      // Count scenarios by status
-      let runningCount = 0;
-      let terminatedCount = 0;
-      let reportedCount = reportFiles.length;
-
-      // Check each scenario's status using the PID mapping
-      for (const logFile of scenarioLogs.filter(f => f.startsWith('scenario-'))) {
-        const scenarioId = logFile.replace('scenario-', '').replace('.log', '');
-        const status = getScenarioStatus(scenarioId, pidMapping);
-        
-        if (status === 'Terminated') {
-          terminatedCount++;
-        } else if (!reportFiles.includes(scenarioId + '.json')) {
-          runningCount++;
-        }
-      }
-
-      // Build the pulse
-      let pulse = `=== Deebo Session Pulse: ${sessionId} ===\n`;
-      pulse += `Timestamp: ${new Date().toISOString()}\n`;
-      pulse += `Overall Status: ${status}\n`;
-      pulse += `Session Duration: ${Math.floor(durationMs / 1000)}s\n\n`;
-
-      pulse += `--- Mother Agent ---\n`;
-      pulse += `Status: ${status === 'in_progress' ? 'working' : status}\n`;
-      pulse += `Last Activity: ${lastValidEvent ? lastValidEvent.timestamp : 'N/A'}\n`;
-
-      // Update summary line to include terminated count
-      pulse += `--- Scenario Agents (${scenarioLogs.filter(f => f.startsWith('scenario-')).length} Total: ${runningCount} Running, ${terminatedCount} Terminated, ${reportedCount} Reported) ---\n\n`;
-
-      // For completed sessions, find and show solution
-      if (status === 'completed') {
-        // Look for solution in mother log
-        let foundSolution = false;
-        
-        // Scan backwards for efficiency (newer entries more likely to have solution)
-        for (let i = motherLines.length - 1; i >= 0; i--) {
-          try {
-            const line = motherLines[i];
-            const event = JSON.parse(line);
-            const content = event.data?.response?.content || event.message || '';
-            
-            // Check for solution tag in content string
-            if (content.includes('<solution>')) {
-              const match = content.match(/<solution>([\s\S]*?)<\/solution>/);
-              if (match && match[1]) {
-                pulse += `MOTHER SOLUTION:\n`;
-                pulse += `<<<<<<< SOLUTION\n`;
-                pulse += match[1].trim() + '\n';
-                pulse += `======= SOLUTION END >>>>>>>\n\n`;
-                foundSolution = true;
-                break;
-              }
-            }
-          } catch (e) {
-            // Skip invalid JSON lines
-            continue;
-          }
-        }
-        
-        // No solution found message
-        if (!foundSolution) {
-          pulse += `STATUS COMPLETE BUT NO SOLUTION TAG FOUND IN LOGS\n`;
-          pulse += `Check the mother.log file for more details.\n\n`;
-        }
-      } else if (status === 'in_progress' || status === 'failed') {
-        // For in-progress or failed, show last known stage or last message
-        let stageMessage = 'No stage information found.';
-        if (lastValidEvent) { // Use the last valid event captured during status scan
-             stageMessage = lastValidEvent.message || JSON.stringify(lastValidEvent.data); // Show message or data
-             if (lastValidEvent.message && lastValidEvent.message.includes('OODA:')) {
-                 pulse += `Last Stage: ${lastValidEvent.message}\n\n`;
-             } else {
-                 pulse += `Last Log Message: ${stageMessage.substring(0, 100)}${stageMessage.length > 100 ? '...' : ''}\n\n`;
-             }
+    
+        // Initial LLM call
+        await log(sessionId, 'mother', 'debug', 'Sending to LLM', { model: llmConfig.model, provider: llmConfig.provider, messages, repoPath });
+        let replyText = await callLlm(messages, llmConfig);
+        if (!replyText) {
+          // Handle initial LLM failure more gracefully
+          const initFailMsg = 'Initial LLM call returned empty or malformed response. Cannot proceed.';
+          await log(sessionId, 'mother', 'error', initFailMsg, { provider: llmConfig.provider, model: llmConfig.model, repoPath });
+          throw new Error(initFailMsg); // Throw to be caught by outer handler
         } else {
-             pulse += `Last Stage: ${stageMessage}\n\n`;
+          // Add the valid response to messages history
+          messages.push({ role: 'assistant', content: replyText });
+          await log(sessionId, 'mother', 'debug', 'Received from LLM', { response: { content: replyText }, repoPath });
         }
-
-      }
-
-
-      // Process reported scenarios
-      for (const file of reportFiles) {
-        const scenarioId = file.replace('.json', '');
-        
-        const scenarioLogPath = join(logsDir, `scenario-${scenarioId}.log`);
-        let scenarioLog;
-        try {
-          scenarioLog = await readFile(scenarioLogPath, 'utf8');
-        } catch (e) {
-          continue; // Skip if log file doesn't exist
-        }
-        
-        const scenarioLines = scenarioLog.split('\n').filter(Boolean);
-        if (!scenarioLines.length) continue;
-
-        // Get hypothesis - scan once
-        let hypothesis = 'Unknown hypothesis';
-        for (let i = 0; i < scenarioLines.length; i++) {
-          try {
-            const event = JSON.parse(scenarioLines[i]);
-            if (event.data?.hypothesis) {
-              hypothesis = event.data.hypothesis;
-              break;
-            }
-          } catch (e) {
-            continue;
+    
+        // ORIENT: Begin investigation loop
+        await log(sessionId, 'mother', 'info', 'OODA: orient', { repoPath });
+    
+        // Loop while the last reply exists, doesn't contain a valid solution, AND cancellation hasn't been requested
+        while (replyText && !(replyText.includes('<solution>') && replyText.match(/<solution>([\s\S]*?)<\/solution>/)?.[1]?.trim()) && !signal.aborted) {
+          if (Date.now() - startTime > MAX_RUNTIME) {
+            await log(sessionId, 'mother', 'warn', 'Investigation exceeded maximum runtime', { repoPath });
+            throw new Error('Investigation exceeded maximum runtime');
           }
-        }
-
-        pulse += `* Scenario: ${scenarioId}\n`;
-        pulse += `  Status: Reported\n`;
-
-        if (status === 'completed') {
-          // Show summary for completed scenarios in completed sessions
-          try {
-            const reportRaw = await readFile(join(reportsDir, `${scenarioId}.json`), 'utf8');
-            const report = JSON.parse(reportRaw);
-            
-            // Extract key information from report
-            const reportStr = typeof report === 'string' ? report : JSON.stringify(report, null, 2);
-            const lines = reportStr.split('\n');
-            
-            // Find CONFIRMED status and INVESTIGATION section
-            let confirmed = 'Unknown';
-            let investigationLines: string[] = [];
-            let inInvestigation = false;
-            
-            for (let i = 0; i < lines.length; i++) {
-              const line = lines[i].trim();
-              if (line.startsWith('CONFIRMED:')) {
-                confirmed = line.split(':')[1].trim();
-              }
-              if (line === 'INVESTIGATION:') {
-                inInvestigation = true;
-                continue;
-              }
-              if (inInvestigation && line && !line.startsWith('CONCLUSION:')) {
-                investigationLines.push(line);
-              }
-              if (line.startsWith('CONCLUSION:')) {
-                break;
-              }
-            }
-            
-            pulse += `  Outcome Summary:\n`;
-            pulse += `  <<<<<<< OUTCOME ${scenarioId}\n`;
-            pulse += `  HYPOTHESIS: ${hypothesis}\n\n`;
-            pulse += `  CONFIRMED: ${confirmed}\n\n`;
-            if (investigationLines.length > 0) {
-              pulse += `  INVESTIGATION:\n`;
-              pulse += `  ${investigationLines.join('\n  ')}\n`;
-            }
-            pulse += `  ======= OUTCOME ${scenarioId} END >>>>>>>\n`;
-          } catch (e) {
-            const error = e as Error;
-            pulse += `  Error reading report: ${error.message}\n`;
+    
+          // Check for cancellation signal before processing response
+          if (signal.aborted) {
+            await log(sessionId, 'mother', 'info', 'Cancellation signal received, stopping loop.', { repoPath });
+            break; // Exit loop if cancelled
           }
-        }
-
-        pulse += `  (Full report: ${join(reportsDir, `${scenarioId}.json`)})\n\n`;
-      }
-
-      // Process unreported scenarios (either running or terminated without report)
-      const unreportedScenarios = scenarioLogs
-        .filter(f => f.startsWith('scenario-'))
-        .filter(f => !reportFiles.includes(f.replace('scenario-', '').replace('.log', '.json')));
-      
-      for (const file of unreportedScenarios) {
-        const scenarioId = file.replace('scenario-', '').replace('.log', '');
-        
-        let scenarioLog;
-        try {
-          scenarioLog = await readFile(join(logsDir, file), 'utf8');
-        } catch (e) {
-          continue; // Skip if log file doesn't exist
-        }
-        
-        const scenarioLines = scenarioLog.split('\n').filter(Boolean);
-        if (!scenarioLines.length) continue;
-
-        // Get hypothesis and events from scenario log
-        let hypothesis = 'Unknown hypothesis';
-        let firstEvent, lastEvent;
-        
-        try {
-          // Extract hypothesis and events
-          for (const line of scenarioLines) {
-            try {
-              const event = JSON.parse(line);
-              if (event.data?.hypothesis) {
-                hypothesis = event.data.hypothesis;
-              }
-              if (!firstEvent) firstEvent = event;
-              lastEvent = event;
-            } catch (e) {
-              continue;
-            }
+    
+          // Use the latest replyText from the end of the previous loop iteration (or the initial call)
+          const responseText = replyText;
+    
+          // --- Check for Tools and Hypotheses ---
+          const toolCalls = responseText.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
+          const containsHypothesis = responseText.includes('<hypothesis>'); // Check for hypothesis presence
+    
+          let executeToolsThisTurn = false;
+          let processHypothesesThisTurn = false;
+    
+          if (toolCalls.length > 0 && containsHypothesis) {
+              // LLM included both - prioritize executing tools, ignore hypotheses this turn
+              messages.push({
+                  role: 'user',
+                  content: `Instructions conflict: You provided tool calls and hypotheses in the same message. I will execute the tool calls now. Please provide hypotheses ONLY after analyzing the tool results in the next turn.`
+              });
+              executeToolsThisTurn = true; // Signal to execute tools below
+              // DO NOT set processHypothesesThisTurn = true
+              await log(sessionId, 'mother', 'warn', 'LLM provided tools and hypotheses simultaneously. Executing tools, ignoring hypotheses for this turn.', { repoPath });
+    
+          } else if (containsHypothesis) {
+              // Only hypotheses found - process them
+              processHypothesesThisTurn = true; // Signal to process hypotheses below
+              executeToolsThisTurn = false; // Ensure tools aren't run if none were requested
+    
+          } else if (toolCalls.length > 0) {
+               // Only tool calls found - execute them
+               executeToolsThisTurn = true; // Signal to execute tools below
+               processHypothesesThisTurn = false; // Ensure hypotheses aren't processed
           }
-
-          // Calculate runtime and add to pulse
-          const runtime = Math.floor((Date.now() - new Date(firstEvent.timestamp).getTime()) / 1000);
-          pulse += `* Scenario: ${scenarioId}\n`;
-          pulse += `  Status: ${getScenarioStatus(scenarioId, pidMapping)}\n`;
-          pulse += `  Hypothesis: "${hypothesis}"\n`;
-          pulse += `  Runtime: ${runtime}s\n`;
-          pulse += `  Latest Activity: ${lastEvent.message}\n`;
-          pulse += `  (Log: ${join(logsDir, file)})\n\n`;
-        } catch (e) {
-          // Skip scenarios with invalid JSON
-          continue;
-        }
-      }
-
-      pulse += `--- End Session Pulse ---`;
-
-      return {
-        content: [{ 
-          type: "text",
-          text: pulse
-        }]
-      };
-
-    } catch (err) {
-      return {
-        content: [{ 
-          type: "text",
-          text: `Error generating pulse: ${err}`
-        }]
-      };
-    }
-  }
-);
-
-server.tool(
-  "cancel",
-  "Terminates all processes related to a debugging session. This will stop the mother agent and all scenario agents, releasing system resources. Use this when you have your solution or want to abandon the debugging process.",
-  {
-    sessionId: z.string().describe("The session ID returned by the start tool when the debugging session was initiated")
-  },
-  async ({ sessionId }, extra) => {
-    // No need to sanitize ID when using the registry Map key
-    const sessionEntry = processRegistry.get(sessionId);
-
-    if (!sessionEntry) {
-      return {
-        content: [{
-          type: "text",
-          text: `Session ${sessionId} not found in registry. It might have already completed or failed.`
-        }]
-      };
-    }
-
-    const { motherController, scenarioPids } = sessionEntry;
-    let killedScenarios = 0;
-    let failedKills = 0;
-
-    try {
-      // 1. Signal the Mother agent to stop its loop cooperatively
-      // console.log(`Signaling Mother Agent for session ${sessionId} to stop.`); // Removed informational log
-      motherController.abort();
-
-      // 2. Terminate any tracked Scenario agent processes
-      // console.log(`Terminating ${scenarioPids.size} tracked Scenario Agents for session ${sessionId}.`); // Removed informational log
-      for (const pid of scenarioPids) {
-        try {
-          // Use SIGTERM first for graceful shutdown
-          process.kill(pid, 'SIGTERM');
-          killedScenarios++;
-          terminatedPids.add(pid); // Add to terminated set right away
-          // console.log(`Sent SIGTERM to scenario PID ${pid}`); // Removed informational log
-        } catch (err: any) {
-          // Ignore errors if process is already gone (e.g., ESRCH)
-          if (err.code !== 'ESRCH') {
-            // console.warn(`Failed to send SIGTERM to scenario PID ${pid}: ${err.message}`); // Removed console.warn
-            failedKills++;
+          // If neither tools nor hypotheses found, the loop continues to the next LLM call
+    
+    
+          // --- Execute Tools if Flagged ---
+          if (executeToolsThisTurn) {
+              await log(sessionId, 'mother', 'debug', `Executing ${toolCalls.length} tool calls.`, { repoPath });
+              const parsedCalls = toolCalls.map((tc: string) => {
+                // Use try-catch for robust parsing
+                try {
+                  const serverNameMatch = tc.match(/<server_name>(.*?)<\/server_name>/);
+                  if (!serverNameMatch || !serverNameMatch[1]) throw new Error('Missing server_name');
+                  const serverName = serverNameMatch[1].trim(); // Trim whitespace
+                  const server = serverName === 'git-mcp' ? gitClient! : filesystemClient!;
+                  if (!server) throw new Error(`Invalid server_name: ${serverName}`);
+    
+                  const toolMatch = tc.match(/<tool_name>(.*?)<\/tool_name>/);
+                  if (!toolMatch || !toolMatch[1]) throw new Error('Missing tool_name');
+                  const tool = toolMatch[1].trim();
+    
+                  const argsMatch = tc.match(/<arguments>([\s\S]*?)<\/arguments>/); // Use [\s\S]*? for multiline args
+                  if (!argsMatch || !argsMatch[1]) throw new Error('Missing arguments block');
+                  const argsJson = argsMatch[1].trim();
+                  if (!argsJson) throw new Error('Empty arguments block');
+                  const args = JSON.parse(argsJson);
+    
+                  return { server, tool, args };
+                } catch (err) {
+                  log(sessionId, 'mother', 'error', `Failed to parse tool call: ${err instanceof Error ? err.message : String(err)}`, { toolCall: tc, repoPath });
+                  return { error: err instanceof Error ? err.message : String(err) };
+                }
+              });
+    
+              // Process each parsed call
+              for (const parsed of parsedCalls) {
+                if ('error' in parsed) {
+                  messages.push({
+                    role: 'user',
+                    content: `One of your tool calls was malformed and skipped. Error: ${parsed.error}`
+                  });
+                  continue; // Skip this malformed call
+                }
+    
+                try {
+                  await log(sessionId, 'mother', 'debug', `Executing tool: ${parsed.tool}`, { args: parsed.args, repoPath });
+                  const result = await parsed.server.callTool({ name: parsed.tool, arguments: parsed.args });
+                  messages.push({
+                    role: 'user',
+                    content: JSON.stringify(result) // Add tool result to history
+                  });
+                  await log(sessionId, 'mother', 'debug', `Tool result for ${parsed.tool}`, { result: result, repoPath });
+                } catch (err) {
+                  const errorMsg = `Tool call failed for '${parsed.tool}': ${err instanceof Error ? err.message : String(err)}`;
+                  messages.push({
+                    role: 'user',
+                    content: errorMsg // Add tool error to history
+                  });
+                  await log(sessionId, 'mother', 'error', `Tool call execution failed: ${parsed.tool}`, { error: err instanceof Error ? err.message : String(err), repoPath });
+                }
+              }
+              await log(sessionId, 'mother', 'debug', 'Finished executing tools for this turn.', { repoPath });
+          } // End of tool execution block
+    
+    
+          // --- Process Hypotheses and Spawn Scenarios if Flagged ---
+          if (processHypothesesThisTurn) { // Use the flag here
+            await log(sessionId, 'mother', 'debug', 'Processing hypotheses and spawning scenarios.', { repoPath });
+            const hypotheses = [...responseText.matchAll(/<hypothesis>([\s\S]*?)<\/hypothesis>/g)].map(match => match[1].trim());
+    
+            if (hypotheses.length > 0) {
+                 if (useMemoryBank) {
+                   // Log hypotheses to memory bank (consider making this async and not awaiting if performance is key)
+                   await updateMemoryBank(projectId, `==================
+    AUTOMATED HYPOTHESIS RECORD
+    Timestamp: ${new Date().toISOString()}
+    Error: ${error || 'No error provided'}
+    
+    ${hypotheses.map(h => `<hypothesis>${h}</hypothesis>`).join('\n\n')}
+    
+    Context provided by LLM:
+    ${responseText}
+    ==================
+    `, 'activeContext').catch(err => log(sessionId, 'mother', 'error', 'Failed to update memory bank hypothesis record', { error: err }));
+                 }
+    
+                 const scenarioPromises = hypotheses.map(async (hypothesis: string) => {
+                   const scenarioId = `${sessionId}-${scenarioCounter++}`; // Use counter for unique ID
+    
+                   // Create branch first
+                   const branchName = await createScenarioBranch(repoPath, scenarioId);
+    
+                   const scenarioArgs = [ // Define args for spawn
+                     join(DEEBO_ROOT, 'build/scenario-agent.js'),
+                     '--id', scenarioId,
+                     '--session', sessionId,
+                     '--error', error,
+                     '--context', context, // Pass original context or maybe updated? Check requirement.
+                     '--hypothesis', hypothesis,
+                     '--language', language,
+                     '--file', filePath || '',
+                     '--repo', repoPath,
+                     '--branch', branchName
+                   ];
+    
+                   const child = spawn('node', scenarioArgs, {
+                      cwd: repoPath,
+                      env: { ...process.env }
+                   });
+                   let output = '';
+                   const scenarioPid = child.pid; // Capture PID early
+    
+                   if (scenarioPid) {
+                     scenarioPids.add(scenarioPid);
+                     await log(sessionId, 'mother', 'info', `Spawned Scenario ${scenarioId} with PID ${scenarioPid}`, { repoPath, hypothesis, args: scenarioArgs });
+                   } else {
+                     await log(sessionId, 'mother', 'warn', `Spawned Scenario ${scenarioId} but PID was unavailable`, { repoPath, hypothesis, args: scenarioArgs });
+                   }
+    
+                   child.stdout.on('data', data => output += data);
+                   child.stderr.on('data', data => output += data); // Capture stderr too
+    
+                   return new Promise<string>((resolve) => {
+                     let resolved = false;
+    
+                     const cleanupAndResolve = (exitInfo: string) => {
+                       if (resolved) return;
+                       resolved = true;
+                       if (scenarioPid) {
+                         scenarioPids.delete(scenarioPid);
+                         log(sessionId, 'mother', 'debug', `Removed scenario PID ${scenarioPid} from registry`, { repoPath });
+                       }
+                       output += `\n${exitInfo}`; // Append exit info to the captured output
+                       resolve(output); // Resolve with the full output + exit info
+                     };
+    
+                     child.on('exit', (code, signal) => {
+                       cleanupAndResolve(`Scenario ${scenarioId} (PID: ${scenarioPid ?? 'N/A'}) exited with code ${code}, signal ${signal}`);
+                     });
+    
+                     child.on('error', err => {
+                       // Handle spawn errors specifically
+                       const spawnErrorMsg = `Scenario ${scenarioId} (PID: ${scenarioPid ?? 'N/A'}) process spawn error: ${err.message}`;
+                       output += `\n${spawnErrorMsg}`; // Add spawn error to output
+                       cleanupAndResolve(spawnErrorMsg); // Resolve immediately
+                     });
+    
+                      // Capture stream-level errors (don't resolve promise, just log)
+                      child.stdout.on('error', err => { output += `\nScenario ${scenarioId} Stdout error: ${err.message}`; });
+                      child.stderr.on('error', err => { output += `\nScenario ${scenarioId} Stderr error: ${err.message}`; });
+    
+    
+                     const timeoutHandle = setTimeout(() => {
+                       if (!resolved) {
+                         log(sessionId, 'mother', 'warn', `Scenario ${scenarioId} (PID: ${scenarioPid}) timed out after ${SCENARIO_TIMEOUT / 1000}s. Killing...`, { repoPath });
+                         child.kill('SIGTERM'); // Attempt graceful termination first
+                         // Give it a moment, then force kill if needed
+                         setTimeout(() => {
+                             if (!resolved) {
+                                 child.kill('SIGKILL');
+                                 cleanupAndResolve(`Scenario ${scenarioId} (PID: ${scenarioPid}) timed out and was force killed.`);
+                             }
+                         }, 2000); // Wait 2s before SIGKILL
+                       }
+                     }, SCENARIO_TIMEOUT);
+    
+                     // Ensure timeout is cleared if process exits/errors cleanly
+                     child.on('exit', () => clearTimeout(timeoutHandle));
+                     child.on('error', () => clearTimeout(timeoutHandle));
+                   });
+                 });
+    
+                 // Wait for all spawned scenarios for this turn to complete
+                 const scenarioOutputs = await Promise.all(scenarioPromises);
+                 await log(sessionId, 'mother', 'debug', `All ${hypotheses.length} scenarios for this turn completed.`, { repoPath });
+    
+                 // Add combined scenario outputs as a single user message
+                 messages.push({ role: 'user', content: scenarioOutputs.join('\n\n---\n\n') });
+            } else {
+                await log(sessionId, 'mother', 'debug', 'Hypothesis tag found, but no hypotheses extracted.', { repoPath });
+            }
+          } // End of hypothesis processing block
+    
+    
+          // --- Observation Check ---
+          // Check for new observations periodically or based on logic
+          // Example: check every few seconds or after specific events
+          // if (Date.now() - lastObservationCheck > 10000) { // Check every 10s
+              const newObservations = await getAgentObservations(repoPath, sessionId, 'mother');
+              if (newObservations.length > observations.length) {
+                const latestObservations = newObservations.slice(observations.length);
+                messages.push(...latestObservations.map(obs => ({
+                  role: 'user' as const,
+                  content: `Scientific observation: ${obs}`
+                })));
+                observations = newObservations; // Update the baseline observation list
+                await log(sessionId, 'mother', 'debug', `Added ${latestObservations.length} new observations.`, { repoPath });
+              }
+            //   lastObservationCheck = Date.now();
+          // }
+    
+    
+          // --- Prepare for Next LLM Call ---
+          // Check for cancellation signal again before the next LLM call
+          if (signal.aborted) {
+            await log(sessionId, 'mother', 'info', 'Cancellation signal received before next LLM call.', { repoPath });
+            break; // Exit loop if cancelled
+          }
+    
+          // Make next LLM call using the updated message history
+          await log(sessionId, 'mother', 'debug', `Sending message history (${messages.length} items) to LLM`, { model: llmConfig.model, provider: llmConfig.provider, repoPath });
+          replyText = await callLlm(messages, llmConfig); // Update replyText for the next loop iteration
+    
+          if (!replyText) {
+            // Log the failure and let the loop condition handle termination
+            await log(sessionId, 'mother', 'warn', 'Received empty/malformed response from LLM', { provider: llmConfig.provider, model: llmConfig.model, repoPath });
+            // Push a message indicating the failure, maybe helps LLM recover?
+            messages.push({ role: 'user', content: 'INTERNAL_NOTE: Previous LLM call failed to return valid content.' });
           } else {
-            // Process already gone
-            terminatedPids.add(pid); // Still mark as terminated if process is already gone
+            // Add the valid response to messages history for the *next* turn
+            messages.push({ role: 'assistant', content: replyText });
+            await log(sessionId, 'mother', 'debug', 'Received response from LLM', { response: replyText, provider: llmConfig.provider, model: llmConfig.model, repoPath });
           }
+    
+          // Optional delay between cycles
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        } // End of while loop
+    
+        // --- Loop Finished ---
+        // Determine final status based on why the loop ended
+        let finalStatusMessage: string;
+        if (signal.aborted) {
+          finalStatusMessage = 'Session cancelled by user request.';
+          await log(sessionId, 'mother', 'info', finalStatusMessage, { repoPath });
+        } else if (replyText?.includes('<solution>')) {
+          const match = replyText.match(/<solution>([\s\S]*?)<\/solution>/);
+          if (match && match[1].trim()) {
+            finalStatusMessage = 'Solution found or investigation concluded.';
+            await log(sessionId, 'mother', 'info', finalStatusMessage, { repoPath });
+          } else {
+            // Empty solution tag, treat as error
+            finalStatusMessage = 'Loop terminated unexpectedly (empty solution tag)';
+            await log(sessionId, 'mother', 'warn', finalStatusMessage, { repoPath });
+            replyText = finalStatusMessage;
+          }
+        } else {
+          // Loop likely ended due to empty replyText from LLM failure
+          finalStatusMessage = 'Loop terminated unexpectedly (e.g., LLM error).';
+          await log(sessionId, 'mother', 'warn', finalStatusMessage, { repoPath });
+          replyText = finalStatusMessage; // Use status message as final content
         }
+
+        // Structured record at the end
+        if (useMemoryBank) {
+          await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - ${new Date().toISOString()}
+    ${error ? `Initial Error: ${error}` : ''}
+    Final Status: ${finalStatusMessage}
+    ${replyText}
+    Scenarios Spawned: ${scenarioCounter}
+    Duration: ${Math.round((Date.now() - startTime) / 1000)}s`, 'progress').catch(err => log(sessionId, 'mother', 'error', 'Failed to update memory bank progress log', { error: err }));
+        }
+
+        return replyText; // Return the last reply or status
+    
+      } catch (err) {
+         // Catch unexpected errors during setup or within the loop if not handled
+         const caughtError = err instanceof Error ? err : new Error(String(err));
+         // Check if the error was due to cancellation signal during an operation
+          if (signal.aborted) {
+            await log(sessionId, 'mother', 'info', `Operation aborted during execution: ${caughtError.message}`, { repoPath });
+            // Optionally update progress log for aborted state
+            if (useMemoryBank) {
+              await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - ABORTED - ${new Date().toISOString()}\nError during abort: ${caughtError.message}`, 'progress').catch(logErr => console.error("Mem bank log fail on abort:", logErr));
+            }
+            return 'Session cancelled during operation.'; // Return specific cancellation message
+          } else {
+            // Log and record other errors
+            await log(sessionId, 'mother', 'error', `Mother agent failed: ${caughtError.message}`, { repoPath, stack: caughtError.stack });
+            if (useMemoryBank) {
+              await updateMemoryBank(projectId, `\n## Debug Session ${sessionId} - FAILED - ${new Date().toISOString()}\nError: ${caughtError.message}\nStack: ${caughtError.stack}`, 'progress').catch(logErr => console.error("Mem bank log fail on error:", logErr));
+            }
+            throw caughtError; // Re-throw unexpected errors
+          }
+      } finally {
+          // Ensure any remaining scenario PIDs are cleaned up if the mother agent exits unexpectedly
+          if (scenarioPids.size > 0) {
+            await log(sessionId, 'mother', 'warn', `Mother agent exiting unexpectedly with ${scenarioPids.size} scenario PIDs still in registry. Attempting cleanup.`, { repoPath, pids: Array.from(scenarioPids) });
+            for (const pid of scenarioPids) {
+                 try { process.kill(pid, 'SIGTERM'); } catch (e) { /* ignore errors if process already gone */ }
+            }
+             // Give a moment then force kill
+             await new Promise(resolve => setTimeout(resolve, 1000));
+             for (const pid of scenarioPids) {
+                 try { process.kill(pid, 'SIGKILL'); } catch (e) { /* ignore */ }
+             }
+             scenarioPids.clear(); // Clear the set
+          }
       }
-
-      // Optional: Add a short delay and SIGKILL survivors if needed.
-      // For simplicity, we'll rely on SIGTERM for now.
-
-      // 3. Clean up the registry entry *after* attempting kills
-      processRegistry.delete(sessionId);
-      // console.log(`Removed session ${sessionId} from process registry.`); // Removed informational log
-
-      return {
-          content: [{
-            type: "text",
-            text: `Cancellation request sent for session ${sessionId}:\n` +
-                  `- Mother agent signaled to stop.\n` +
-                  `- Targeted ${killedScenarios} scenario processes (includes already exited).\n` +
-                  `- ${failedKills} termination signals failed (excluding already exited).`
-          }]
-        };
-
-      } catch (err: any) {
-        // Handle potential errors during the cancellation process itself
-        const errorMessage = err.message || String(err);
-        // console.error(`Error during cancellation for session ${sessionId}: ${errorMessage}`); // Removed console.error
-        // Attempt to clean up registry even if cancellation had issues
-        processRegistry.delete(sessionId); // Ensure cleanup
-        return {
-          content: [{
-            type: "text",
-            text: `Error during cancellation for session ${sessionId}: ${errorMessage}. Registry entry removed.`
-          }]
-        };
-      }
-    }
-  );
-
-// Register add_observation tool
-server.tool(
-  "add_observation",
-  "Adds an external observation to an agent in the debugging session. This allows other tools or human insights to be incorporated into the ongoing investigation. Observations are logged and considered by the agent in subsequent reasoning steps.",
-  {
-    agentId: z.string(),
-    observation: z.string(),
-    sessionId: z.string()
-  },
-  async ({ agentId, observation, sessionId }, extra) => {
-    try {
-      // Get session directory
-      const sessionDir = await findSessionDir(sessionId);
-      if (!sessionDir) {
-        throw new Error('Session not found');
-      }
-
-      // Get repoPath from agent log
-      const logFile = join(sessionDir, 'logs', `${agentId}.log`);
-      const agentLog = await readFile(logFile, 'utf8');
-      const firstLine = agentLog.split('\n')[0];
-      const firstEvent = JSON.parse(firstLine);
-      const repoPath = firstEvent.data?.repoPath;
-
-      if (!repoPath) {
-        throw new Error('Could not find repoPath in agent log');
-      }
-
-      await writeObservation(repoPath, sessionId, agentId, observation);
-      return {
-        content: [{
-          type: "text",
-          text: "Observation logged"
-        }]
-      };
-    } catch (err) {
-      throw new Error(`Observation write failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-);
-
-// Connect transport
-const transport = new StdioServerTransport();
-await server.connect(transport);
+    } // End of runMotherAgent
 
 === src/scenario-agent.ts ===
 
+// src/scenario-agent.ts
+
 import { log } from './util/logger.js';
 import { connectRequiredTools } from './util/mcp.js';
-import { writeReport } from './util/reports.js';  // System infrastructure for capturing output
-// import OpenAI from 'openai'; // Removed
-import { ChatCompletionMessageParam, ChatCompletionMessage } from 'openai/resources/chat/completions';
+import { writeReport } from './util/reports.js';
+import { ChatCompletionMessageParam } from 'openai/resources/chat/completions'; // Keep OpenAI type for structure
 import { writeObservation, getAgentObservations } from './util/observations.js';
-import { callLlm, getScenarioAgentPrompt } from './util/agent-utils.js'; // Updated import
+import { callLlm, getScenarioAgentPrompt } from './util/agent-utils.js';
 
 const MAX_RUNTIME = 15 * 60 * 1000; // 15 minutes
 
@@ -2066,10 +2174,10 @@ Repo: ${args.repoPath}
 Hypothesis: ${args.hypothesis}`
     }];
 
-    // Check for observations
-    const observations = await getAgentObservations(args.repoPath, args.session, `scenario-${args.id}`);
+    // Check for observations (initial load)
+    let observations = await getAgentObservations(args.repoPath, args.session, `scenario-${args.id}`);
     if (observations.length > 0) {
-      messages.push(...observations.map((obs: string) => ({
+      messages.push(...observations.map((obs: string): ChatCompletionMessageParam => ({ // Added explicit type
         role: 'user' as const,
         content: `Scientific observation: ${obs}`
       })));
@@ -2099,7 +2207,7 @@ Hypothesis: ${args.hypothesis}`
     await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to LLM', { model: llmConfig.model, provider: llmConfig.provider, messages, repoPath: args.repoPath });
     let replyText = await callLlm(messages, llmConfig);
     if (!replyText) {
-      await log(args.session, `scenario-${args.id}`, 'warn', 'Received empty/malformed response from LLM', { repoPath: args.repoPath });
+      await log(args.session, `scenario-${args.id}`, 'warn', 'Received empty/malformed response from LLM on initial call', { repoPath: args.repoPath });
       // Exit if the first call fails, as there's no response to process
       await writeReport(args.repoPath, args.session, args.id, 'Initial LLM call returned empty response.');
       console.log('Initial LLM call returned empty response.');
@@ -2109,1018 +2217,191 @@ Hypothesis: ${args.hypothesis}`
       await log(args.session, `scenario-${args.id}`, 'debug', 'Received from LLM', { response: { content: replyText }, repoPath: args.repoPath });
     }
 
+    // --- Main Investigation Loop ---
     while (true) {
       if (Date.now() - startTime > MAX_RUNTIME) {
-        await writeReport(args.repoPath, args.session, args.id, 'Investigation exceeded maximum runtime');
-        console.log('Investigation exceeded maximum runtime');
+        const timeoutMsg = 'Investigation exceeded maximum runtime';
+        await log(args.session, `scenario-${args.id}`, 'warn', timeoutMsg, { repoPath: args.repoPath });
+        await writeReport(args.repoPath, args.session, args.id, timeoutMsg);
+        console.log(timeoutMsg);
         process.exit(1);
       }
 
-      // The assistant's response (replyText) is already added to messages history
-      const responseText = replyText;
+      // Get the latest assistant response
+      const responseText = replyText; // replyText holds the latest LLM response
 
-      // Check for report FIRST - if found, write it and exit immediately
-      // No need to process tool calls if we have a report since they would only be used in the next turn
-      const reportMatch = responseText.match(/<report>\s*([\s\S]*?)<\/report>/i);
-      if (reportMatch) {
-        const reportText = reportMatch[1].trim();
-        await writeReport(args.repoPath, args.session, args.id, reportText);
-        console.log(reportText);
-        process.exit(0);
-      }
-
-      // Only process tool calls if we don't have a report
+      // --- Check for Report and Tool Calls ---
       const toolCalls = responseText.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
+      const reportMatch = responseText.match(/<report>\s*([\s\S]*?)<\/report>/i);
 
-      const parsedCalls = toolCalls.map((tc: string) => {
-        try {
-          const server = tc.includes('git-mcp') ? gitClient! : filesystemClient!;
-          const toolMatch = tc.match(/<tool_name>(.*?)<\/tool_name>/);
-          if (!toolMatch || !toolMatch[1]) throw new Error('Missing tool');
-          const tool = toolMatch[1]!;
+      let executeToolsThisTurn = false;
+      let exitThisTurn = false;
 
-          const argsMatch = tc.match(/<arguments>(.*?)<\/arguments>/s);
-          if (!argsMatch || !argsMatch[1]) throw new Error('Missing arguments');
-          const args = JSON.parse(argsMatch[1]!);
-
-          return { server, tool, args };
-        } catch (err) {
-          return { error: err instanceof Error ? err.message : String(err) };
-        }
-      });
-
-      // Abort if *any* call fails to parse
-      const invalid = parsedCalls.find(p => 'error' in p);
-      if (invalid) {
-        messages.push({
-          role: 'user',
-          content: `One of your tool calls was malformed and none were run. Error: ${invalid.error}`
-        });
-        // No need to clear assistantResponse here, just continue the loop
-        continue;
-      }
-
-      const validCalls = parsedCalls as { server: NonNullable<typeof gitClient>, tool: string, args: any }[];
-
-      // Only now, execute each one
-      for (const { server, tool, args } of validCalls) {
-        if (tool === 'git_create_branch') {
+      if (reportMatch && toolCalls.length > 0) {
+          // LLM included both - prioritize executing tools, ignore report this turn
           messages.push({
-            role: 'user',
-            content: 'git_create_branch is not allowed — the branch was already created by the mother agent.'
+              role: 'user',
+              content: `Instructions conflict: You provided tool calls and a report in the same message. I will execute the tool calls now. Provide the report ONLY after analyzing the tool results in the next turn.`
           });
-          continue;
-        }
+          executeToolsThisTurn = true; // Signal to execute tools below
+          await log(args.session, `scenario-${args.id}`, 'warn', 'LLM provided tools and report simultaneously. Executing tools, ignoring report.', { repoPath: args.repoPath });
 
-        try {
-            const result = await server.callTool({ name: tool, arguments: args });
-            messages.push({
-              role: 'user',
-              content: JSON.stringify(result)
-            });
-        } catch (toolErr) {
-            messages.push({
-              role: 'user',
-              content: `Tool call failed: ${toolErr instanceof Error ? toolErr.message : String(toolErr)}`
-            });
-        }
+      } else if (reportMatch) {
+          // Only report found - process it and exit
+          const reportText = reportMatch[1].trim();
+          await log(args.session, `scenario-${args.id}`, 'info', 'Report found. Writing report and exiting.', { repoPath: args.repoPath });
+          await writeReport(args.repoPath, args.session, args.id, reportText);
+          console.log(reportText); // Print report to stdout for mother agent
+          exitThisTurn = true; // Signal to exit loop cleanly
+
+      } else if (toolCalls.length > 0) {
+           // Only tool calls found - execute them
+           executeToolsThisTurn = true; // Signal to execute tools below
+           await log(args.session, `scenario-${args.id}`, 'debug', `Found ${toolCalls.length} tool calls to execute.`, { repoPath: args.repoPath });
+      }
+      // If neither tools nor report found, the loop continues to the next LLM call
+
+      // Exit now if a report-only response was processed
+      if (exitThisTurn) {
+           process.exit(0);
       }
 
-      // Continue the conversation
-      // Check for new observations before each Claude call
+      // --- Execute Tools if Flagged ---
+      if (executeToolsThisTurn) {
+        const parsedCalls = toolCalls.map((tc: string) => {
+          try {
+            const serverNameMatch = tc.match(/<server_name>(.*?)<\/server_name>/);
+            if (!serverNameMatch || !serverNameMatch[1]) throw new Error('Missing server_name');
+            const serverName = serverNameMatch[1];
+            const server = serverName === 'git-mcp' ? gitClient! : filesystemClient!; // Select client based on name
+            if (!server) throw new Error(`Invalid server_name: ${serverName}`);
+
+            const toolMatch = tc.match(/<tool_name>(.*?)<\/tool_name>/);
+            if (!toolMatch || !toolMatch[1]) throw new Error('Missing tool_name');
+            const tool = toolMatch[1]!;
+
+            const argsMatch = tc.match(/<arguments>(.*?)<\/arguments>/s);
+            if (!argsMatch || !argsMatch[1]) throw new Error('Missing arguments');
+            const args = JSON.parse(argsMatch[1]!);
+
+            return { server, tool, args };
+          } catch (err) {
+            const errorMsg = err instanceof Error ? err.message : String(err);
+            log(args.session, `scenario-${args.id}`, 'error', `Failed to parse tool call: ${errorMsg}`, { toolCall: tc, repoPath: args.repoPath });
+            return { error: errorMsg }; // Return error object for specific call
+          }
+        });
+
+        // Process each parsed call - add results or errors back to messages
+        let toolCallFailed = false;
+        for (const parsed of parsedCalls) {
+          if ('error' in parsed) {
+            messages.push({
+              role: 'user',
+              content: `Tool call parsing failed: ${parsed.error}`
+            });
+            toolCallFailed = true; // Mark failure, but continue processing other calls if needed, or let LLM handle it next turn
+            continue; // Skip execution for this malformed call
+          }
+
+          // Prevent disallowed tools
+          if (parsed.tool === 'git_create_branch') {
+              messages.push({
+                role: 'user',
+                content: 'Error: Tool call `git_create_branch` is not allowed. The branch was already created by the mother agent.'
+              });
+              await log(args.session, `scenario-${args.id}`, 'warn', `Attempted disallowed tool call: ${parsed.tool}`, { repoPath: args.repoPath });
+              continue; // Skip this specific call
+          }
+
+          try {
+              await log(args.session, `scenario-${args.id}`, 'debug', `Executing tool: ${parsed.tool}`, { args: parsed.args, repoPath: args.repoPath });
+              const result = await parsed.server.callTool({ name: parsed.tool, arguments: parsed.args });
+              messages.push({
+                role: 'user',
+                content: JSON.stringify(result) // Tool results are added as user messages
+              });
+              await log(args.session, `scenario-${args.id}`, 'debug', `Tool result for ${parsed.tool}`, { result: result, repoPath: args.repoPath });
+          } catch (toolErr) {
+              const errorMsg = toolErr instanceof Error ? toolErr.message : String(toolErr);
+              messages.push({
+                role: 'user',
+                content: `Tool call failed for '${parsed.tool}': ${errorMsg}`
+              });
+              await log(args.session, `scenario-${args.id}`, 'error', `Tool call execution failed: ${parsed.tool}`, { error: errorMsg, repoPath: args.repoPath });
+              toolCallFailed = true; // Mark failure
+          }
+        }
+        // Decide if we should immediately ask LLM again after tool failure, or let the loop naturally continue.
+        // Current logic lets loop continue, LLM will see the error messages.
+      }
+
+      // --- Check for New Observations ---
       const newObservations = await getAgentObservations(args.repoPath, args.session, `scenario-${args.id}`);
       if (newObservations.length > observations.length) {
         const latestObservations = newObservations.slice(observations.length);
         messages.push(...latestObservations.map((obs: string): ChatCompletionMessageParam => ({
-          role: 'user', // No 'as const' needed here
+          role: 'user',
           content: `Scientific observation: ${obs}`
         })));
-        // Update the baseline observations count after processing
-        // This was the bug in the previous attempt - it needs to be updated *outside* the if block
-        // observations = newObservations; // Let's remove this line as it wasn't in the original and might be incorrect logic introduced by me. The original logic only checked length difference.
+        observations = newObservations; // Update the baseline observation list
+        await log(args.session, `scenario-${args.id}`, 'debug', `Added ${latestObservations.length} new observations to context.`, { repoPath: args.repoPath });
       }
 
-      // Make next LLM call
-      await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to LLM', { model: llmConfig.model, provider: llmConfig.provider, messages, repoPath: args.repoPath });
-      replyText = await callLlm(messages, llmConfig); // Update replyText
+      // --- Make Next LLM Call ---
+      await log(args.session, `scenario-${args.id}`, 'debug', `Sending message history (${messages.length} items) to LLM`, { model: llmConfig.model, provider: llmConfig.provider, repoPath: args.repoPath });
+      replyText = await callLlm(messages, llmConfig); // Update replyText for the next loop iteration
       if (!replyText) {
-        await log(args.session, `scenario-${args.id}`, 'warn', 'Received empty/malformed response from LLM', { provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
-        // If the LLM fails mid-conversation, write a report and exit
-        await writeReport(args.repoPath, args.session, args.id, 'LLM returned empty response mid-investigation.');
-        console.log('LLM returned empty response mid-investigation.');
+        // LLM failed mid-conversation
+        const errorMsg = 'LLM returned empty response mid-investigation.';
+        await log(args.session, `scenario-${args.id}`, 'error', errorMsg, { provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
+        await writeReport(args.repoPath, args.session, args.id, errorMsg);
+        console.log(errorMsg);
         process.exit(1);
       } else {
+        // Add the valid response to messages history for the *next* turn
         messages.push({ role: 'assistant', content: replyText });
-        await log(args.session, `scenario-${args.id}`, 'debug', 'Received from LLM', { response: { content: replyText }, provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
+        await log(args.session, `scenario-${args.id}`, 'debug', 'Received response from LLM', { responseLength: replyText.length, provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
       }
 
+      // Small delay before next iteration (optional)
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
   } catch (error) {
-    const errorText = error instanceof Error ? error.message : String(error);
-    await writeReport(args.repoPath, args.session, args.id, `SCENARIO ERROR: ${errorText}`);
-    console.log(`SCENARIO ERROR: ${errorText}`);
+    // Catch unexpected errors during setup or within the loop if not handled
+    const errorText = error instanceof Error ? `${error.message}${error.stack ? `\nStack: ${error.stack}` : ''}` : String(error);
+    await log(args.session, `scenario-${args.id}`, 'error', `Unhandled scenario error: ${errorText}`, { repoPath: args.repoPath });
+    await writeReport(args.repoPath, args.session, args.id, `SCENARIO FAILED UNEXPECTEDLY: ${errorText}`);
+    console.error(`SCENARIO FAILED UNEXPECTEDLY: ${errorText}`); // Log error to stderr as well
     process.exit(1);
   }
 }
 
-// Parse args and run
-const args = parseArgs(process.argv);
-runScenarioAgent(args).catch(err => {
-  const errorText = err instanceof Error ? err.message : String(err);
-  console.log(`SCENARIO ERROR: ${errorText}`);
-  process.exit(1);
-});
-
-=== packages/deebo-setup/src/utils.ts ===
-
-import { homedir } from 'os';
-import { join } from 'path';
-import { access, mkdir, readFile, writeFile } from 'fs/promises';
-import { McpConfig, SetupConfig } from './types.js';
-import chalk from 'chalk';
-import { simpleGit as createGit } from 'simple-git';
-import inquirer from 'inquirer';
-
-export const DEEBO_REPO = 'https://github.com/snagasuri/deebo-prototype.git';
-
-export async function checkPrerequisites(): Promise<void> {
-  // Check Node version
-  // new (allow ANY major ≥18)
-  const nodeVersion = process.version;                     // e.g. "v23.11.0"
-  const major = Number(nodeVersion.slice(1).split('.')[0]); // 23
-
-  if (major >= 18) {
-    console.log(chalk.green('✔ Node version:', nodeVersion));
-  } else {
-    throw new Error(`Node.js v18+ is required (found ${nodeVersion})`);
-  }
-
-  // Check git
-  try {
-    const git = createGit();
-    await git.version();
-    console.log(chalk.green('✔ git found'));
-  } catch {
-    throw new Error('git is required but not found');
-  }
-}
-
-export async function findConfigPaths(): Promise<{ cline?: string; claude?: string }> {
-  const home = homedir();
-  const platform = process.platform;
-
-  type Paths = { cline: string; claude: string };
-  let candidates: Paths[] = [];
-
-  if (platform === 'win32') {
-    // Standard VS Code
-    candidates.push({
-      cline: join(process.env.APPDATA || '', 'Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
-      claude: join(process.env.APPDATA || '', 'Claude/claude_desktop_config.json'),
-    });
-    // VS Code Insiders
-    candidates.push({
-      cline: join(process.env.APPDATA || '', 'Code - Insiders/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
-      claude: join(process.env.APPDATA || '', 'Claude/claude_desktop_config.json'),
-    });
-  } else if (platform === 'linux') {
-    // Remote‐SSH / WSL
-    candidates.push({
-      cline: join(home, '.vscode-server/data/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
-      claude: join(home, '.vscode-server/data/User/globalStorage/saoudrizwan.claude-dev/settings/claude_desktop_config.json'),
-    });
-    // Local VS Code
-    candidates.push({
-      cline: join(home, '.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
-      claude: join(home, '.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/claude_desktop_config.json'),
-    });
-  } else {
-    // macOS
-    candidates.push({
-      cline: join(home, 'Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
-      claude: join(home, 'Library/Application Support/Claude/claude_desktop_config.json'),
-    });
-  }
-
-  const result: { cline?: string; claude?: string } = {};
-
-  for (const { cline, claude } of candidates) {
-    try {
-      await access(cline);
-      result.cline = cline;
-      console.log(chalk.green(`✔ Cline config found at ${cline}`));
-    } catch {
-      // not found here
-    }
-
-    try {
-      await access(claude);
-      result.claude = claude;
-      console.log(chalk.green(`✔ Claude Desktop config found at ${claude}`));
-    } catch {
-      // not found here
-    }
-
-    // stop as soon as we find something
-    if (result.cline || result.claude) break;
-  }
-
-  if (!result.cline && !result.claude) {
-    throw new Error('No Cline or Claude Desktop configuration found');
-  }
-
-  return result;
-}
-
-export async function setupDeeboDirectory(config: SetupConfig): Promise<void> {
-  let needsCleanup = false;
-
-  try {
-    await access(config.deeboPath);
-    // Directory exists, ask for confirmation
-    const { confirm } = await inquirer.prompt([{
-      type: 'confirm',
-      name: 'confirm',
-      message: 'Deebo is already installed. Update to latest version?',
-      default: true
-    }]);
-
-    if (!confirm) {
-      console.log(chalk.yellow('Installation cancelled.'));
-      process.exit(0);
-    }
-
-    needsCleanup = true;
-  } catch (err) {
-    // Directory doesn't exist, create it
-    await mkdir(config.deeboPath, { recursive: true });
-  }
-
-  // Clean up if needed
-  if (needsCleanup) {
-    const { rm } = await import('fs/promises');
-    await rm(config.deeboPath, { recursive: true, force: true });
-    console.log(chalk.green('✔ Removed existing installation'));
-    await mkdir(config.deeboPath, { recursive: true });
-  }
-
-  console.log(chalk.green('✔ Created Deebo directory'));
-
-  // Clone repository
-  const git = createGit();
-  await git.clone(DEEBO_REPO, config.deeboPath);
-  console.log(chalk.green('✔ Cloned Deebo repository'));
-
-  // Install dependencies
-  const { execSync } = await import('child_process');
-  execSync('npm install', { cwd: config.deeboPath });
-  console.log(chalk.green('✔ Installed dependencies'));
-
-  // Build project
-  execSync('npm run build', { cwd: config.deeboPath });
-  console.log(chalk.green('✔ Built project'));
-}
-
-export async function writeEnvFile(config: SetupConfig): Promise<void> {
-  const envContent = `MOTHER_HOST=${config.motherHost}
-MOTHER_MODEL=${config.motherModel}
-SCENARIO_HOST=${config.scenarioHost}
-SCENARIO_MODEL=${config.scenarioModel}
-${getApiKeyEnvVar(config.motherHost)}=${config.apiKey}
-USE_MEMORY_BANK=true
-NODE_ENV=development`;
-
-  await writeFile(config.envPath, envContent);
-  console.log(chalk.green('✔ Created environment file'));
-}
-
-export async function updateMcpConfig(config: SetupConfig): Promise<void> {
-  const deeboConfig = {
-    autoApprove: [],
-    disabled: false,
-    timeout: 30,
-    command: 'node',
-    args: [
-      '--experimental-specifier-resolution=node',
-      '--experimental-modules',
-      '--max-old-space-size=4096',
-      join(config.deeboPath, 'build/index.js')
-    ],
-    env: {
-      NODE_ENV: 'development',
-      USE_MEMORY_BANK: 'true',
-      MOTHER_HOST: config.motherHost,
-      MOTHER_MODEL: config.motherModel,
-      SCENARIO_HOST: config.scenarioHost,
-      SCENARIO_MODEL: config.scenarioModel,
-      [getApiKeyEnvVar(config.motherHost)]: config.apiKey
-    },
-    transportType: 'stdio'
-  };
-
-  // Update Cline config if available
-  if (config.clineConfigPath) {
-    const clineConfig = JSON.parse(await readFile(config.clineConfigPath, 'utf8')) as McpConfig;
-    clineConfig.mcpServers.deebo = deeboConfig;
-    await writeFile(config.clineConfigPath, JSON.stringify(clineConfig, null, 2));
-    console.log(chalk.green('✔ Updated Cline configuration'));
-  }
-
-  // Update Claude config if available
-  if (config.claudeConfigPath) {
-    const claudeConfig = JSON.parse(await readFile(config.claudeConfigPath, 'utf8')) as McpConfig;
-    claudeConfig.mcpServers.deebo = deeboConfig;
-    await writeFile(config.claudeConfigPath, JSON.stringify(claudeConfig, null, 2));
-    console.log(chalk.green('✔ Updated Claude Desktop configuration'));
-  }
-}
-
-function getDefaultModel(host: string): string {
-  switch (host) {
-    case 'openrouter':
-      return 'anthropic/claude-3.5-sonnet';
-    case 'anthropic':
-      return 'claude-3-sonnet-20240229';
-    case 'gemini':
-      return 'gemini-1.5-pro';
-    default:
-      return 'anthropic/claude-3.5-sonnet';
-  }
-}
-
-function getApiKeyEnvVar(host: string): string {
-  switch (host) {
-    case 'openrouter':
-      return 'OPENROUTER_API_KEY';
-    case 'openai':
-      return 'OPENAI_API_KEY';
-    case 'anthropic':
-      return 'ANTHROPIC_API_KEY';
-    case 'gemini':
-      return 'GEMINI_API_KEY';
-    default:
-      return 'OPENROUTER_API_KEY';
-  }
-}
-
-// Removed the pingInstallation function - implemented directly in index.ts
-
-=== packages/deebo-setup/src/types.ts ===
-
-import { z } from 'zod';
-
-export const LlmHostSchema = z.enum(['openrouter', 'anthropic', 'gemini']);
-export type LlmHost = z.infer<typeof LlmHostSchema>;
-
-export const McpConfigSchema = z.object({
-  mcpServers: z.record(z.object({
-    autoApprove: z.array(z.string()),
-    disabled: z.boolean(),
-    timeout: z.number(),
-    command: z.string(),
-    args: z.array(z.string()),
-    env: z.record(z.string()),
-    transportType: z.string()
-  }))
-});
-
-export type McpConfig = z.infer<typeof McpConfigSchema>;
-
-export const LlmModelSchema = z.string();
-export type LlmModel = z.infer<typeof LlmModelSchema>;
-
-export interface SetupConfig {
-  deeboPath: string;
-  envPath: string;
-  motherHost: LlmHost;
-  motherModel: LlmModel;
-  scenarioHost: LlmHost;
-  scenarioModel: LlmModel;
-  apiKey: string;
-  clineConfigPath?: string;
-  claudeConfigPath?: string;
-}
-
-=== packages/deebo-setup/src/index.ts ===
-
-#!/usr/bin/env node
-import { homedir } from 'os';
-import { join } from 'path';
-import inquirer from 'inquirer';
-import chalk from 'chalk';
-import { LlmHostSchema } from './types.js';
-import {
-  checkPrerequisites,
-  findConfigPaths,
-  setupDeeboDirectory,
-  writeEnvFile,
-  updateMcpConfig
-} from './utils.js';
-
-async function main() {
-  // Check if this is a ping command
-  if (process.argv.length > 2 && process.argv[2] === 'ping') {
-    try {
-      console.log(chalk.blue('Pinging Deebo installation tracker...'));
-      // Simple ping with no extra dependencies or complexity
-      const response = await fetch('https://deebo-active-counter.ramnag2003.workers.dev/ping', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hash: `user-${Date.now()}` })
-      });
-      
-      if (response.ok) {
-        console.log(chalk.green('✓ Successfully pinged Deebo installation tracker'));
-      } else {
-        console.log(chalk.yellow('⚠ Failed to ping installation tracker'));
-      }
-    } catch (error) {
-      console.log(chalk.yellow('⚠ Could not reach installation tracker'));
-    }
-    return;
-  }
-
-  try {
-    // Check prerequisites
-    await checkPrerequisites();
-
-    // Find config paths
-    const configPaths = await findConfigPaths();
-
-    // Get Mother agent configuration
-    const defaultModels: Record<string, string> = {
-      openrouter: 'anthropic/claude-3.5-sonnet',
-      openai: 'gpt-4o',
-      anthropic: 'claude-3-5-sonnet-20241022',
-      gemini: 'gemini-2.5-pro-preview-03-25'
-    };
-
-    // Get Mother agent configuration
-    const { motherHost } = await inquirer.prompt([{
-      type: 'list',
-      name: 'motherHost',
-      message: 'Choose LLM host for Mother agent:',
-      choices: Object.keys(defaultModels)
-    }]);
-
-    const parsedMotherHost = LlmHostSchema.parse(motherHost);
-
-    const { motherModel } = await inquirer.prompt([{
-      type: 'input',
-      name: 'motherModel',
-      message: `Enter model for Mother agent (press Enter for ${defaultModels[parsedMotherHost]}):`,
-      default: defaultModels[parsedMotherHost]
-    }]);
-
-    // Get Scenario agent configuration
-    const { scenarioHost } = await inquirer.prompt([{
-      type: 'list',
-      name: 'scenarioHost',
-      message: 'Choose LLM host for Scenario agents (press Enter to use same as Mother):',
-      choices: Object.keys(defaultModels),
-      default: parsedMotherHost
-    }]);
-
-    const parsedScenarioHost = LlmHostSchema.parse(scenarioHost);
-
-    const { scenarioModel } = await inquirer.prompt([{
-      type: 'input',
-      name: 'scenarioModel',
-      message: `Enter model for Scenario agents (press Enter for ${defaultModels[parsedScenarioHost]}):`,
-      default: defaultModels[parsedScenarioHost]
-    }]);
-
-    // Get API key
-    const { apiKey } = await inquirer.prompt([{
-      type: 'password',
-      name: 'apiKey',
-      message: `Enter your ${motherHost.toUpperCase()}_API_KEY:`
-    }]);
-
-    // Show API key preview
-    console.log(chalk.dim(`API key preview: ${apiKey.substring(0, 8)}...`));
-    const { confirmKey } = await inquirer.prompt([{
-      type: 'confirm',
-      name: 'confirmKey',
-      message: 'Is this API key correct?',
-      default: true
-    }]);
-
-    if (!confirmKey) {
-      throw new Error('API key confirmation failed. Please try again.');
-    }
-
-    // Setup paths
-    const home = homedir();
-    const deeboPath = join(home, '.deebo');
-    const envPath = join(deeboPath, '.env');
-
-    // Create config object
-    const config = {
-      deeboPath,
-      envPath,
-      motherHost: parsedMotherHost,
-      motherModel,
-      scenarioHost: parsedScenarioHost,
-      scenarioModel,
-      apiKey,
-      clineConfigPath: configPaths.cline,
-      claudeConfigPath: configPaths.claude
-    };
-
-    // Setup Deebo
-    await setupDeeboDirectory(config);
-    await writeEnvFile(config);
-    await updateMcpConfig(config);
-
-    console.log(chalk.green('\n✔ Deebo installation complete!'));
-    console.log(chalk.blue('\nNext steps:'));
-    console.log('1. Restart your MCP client (Cline/Claude Desktop)');
-    console.log('2. Run npx deebo-doctor to verify the installation (use --verbose for more details)');
-    
-  } catch (error) {
-    console.error(chalk.red('\n✖ Installation failed:'));
-    console.error(error instanceof Error ? error.message : String(error));
+// --- Script Entry Point ---
+try {
+    const args = parseArgs(process.argv.slice(2)); // Pass relevant args, skipping node path and script path
+    runScenarioAgent(args); // No await here, let the async function run
+} catch (err) {
+    // Handle argument parsing errors
+    const errorText = err instanceof Error ? err.message : String(err);
+    console.error(`Scenario agent failed to start due to arg parsing error: ${errorText}`);
+    // Attempt to log if possible, though session info might be missing
+    // log(args.session || 'unknown', `scenario-${args.id || 'unknown'}`, 'error', `Arg parsing failed: ${errorText}`, {}).catch();
     process.exit(1);
-  }
 }
 
-main();
-
-=== packages/deebo-setup/package.json ===
-
-{
-  "name": "deebo-setup",
-  "version": "1.0.81",
-  "description": "System installer for Deebo debugging tool",
-  "type": "module",
-  "bin": {
-    "deebo-setup": "build/index.js"
-  },
-  "scripts": {
-    "build": "tsc",
-    "start": "node build/index.js"
-  },
-  "dependencies": {
-    "chalk": "^5.3.0",
-    "inquirer": "^9.2.16",
-    "simple-git": "^3.22.0",
-    "zod": "^3.22.4"
-  },
-  "devDependencies": {
-    "@types/inquirer": "^9.0.7",
-    "@types/node": "^20.11.28",
-    "typescript": "^5.4.2"
-  }
-}
-
-=== packages/deebo-doctor/src/types.ts ===
-
-export interface CheckResult {
-  name: string;
-  status: 'pass' | 'fail' | 'warn';
-  message: string;
-  details?: string;
-}
-
-export interface DoctorConfig {
-  verbose: boolean;
-  deeboPath: string;
-  logPath?: string;
-}
-
-export interface SystemCheck {
-  name: string;
-  check: (config: DoctorConfig) => Promise<CheckResult>;
-  fix?: (config: DoctorConfig) => Promise<void>;
-}
-
-=== packages/deebo-doctor/src/checks.ts ===
-
-import { CheckResult, DoctorConfig, SystemCheck } from './types.js';
-import { homedir } from 'os';
-import { join } from 'path';
-import { access, readFile } from 'fs/promises';
-import { simpleGit as createGit } from 'simple-git';
-
-export const nodeVersionCheck: SystemCheck = {
-  name: 'Node.js Version',
-  async check() {
-    const version = process.version;
-    if (version.startsWith('v18') || version.startsWith('v20') || version.startsWith('v22')) {
-      return {
-        name: 'Node.js Version',
-        status: 'pass',
-        message: `Node ${version} detected`,
-      };
-    }
-    return {
-      name: 'Node.js Version',
-      status: 'fail',
-      message: `Node.js v18+ required, found ${version}`,
-      details: 'Install Node.js v18 or later from https://nodejs.org'
-    };
-  }
-};
-
-export const gitCheck: SystemCheck = {
-  name: 'Git Installation',
-  async check() {
-    try {
-      const git = createGit();
-      const version = await git.version();
-      return {
-        name: 'Git Installation',
-        status: 'pass',
-        message: `Git ${version} detected`,
-      };
-    } catch {
-      return {
-        name: 'Git Installation',
-        status: 'fail',
-        message: 'Git not found',
-        details: 'Install Git from https://git-scm.com'
-      };
-    }
-  }
-};
-
-export const mcpToolsCheck: SystemCheck = {
-  name: 'MCP Tools',
-  async check() {
-    const results: CheckResult[] = [];
-    
-    // Check git-mcp
-    try {
-      const { execSync } = await import('child_process');
-      execSync('uvx mcp-server-git --help');
-      results.push({
-        name: 'git-mcp',
-        status: 'pass',
-        message: 'git-mcp installed'
-      });
-    } catch {
-      results.push({
-        name: 'git-mcp',
-        status: 'fail',
-        message: 'git-mcp not found',
-        details: 'Install with: uvx mcp-server-git --help'
-      });
-    }
-
-    // Check desktop-commander
-    try {
-      const { execSync } = await import('child_process');
-      execSync('npx @wonderwhy-er/desktop-commander --help 2>/dev/null');
-      results.push({
-        name: 'desktop-commander',
-        status: 'pass',
-        message: 'desktop-commander installed'
-      });
-    } catch {
-      results.push({
-        name: 'desktop-commander',
-        status: 'fail',
-        message: 'desktop-commander not found',
-        details: 'Install with: npx @wonderwhy-er/desktop-commander setup'
-      });
-    }
-
-    // Aggregate results
-    const allPass = results.every(r => r.status === 'pass');
-    return {
-      name: 'MCP Tools',
-      status: allPass ? 'pass' : 'fail',
-      message: allPass ? 'All MCP tools installed' : 'Some MCP tools missing',
-      details: results.map(r => `${r.name}: ${r.message}`).join('\n')
-    };
-  }
-};
-
-export const toolPathsCheck: SystemCheck = {
-  name: 'Tool Paths', 
-  async check() {
-    const results: CheckResult[] = [];
-    const isWindows = process.platform === 'win32';
-    const { execSync } = await import('child_process');
-    
-    // Check npx
-    try {
-      const npxPath = execSync(
-        isWindows ? 'cmd.exe /c where npx.cmd' : 'which npx'
-      ).toString().trim().split('\n')[0]; // Take first path if multiple returned
-      results.push({
-        name: 'npx',
-        status: 'pass',
-        message: 'npx found',
-        details: `Path: ${npxPath}`
-      });
-    } catch {
-      results.push({
-        name: 'npx',
-        status: 'fail',
-        message: 'npx not found',
-        details: 'Install Node.js to get npx'
-      });
-    }
-
-    // Check uvx 
-    try {
-      const uvxPath = execSync(
-        isWindows ? 'cmd.exe /c where uvx.exe' : 'which uvx'
-      ).toString().trim().split('\n')[0]; // Take first path if multiple returned
-      results.push({
-        name: 'uvx',
-        status: 'pass',
-        message: 'uvx found',
-        details: `Path: ${uvxPath}`
-      });
-    } catch {
-      results.push({
-        name: 'uvx',
-        status: 'fail',
-        message: 'uvx not found',
-        details: isWindows ? 'Install uv using pip: pip install uv' : 'Install uv: curl -LsSf https://astral.sh/uv/install.sh | sh'
-      });
-    }
-
-    // Aggregate results
-    const allPass = results.every(r => r.status === 'pass');
-    return {
-      name: 'Tool Paths',
-      status: allPass ? 'pass' : 'fail', 
-      message: allPass ? 'All tool paths found' : 'Some tool paths missing',
-      details: results.map(r => `${r.name}: ${r.details || r.message}`).join('\n')
-    };
-  }
-};
-
-export const configFilesCheck: SystemCheck = {
-  name: 'Configuration Files',
-  async check(config: DoctorConfig) {
-    const home = homedir();
-    const isWindows = process.platform === 'win32';
-    
-    const paths = isWindows ? {
-      cline: join(process.env.APPDATA || '', 'Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
-      claude: join(process.env.APPDATA || '', 'Claude/claude_desktop_config.json'),
-      env: join(config.deeboPath, '.env'),
-      tools: join(config.deeboPath, 'config/tools.json')
-    } : {
-      cline: join(home, 'Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
-      claude: join(home, 'Library/Application Support/Claude/claude_desktop_config.json'),
-      env: join(config.deeboPath, '.env'),
-      tools: join(config.deeboPath, 'config/tools.json')
-    };
-
-    const results: CheckResult[] = [];
-
-    // Check each config file
-    for (const [name, path] of Object.entries(paths)) {
-      try {
-        await access(path);
-        const content = await readFile(path, 'utf8');
-        
-        // Parse JSON if applicable
-        if (name !== 'env') {
-          const json = JSON.parse(content);
-          
-          // Check if Deebo is configured in MCP configs
-          if ((name === 'cline' || name === 'claude') && (!json.mcpServers?.deebo)) {
-            results.push({
-              name,
-              status: 'fail',
-              message: `${name} config exists but Deebo not configured`,
-              details: `Path: ${path}\nAdd Deebo configuration to mcpServers`
-            });
-            continue;
-          }
-
-          // Check tools.json structure
-          if (name === 'tools' && (!json.tools?.desktopCommander || !json.tools?.['git-mcp'])) {
-            results.push({
-              name,
-              status: 'fail',
-              message: `${name} config exists but missing required tools`,
-              details: `Path: ${path}\nMissing one or more required tools: desktopCommander, git-mcp`
-            });
-            continue;
-          }
-        }
-
-        results.push({
-          name,
-          status: 'pass',
-          message: `${name} config found and valid`,
-          details: `Path: ${path}`
-        });
-      } catch {
-        results.push({
-          name,
-          status: 'fail',
-          message: `${name} config not found or invalid`,
-          details: `Expected at: ${path}`
-        });
-      }
-    }
-
-    // Aggregate results
-    const allPass = results.every(r => r.status === 'pass');
-    return {
-      name: 'Configuration Files',
-      status: allPass ? 'pass' : 'fail',
-      message: allPass ? 'All configuration files valid' : 'Some configuration files missing or invalid',
-      details: results.map(r => `${r.name}: ${r.message}\n${r.details || ''}`).join('\n\n')
-    };
-  }
-};
-
-export const apiKeysCheck: SystemCheck = {
-  name: 'API Keys',
-  async check(config: DoctorConfig) {
-    const envPath = join(config.deeboPath, '.env');
-    try {
-      const content = await readFile(envPath, 'utf8');
-      const lines = content.split('\n');
-      const results: CheckResult[] = [];
-
-      // Check each potential API key
-      const keyChecks = {
-        OPENROUTER_API_KEY: 'sk-or-v1-',
-        OPENAI_API_KEY: 'sk-',
-        ANTHROPIC_API_KEY: 'sk-ant-',
-        GEMINI_API_KEY: 'AI'
-      };
-
-      for (const [key, prefix] of Object.entries(keyChecks)) {
-        const line = lines.find(l => l.startsWith(key));
-        if (!line) {
-          results.push({
-            name: key,
-            status: 'warn',
-            message: `${key} not found`
-          });
-          continue;
-        }
-
-        const value = line.split('=')[1]?.trim();
-        if (!value || !value.startsWith(prefix)) {
-          results.push({
-            name: key,
-            status: 'warn',
-            message: `${key} may be invalid`,
-            details: `Expected prefix: ${prefix}`
-          });
-          continue;
-        }
-
-        results.push({
-          name: key,
-          status: 'pass',
-          message: `${key} found and valid`
-        });
-      }
-
-      // Aggregate results
-      const allPass = results.some(r => r.status === 'pass');
-      return {
-        name: 'API Keys',
-        status: allPass ? 'pass' : 'warn',
-        message: allPass ? 'At least one valid API key found' : 'No valid API keys found',
-        details: results.map(r => `${r.name}: ${r.message}`).join('\n')
-      };
-    } catch {
-      return {
-        name: 'API Keys',
-        status: 'fail',
-        message: 'Could not read .env file',
-        details: `Expected at ${envPath}`
-      };
-    }
-  }
-};
-
-export const allChecks = [
-  nodeVersionCheck,
-  gitCheck,
-  toolPathsCheck,
-  mcpToolsCheck,
-  configFilesCheck,
-  apiKeysCheck
-];
-
-=== packages/deebo-doctor/src/index.ts ===
-
-#!/usr/bin/env node
-import { homedir } from 'os';
-import { join } from 'path';
-import chalk from 'chalk';
-import { allChecks } from './checks.js';
-import { DoctorConfig } from './types.js';
-
-async function main() {
-  // Parse arguments
-  const verbose = process.argv.includes('--verbose');
-  const deeboPath = join(homedir(), '.deebo');
-  const logPath = verbose ? join(deeboPath, 'doctor.log') : undefined;
-
-  const config: DoctorConfig = {
-    verbose,
-    deeboPath,
-    logPath
-  };
-
-  console.log(chalk.bold('\nDeebo Doctor - System Health Check\n'));
-
-  // Run all checks
-  let allPassed = true;
-  for (const check of allChecks) {
-    try {
-      const result = await check.check(config);
-      
-      // Print result
-      const icon = result.status === 'pass' ? '✔' : result.status === 'warn' ? '⚠' : '✖';
-      const color = result.status === 'pass' ? chalk.green : result.status === 'warn' ? chalk.yellow : chalk.red;
-      
-      console.log(color(`${icon} ${result.name}: ${result.message}`));
-      
-      if (verbose && result.details) {
-        console.log(chalk.dim(result.details));
-      }
-
-      if (result.status === 'fail') {
-        allPassed = false;
-      }
-    } catch (err) {
-      console.error(chalk.red(`✖ ${check.name}: Error running check`));
-      if (verbose) {
-        console.error(chalk.dim(err));
-      }
-      allPassed = false;
-    }
-  }
-
-  // Print summary
-  console.log('\n' + (allPassed 
-    ? chalk.green('✔ All checks passed!')
-    : chalk.red('✖ Some checks failed. Run with --verbose for more details.')));
-
-  process.exit(allPassed ? 0 : 1);
-}
-
-main().catch(err => {
-  console.error(chalk.red('\n✖ Error running doctor:'), err);
-  process.exit(1);
+// Optional: Add unhandled rejection/exception handlers for more robustness
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Log this? Might be hard without session context.
+  process.exit(1); // Exit on unhandled promise rejection
 });
 
-=== packages/deebo-doctor/package.json ===
-
-{
-  "name": "deebo-doctor",
-  "version": "1.0.8",
-  "description": "Health check tool for Deebo debugging system",
-  "type": "module",
-  "bin": {
-    "deebo-doctor": "build/index.js"
-  },
-  "scripts": {
-    "build": "tsc",
-    "start": "node build/index.js"
-  },
-  "dependencies": {
-    "chalk": "^5.3.0",
-    "inquirer": "^9.2.16",
-    "simple-git": "^3.22.0",
-    "zod": "^3.22.4"
-  },
-  "devDependencies": {
-    "@types/inquirer": "^9.0.7",
-    "@types/node": "^20.11.28",
-    "typescript": "^5.4.2"
-  }
-}
-
-=== config/tools.json ===
-
-{
-  "tools": {
-    "desktopCommander": {
-      "command": "{npxPath}",
-      "args": [
-        "@wonderwhy-er/desktop-commander"
-      ]
-    },
-    "git-mcp": {
-      "command": "{uvxPath}",
-      "args": [
-        "mcp-server-git",
-        "--repository",
-        "{repoPath}"
-      ]
-    }
-  }
-}
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  // Log this?
+  process.exit(1); // Exit on uncaught exception
+});
 === package.json ===
 
 {
