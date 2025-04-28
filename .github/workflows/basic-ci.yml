@@ -34,15 +34,15 @@ jobs:
           node-version: '18'
           cache: 'npm'
 
-      - name: Install dependencies (macOS)
+      - name: Install ripgrep (macOS)
         run: |
           brew install ripgrep
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-
-      - name: Add tools to PATH (macOS)
-        run: |
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           echo "RIPGREP_PATH=$(which rg)" >> $GITHUB_ENV
+
+      - name: Install uv (macOS)
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: Determine tool paths
         id: tool_paths
@@ -69,8 +69,10 @@ jobs:
           echo "DEEBO_NPM_BIN=${NPM_BIN_ESC}" >> $GITHUB_ENV
 
       - name: Install Deebo dependencies
+        env:
+          RIPGREP_PATH: ${{ env.RIPGREP_PATH }}
         run: |
-          npm install --loglevel error
+          npm install --loglevel error --no-optional
 
       - name: Build Deebo
         run: |
@@ -78,8 +80,10 @@ jobs:
 
       - name: Build minimal MCP client
         working-directory: ci/mcp-client
+        env:
+          RIPGREP_PATH: ${{ env.RIPGREP_PATH }}
         run: |
-          npm install --loglevel error
+          npm install --loglevel error --no-optional
           npm run build
 
       - name: Clone task manager fixture repo
