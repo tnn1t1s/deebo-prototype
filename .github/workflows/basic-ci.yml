@@ -12,6 +12,14 @@ jobs:
   basic-test:
     runs-on: macos-latest
     timeout-minutes: 25
+    env:
+      NODE_ENV: development
+      USE_MEMORY_BANK: "true"
+      MOTHER_HOST: openrouter
+      MOTHER_MODEL: anthropic/claude-3.5-sonnet
+      SCENARIO_HOST: openrouter
+      SCENARIO_MODEL: deepseek/deepseek-chat
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
     steps:
       - name: Checkout Deebo code
         uses: actions/checkout@v4
@@ -94,15 +102,6 @@ jobs:
       - name: Run Deebo server and test client (direct tool calls)
         id: deebo_run
         shell: bash
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          CI_LLM_MODEL: "deepseek/deepseek-chat"
-          MOTHER_HOST: "openrouter"
-          MOTHER_MODEL: "deepseek/deepseek-chat"
-          SCENARIO_HOST: "openrouter"
-          SCENARIO_MODEL: "deepseek/deepseek-chat"
-          USE_MEMORY_BANK: "true"
-          NODE_ENV: "development"
         run: |
           set -e
           DEEBO_BUILD_PATH_ABS=$(pwd)/build/index.js
