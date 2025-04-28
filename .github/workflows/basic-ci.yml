@@ -1,18 +1,19 @@
-name: Deebo CI (macOS Only)
+name: Deebo Basic CI (Direct Tool Call)
 
 on:
   push:
-    branches: [master]
+    branches:
+      - master
   pull_request:
-    branches: [master]
+    branches:
+      - master
 
 jobs:
   basic-test:
     runs-on: macos-latest
-    timeout-minutes: 30
-
+    timeout-minutes: 25
     steps:
-      - name: Checkout code
+      - name: Checkout Deebo code
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
@@ -23,49 +24,139 @@ jobs:
           node-version: '18'
           cache: 'npm'
 
-      - name: Install uv and uvx
-        shell: bash
+      - name: Install uv (macOS)
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Install dependencies
+      - name: Add uv to PATH (macOS)
+        run: |
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Determine tool paths
+        id: tool_paths
         shell: bash
         run: |
-          npm install
-          cd ci/mcp-client
-          npm install
+          find_command() {
+            local cmd=$1
+            local where_cmd="which"
+            local found_path=$($where_cmd $cmd 2>/dev/null | head -n 1)
+            echo "$found_path"
+          }
+          NPX_PATH=$(find_command npx)
+          UVX_PATH=$(find_command uvx)
+          NPM_BIN=$(dirname "$NPX_PATH")
+          if [[ -z "$NPX_PATH" || -z "$UVX_PATH" ]]; then
+            echo "Error: Could not find npx or uvx path."
+            exit 1
+          fi
+          NPX_PATH_ESC=$(echo "$NPX_PATH" | sed 's/\\/\\\\/g')
+          UVX_PATH_ESC=$(echo "$UVX_PATH" | sed 's/\\/\\\\/g')
+          NPM_BIN_ESC=$(echo "$NPM_BIN" | sed 's/\\/\\\\/g')
+          echo "DEEBO_NPX_PATH=${NPX_PATH_ESC}" >> $GITHUB_ENV
+          echo "DEEBO_UVX_PATH=${UVX_PATH_ESC}" >> $GITHUB_ENV
+          echo "DEEBO_NPM_BIN=${NPM_BIN_ESC}" >> $GITHUB_ENV
 
-      - name: Build Deebo and MCP client
-        shell: bash
+      - name: Install Deebo dependencies
+        run: |
+          npm install --loglevel error
+
+      - name: Build Deebo
         run: |
           npm run build
-          cd ci/mcp-client
+
+      - name: Build minimal MCP client
+        working-directory: ci/mcp-client
+        run: |
+          npm install --loglevel error
           npm run build
 
-      - name: Clone fixture repo
-        shell: bash
+      - name: Clone task manager fixture repo
         run: |
           rm -rf task-manager-fixture
           git clone https://github.com/snagasuri/task-manager.git task-manager-fixture
 
-      - name: Run CI client
+      - name: Check OpenRouter API key status
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          echo "Checking API key status..."
+          if curl -fsS -G "https://openrouter.ai/api/v1/auth/key" \
+             -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+             -o key_status.json && \
+             jq -e '.data.id' key_status.json > /dev/null; then
+            echo "API key is valid."
+          else
+            echo "Error: API key is invalid."
+            cat key_status.json || echo "No response file."
+            exit 1
+          fi
+
+      - name: Run Deebo server and test client (direct tool calls)
+        id: deebo_run
         shell: bash
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          CI_LLM_MODEL: deepseek/deepseek-chat
+          CI_LLM_MODEL: "deepseek/deepseek-chat"
+          MOTHER_HOST: "openrouter"
+          MOTHER_MODEL: "deepseek/deepseek-chat"
+          SCENARIO_HOST: "openrouter"
+          SCENARIO_MODEL: "deepseek/deepseek-chat"
+          USE_MEMORY_BANK: "true"
+          NODE_ENV: "development"
         run: |
-          # arguments: <path to deebo build> <path to fixture>
-          node ci/mcp-client/build/index.js \
-            build/index.js \
-            $(pwd)/task-manager-fixture
+          set -e
+          DEEBO_BUILD_PATH_ABS=$(pwd)/build/index.js
+          CLIENT_BUILD_PATH_ABS=$(pwd)/ci/mcp-client/build/index.js
+          REPO_FIXTURE_PATH_ABS=$(pwd)/task-manager-fixture
+          rm -rf memory-bank
+          echo "--- Starting Deebo server ---"
+          node --experimental-specifier-resolution=node --experimental-modules "$DEEBO_BUILD_PATH_ABS" &
+          SERVER_PID=$!
+          trap 'echo "--- Cleaning up ---"; kill $SERVER_PID || echo "Server stopped"; rm -rf task-manager-fixture memory-bank' EXIT
+          echo "--- Waiting for server boot (20s) ---"
+          sleep 20
+          echo "--- Running MCP client script ---"
+          CLIENT_OUTPUT_FILE="client_output.log"
+          node "$CLIENT_BUILD_PATH_ABS" "$DEEBO_BUILD_PATH_ABS" "$REPO_FIXTURE_PATH_ABS" | tee $CLIENT_OUTPUT_FILE
+          CLIENT_EXIT_CODE=${PIPESTATUS[0]}
+          if [[ $CLIENT_EXIT_CODE -ne 0 ]]; then
+            echo "Error: MCP client script failed."
+            exit 1
+          fi
+          SESSION_ID=$(grep 'FINAL_SESSION_ID_MARKER:' $CLIENT_OUTPUT_FILE | cut -d':' -f2)
+          if [[ -z "$SESSION_ID" ]]; then
+            SESSION_ID=$(grep '✅ Started session: ' $CLIENT_OUTPUT_FILE | sed 's/✅ Started session: //')
+          fi
+          if [[ -z "$SESSION_ID" ]]; then
+            echo "Error: Could not extract session ID."
+            cat $CLIENT_OUTPUT_FILE
+            exit 1
+          fi
+          echo "Session ID: $SESSION_ID"
+          PROJECT_ID=$(node -p "require('./build/util/sanitize.js').getProjectId('$REPO_FIXTURE_PATH_ABS')")
+          SESS_PATH="memory-bank/$PROJECT_ID/sessions/$SESSION_ID"
+          if [[ ! -d "$SESS_PATH" ]]; then
+            echo "Error: Session directory not found."
+            ls -lR memory-bank
+            exit 1
+          fi
+          LOG_FILE="$SESS_PATH/logs/mother.log"
+          if [[ ! -f "$LOG_FILE" ]]; then
+            echo "Error: Log file not found."
+            exit 1
+          fi
+          LINE_COUNT=$(wc -l < "$LOG_FILE")
+          if [[ $LINE_COUNT -lt 5 ]]; then
+            echo "Error: Log file has $LINE_COUNT lines (expected >= 5)."
+            exit 1
+          fi
+          echo "CI assertion passed."
 
-      - name: Upload logs and memory-bank
-        if: always()
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ci-logs-macos
           path: |
             memory-bank/
-            deebo_server.log
             client_output.log
+          retention-days: 7
