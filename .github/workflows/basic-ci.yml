@@ -83,7 +83,7 @@ jobs:
           if curl -fsS -G "https://openrouter.ai/api/v1/auth/key" \
              -H "Authorization: Bearer $OPENROUTER_API_KEY" \
              -o key_status.json && \
-             jq -e '.data.id' key_status.json > /dev/null; then
+             jq -e '.data.label' key_status.json > /dev/null; then
             echo "API key is valid."
           else
             echo "Error: API key is invalid."
