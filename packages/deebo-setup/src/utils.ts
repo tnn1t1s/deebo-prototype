@@ -30,11 +30,11 @@ export async function checkPrerequisites(): Promise<void> {
   }
 }
 
-export async function findConfigPaths(): Promise<{ cline?: string; claude?: string }> {
+export async function findConfigPaths(): Promise<{ cline?: string; claude?: string; vscode?: string }> {
   const home = homedir();
   const platform = process.platform;
 
-  type Paths = { cline: string; claude: string };
+  type Paths = { cline: string; claude: string; vscode: string };
   let candidates: Paths[] = [];
 
   if (platform === 'win32') {
@@ -42,34 +42,39 @@ export async function findConfigPaths(): Promise<{ cline?: string; claude?: stri
     candidates.push({
       cline: join(process.env.APPDATA || '', 'Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
       claude: join(process.env.APPDATA || '', 'Claude/claude_desktop_config.json'),
+      vscode: join(process.env.APPDATA || '', 'Code/User/settings.json')
     });
     // VS Code Insiders
     candidates.push({
       cline: join(process.env.APPDATA || '', 'Code - Insiders/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
       claude: join(process.env.APPDATA || '', 'Claude/claude_desktop_config.json'),
+      vscode: join(process.env.APPDATA || '', 'Code - Insiders/User/settings.json')
     });
   } else if (platform === 'linux') {
     // Remote‐SSH / WSL
     candidates.push({
       cline: join(home, '.vscode-server/data/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
       claude: join(home, '.vscode-server/data/User/globalStorage/saoudrizwan.claude-dev/settings/claude_desktop_config.json'),
+      vscode: join(home, '.config/Code/User/settings.json')
     });
     // Local VS Code
     candidates.push({
       cline: join(home, '.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
       claude: join(home, '.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/claude_desktop_config.json'),
+      vscode: join(home, '.config/Code/User/settings.json')
     });
   } else {
     // macOS
     candidates.push({
       cline: join(home, 'Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
       claude: join(home, 'Library/Application Support/Claude/claude_desktop_config.json'),
+      vscode: join(home, 'Library/Application Support/Code/User/settings.json')
     });
   }
 
-  const result: { cline?: string; claude?: string } = {};
+  const result: { cline?: string; claude?: string; vscode?: string } = {};
 
-  for (const { cline, claude } of candidates) {
+  for (const { cline, claude, vscode } of candidates) {
     try {
       await access(cline);
       result.cline = cline;
@@ -86,12 +91,20 @@ export async function findConfigPaths(): Promise<{ cline?: string; claude?: stri
       // not found here
     }
 
+    try {
+      await access(vscode);
+      result.vscode = vscode;
+      console.log(chalk.green(`✔ VS Code settings found at ${vscode}`));
+    } catch {
+      // not found here
+    }
+
     // stop as soon as we find something
-    if (result.cline || result.claude) break;
+    if (result.cline || result.claude || result.vscode) break;
   }
 
-  if (!result.cline && !result.claude) {
-    throw new Error('No Cline or Claude Desktop configuration found');
+  if (!result.cline && !result.claude && !result.vscode) {
+    throw new Error('No Cline, Claude Desktop, or VS Code configuration found');
   }
 
   return result;
@@ -198,6 +211,32 @@ export async function updateMcpConfig(config: SetupConfig): Promise<void> {
     await writeFile(config.claudeConfigPath, JSON.stringify(claudeConfig, null, 2));
     console.log(chalk.green('✔ Updated Claude Desktop configuration'));
   }
+
+  // Update VS Code settings if available
+  if (config.vscodePath) {
+    try {
+      let settings = {};
+      try {
+        settings = JSON.parse(await readFile(config.vscodePath, 'utf8'));
+      } catch {
+        // File doesn't exist or is empty, use empty object
+      }
+
+      // Add MCP settings
+      const mcpSettings = settings as Record<string, any>;
+      mcpSettings.mcp = mcpSettings.mcp || {};
+      mcpSettings.mcp.servers = mcpSettings.mcp.servers || {};
+      mcpSettings.mcp.servers.deebo = deeboConfig;
+      mcpSettings['chat.mcp.enabled'] = true;
+
+      await writeFile(config.vscodePath, JSON.stringify(mcpSettings, null, 2));
+      console.log(chalk.green('✔ Updated VS Code settings'));
+    } catch (err) {
+      console.log(chalk.yellow('⚠ Could not update VS Code settings'));
+      console.log(chalk.dim(err instanceof Error ? err.message : String(err)));
+    }
+  }
+
 }
 
 function getDefaultModel(host: string): string {

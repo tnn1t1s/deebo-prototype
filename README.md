@@ -18,17 +18,21 @@ Reach out for a live walkthrough, custom setup support, or to explore early acce
 
 Deebo scales to production codebases, too. Here's [an example of Deebo solving the test53 linearizer failure $100 tinygrad bug bounty](https://github.com/snagasuri/deebo-prototype/tree/master/memory-bank/9bd38e9840d3/sessions/session-1744006973678) by spawning 17 scenario agents and coming up with 2 valid fixes. Check out [progress.md](https://github.com/snagasuri/deebo-prototype/blob/master/memory-bank/9bd38e9840d3/progress.md) for just the solution.
 
-## 🚀 Quick Install (for Cline/Claude Desktop users) 
+## 🚀 Quick Install
 ```bash
 npx deebo-setup
 ```
-That's it! Follow the prompts to configure your API key and you're ready to go.
+That's it! Follow the prompts to configure your API key and you're ready to go. Works with:
+- VS Code Agent Mode
+- Cline
+- Claude Desktop
 
 **show us you're alive!!**
 ```bash
 npx deebo-setup ping
 ```
-## Cursor users: https://cursor.directory/mcp/deebo
+
+**Cursor users: https://cursor.directory/mcp/deebo**
 
 <details>
 <summary>🛠️ Manual Installation (for other setups)</summary>
@@ -101,6 +105,7 @@ If you're not using Cline or Claude Desktop, follow these steps:
 - **Python**: 3.10+ (for git-mcp)
 
 ### Configuration Files
+- **VS Code:** `~/Library/Application Support/Code/User/settings.json`
 - **Cline:** `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json`
 - **Claude Desktop:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 

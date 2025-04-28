@@ -120,7 +120,8 @@ async function main() {
       scenarioModel,
       apiKey,
       clineConfigPath: configPaths.cline,
-      claudeConfigPath: configPaths.claude
+      claudeConfigPath: configPaths.claude,
+      vscodePath: configPaths.vscode
     };
 
     // Setup Deebo
@@ -130,7 +131,7 @@ async function main() {
 
     console.log(chalk.green('\n✔ Deebo installation complete!'));
     console.log(chalk.blue('\nNext steps:'));
-    console.log('1. Restart your MCP client (Cline/Claude Desktop)');
+    console.log('1. Restart your MCP client');
     console.log('2. Run npx deebo-doctor to verify the installation (use --verbose for more details)');
     
   } catch (error) {
