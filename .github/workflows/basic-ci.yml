@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - master
+      - fix-ci-env-vars
   pull_request:
     branches:
       - master
+      - fix-ci-env-vars
 
 jobs:
   basic-test:
@@ -66,7 +68,7 @@ jobs:
 
       - name: Install Deebo dependencies
         run: |
-          npm install --no-optional --ignore-scripts --loglevel error
+          npm install --loglevel error
 
       - name: Build Deebo
         run: |
@@ -75,7 +77,7 @@ jobs:
       - name: Build minimal MCP client
         working-directory: ci/mcp-client
         run: |
-          npm install --no-optional --ignore-scripts --loglevel error
+          npm install --loglevel error
           npm run build
 
       - name: Clone task manager fixture repo
