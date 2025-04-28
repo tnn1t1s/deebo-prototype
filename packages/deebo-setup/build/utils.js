@@ -1,5 +1,5 @@
 import { homedir } from 'os';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { access, mkdir, readFile, writeFile } from 'fs/promises';
 import chalk from 'chalk';
 import { simpleGit as createGit } from 'simple-git';
@@ -29,19 +29,38 @@ export async function checkPrerequisites() {
 export async function findConfigPaths() {
     const home = homedir();
     const platform = process.platform;
+    // Get VS Code settings path based on platform
+    let vscodePath;
+    if (platform === 'win32') {
+        vscodePath = join(process.env.APPDATA || '', 'Code', 'User');
+    }
+    else if (platform === 'linux') {
+        vscodePath = join(home, '.config', 'Code', 'User');
+    }
+    else {
+        vscodePath = join(home, 'Library', 'Application Support', 'Code', 'User');
+    }
+    // Create VS Code settings directory if it doesn't exist
+    try {
+        await mkdir(vscodePath, { recursive: true });
+        console.log(chalk.green('✔ Created VS Code settings directory'));
+    }
+    catch (err) {
+        console.log(chalk.yellow('⚠ Could not create VS Code settings directory'));
+    }
     let candidates = [];
     if (platform === 'win32') {
         // Standard VS Code
         candidates.push({
             cline: join(process.env.APPDATA || '', 'Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
             claude: join(process.env.APPDATA || '', 'Claude/claude_desktop_config.json'),
-            vscode: join(process.env.APPDATA || '', 'Code/User/settings.json')
+            vscode: join(vscodePath, 'settings.json')
         });
         // VS Code Insiders
         candidates.push({
             cline: join(process.env.APPDATA || '', 'Code - Insiders/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
             claude: join(process.env.APPDATA || '', 'Claude/claude_desktop_config.json'),
-            vscode: join(process.env.APPDATA || '', 'Code - Insiders/User/settings.json')
+            vscode: join(vscodePath, 'settings.json')
         });
     }
     else if (platform === 'linux') {
@@ -49,13 +68,13 @@ export async function findConfigPaths() {
         candidates.push({
             cline: join(home, '.vscode-server/data/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
             claude: join(home, '.vscode-server/data/User/globalStorage/saoudrizwan.claude-dev/settings/claude_desktop_config.json'),
-            vscode: join(home, '.config/Code/User/settings.json')
+            vscode: join(vscodePath, 'settings.json')
         });
         // Local VS Code
         candidates.push({
             cline: join(home, '.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
             claude: join(home, '.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/claude_desktop_config.json'),
-            vscode: join(home, '.config/Code/User/settings.json')
+            vscode: join(vscodePath, 'settings.json')
         });
     }
     else {
@@ -63,11 +82,14 @@ export async function findConfigPaths() {
         candidates.push({
             cline: join(home, 'Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
             claude: join(home, 'Library/Application Support/Claude/claude_desktop_config.json'),
-            vscode: join(home, 'Library/Application Support/Code/User/settings.json')
+            vscode: join(vscodePath, 'settings.json')
         });
     }
-    const result = {};
-    for (const { cline, claude, vscode } of candidates) {
+    const result = {
+        // Always include VS Code path since we created the directory
+        vscode: join(vscodePath, 'settings.json')
+    };
+    for (const { cline, claude } of candidates) {
         try {
             await access(cline);
             result.cline = cline;
@@ -84,20 +106,13 @@ export async function findConfigPaths() {
         catch {
             // not found here
         }
-        try {
-            await access(vscode);
-            result.vscode = vscode;
-            console.log(chalk.green(`✔ VS Code settings found at ${vscode}`));
-        }
-        catch {
-            // not found here
-        }
         // stop as soon as we find something
-        if (result.cline || result.claude || result.vscode)
+        if (result.cline || result.claude)
             break;
     }
-    if (!result.cline && !result.claude && !result.vscode) {
-        throw new Error('No Cline, Claude Desktop, or VS Code configuration found');
+    // Don't throw error if only VS Code is found
+    if (!result.cline && !result.claude) {
+        console.log(chalk.yellow('⚠ No Cline or Claude Desktop configuration found'));
     }
     return result;
 }
@@ -206,8 +221,12 @@ export async function updateMcpConfig(config) {
             mcpSettings.mcp.servers = mcpSettings.mcp.servers || {};
             mcpSettings.mcp.servers.deebo = deeboConfig;
             mcpSettings['chat.mcp.enabled'] = true;
+            // Create parent directory if it doesn't exist
+            await mkdir(dirname(config.vscodePath), { recursive: true });
+            // Write settings file
             await writeFile(config.vscodePath, JSON.stringify(mcpSettings, null, 2));
             console.log(chalk.green('✔ Updated VS Code settings'));
+            console.log(chalk.dim(`  Settings file: ${config.vscodePath}`));
         }
         catch (err) {
             console.log(chalk.yellow('⚠ Could not update VS Code settings'));

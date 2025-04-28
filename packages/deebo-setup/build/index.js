@@ -103,6 +103,13 @@ async function main() {
             claudeConfigPath: configPaths.claude,
             vscodePath: configPaths.vscode
         };
+        console.log(chalk.blue('\nDetected configurations:'));
+        if (configPaths.cline)
+            console.log('- Cline');
+        if (configPaths.claude)
+            console.log('- Claude Desktop');
+        if (configPaths.vscode)
+            console.log('- VS Code');
         // Setup Deebo
         await setupDeeboDirectory(config);
         await writeEnvFile(config);
