@@ -72,7 +72,9 @@ jobs:
         env:
           RIPGREP_PATH: ${{ env.RIPGREP_PATH }}
           NPM_CONFIG_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          echo "//api.github.com/:_authToken=${GITHUB_TOKEN}" >> ~/.npmrc
           npm install --loglevel error --no-optional
 
       - name: Build Deebo
@@ -84,7 +86,9 @@ jobs:
         env:
           RIPGREP_PATH: ${{ env.RIPGREP_PATH }}
           NPM_CONFIG_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          echo "//api.github.com/:_authToken=${GITHUB_TOKEN}" >> ~/.npmrc
           npm install --loglevel error --no-optional
           npm run build
 
