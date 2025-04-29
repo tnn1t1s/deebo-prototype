@@ -145,12 +145,21 @@ server.tool("check", "Retrieves the current status of a debugging session, provi
     sessionId: z.string().describe("The session ID returned by the start tool when the debugging session was initiated")
 }, async ({ sessionId }, extra) => {
     try {
+        // track whether we've already shown the hint
+        const entry = processRegistry.get(sessionId) || {};
+        let hintText = "";
+        if (!entry.hasShownCheckHint) {
+            hintText = "hint: wait around 30 seconds on first check\n\n";
+            entry.hasShownCheckHint = true;
+            processRegistry.set(sessionId, entry);
+        }
+        // locate the session dir
         const sessionDir = await findSessionDir(sessionId);
         if (!sessionDir) {
             return {
                 content: [{
                         type: "text",
-                        text: `Session ${sessionId} not found`
+                        text: hintText + `Session ${sessionId} not found`
                     }]
             };
         }
@@ -160,7 +169,7 @@ server.tool("check", "Retrieves the current status of a debugging session, provi
         const motherLog = await readFile(motherLogPath, 'utf8');
         const motherLines = motherLog.split('\n').filter(Boolean);
         if (!motherLines.length)
-            return { content: [{ type: "text", text: 'Session initializing' }] };
+            return { content: [{ type: "text", text: hintText + 'Session initializing' }] };
         const firstEvent = JSON.parse(motherLines[0]);
         const durationMs = Date.now() - new Date(firstEvent.timestamp).getTime();
         // Determine status by scanning for solution tag, cancellation, or errors
@@ -266,23 +275,23 @@ server.tool("check", "Retrieves the current status of a debugging session, provi
                 runningCount++;
             }
         }
+        // build clickable links
+        const projectId = sessionDir.split("/memory-bank/")[1].split("/")[0];
+        const progressMdPath = join(DEEBO_ROOT, "memory-bank", projectId, "progress.md");
+        const progressLink = `file://${progressMdPath}`;
+        const motherLink = `file://${motherLogPath}`;
         // Build the pulse
-        let pulse = `=== Deebo Session Pulse: ${sessionId} ===\n`;
+        let pulse = hintText;
+        pulse += `=== Deebo Session Pulse: ${sessionId} ===\n`;
         pulse += `Timestamp: ${new Date().toISOString()}\n`;
         pulse += `Overall Status: ${status}\n`;
         pulse += `Session Duration: ${Math.floor(durationMs / 1000)}s\n\n`;
         pulse += `--- Mother Agent ---\n`;
         pulse += `Status: ${status === 'in_progress' ? 'working' : status}\n`;
         pulse += `Last Activity: ${lastValidEvent ? lastValidEvent.timestamp : 'N/A'}\n`;
+        pulse += `Progress Log: ${progressLink}\n`;
         if (status === 'completed') {
-            // Get projectId from session directory path
-            const projectId = sessionDir.split('/memory-bank/')[1].split('/')[0];
-            pulse += `Progress Log: ${join(DEEBO_ROOT, 'memory-bank', projectId, 'progress.md')}\n`;
-        }
-        // Update summary line to include terminated count
-        pulse += `--- Scenario Agents (${scenarioLogs.filter(f => f.startsWith('scenario-')).length} Total: ${runningCount} Running, ${terminatedCount} Terminated, ${reportedCount} Reported) ---\n\n`;
-        // For completed sessions, find and show solution
-        if (status === 'completed') {
+            pulse += `Mother Log: ${motherLink}\n\n`;
             // Display solution if found during scan
             if (solutionContent) {
                 pulse += `MOTHER SOLUTION:\n`;
