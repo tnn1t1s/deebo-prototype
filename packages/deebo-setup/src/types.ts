@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const LlmHostSchema = z.enum(['openrouter', 'anthropic', 'gemini']);
+export const LlmHostSchema = z.enum(['openrouter', 'anthropic', 'gemini', 'openai']);
 export type LlmHost = z.infer<typeof LlmHostSchema>;
 
 export const McpConfigSchema = z.object({
@@ -27,7 +27,8 @@ export interface SetupConfig {
   motherModel: LlmModel;
   scenarioHost: LlmHost;
   scenarioModel: LlmModel;
-  apiKey: string;
+  motherApiKey: string;
+  scenarioApiKey?: string; // Optional - defaults to motherApiKey if hosts are same
   clineConfigPath?: string;
   claudeConfigPath?: string;
   vscodePath?: string;
