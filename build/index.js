@@ -393,7 +393,7 @@ server.tool("check", "Retrieves the current status of a debugging session, provi
                     pulse += `  Error reading report: ${error.message}\n`;
                 }
             }
-            pulse += `  (Full report: ${join(reportsDir, `${scenarioId}.json`)})\n\n`;
+            pulse += `  (Full report: file://${join(reportsDir, `${scenarioId}.json`)})\n\n`;
         }
         // Process unreported scenarios (either running or terminated without report)
         const unreportedScenarios = scenarioLogs
@@ -437,7 +437,7 @@ server.tool("check", "Retrieves the current status of a debugging session, provi
                 pulse += `  Hypothesis: "${hypothesis}"\n`;
                 pulse += `  Runtime: ${runtime}s\n`;
                 pulse += `  Latest Activity: ${lastEvent.message}\n`;
-                pulse += `  (Log: ${join(logsDir, file)})\n\n`;
+                pulse += `  (Log: file://${join(logsDir, file)})\n\n`;
             }
             catch (e) {
                 // Skip scenarios with invalid JSON

@@ -220,26 +220,49 @@ server.tool(
       const firstEvent = JSON.parse(motherLines[0]);
       const durationMs = Date.now() - new Date(firstEvent.timestamp).getTime();
 
+      // Add atomic log reading function
+      const readLogAtomically = async (logPath: string, maxRetries = 3): Promise<string> => {
+        for (let i = 0; i < maxRetries; i++) {
+          try {
+            const content = await readFile(logPath, 'utf8');
+            // Verify log entry completeness by checking for valid JSON and tags
+            const lines = content.split('\n').filter(Boolean);
+            if (lines.every(line => {
+              try {
+                JSON.parse(line);
+                return true;
+              } catch {
+                return false;
+              }
+            })) {
+              return content;
+            }
+          } catch (e) {
+            if (i === maxRetries - 1) throw e;
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+        }
+        throw new Error('Failed to read log atomically');
+      };
+
       // Determine status by scanning for solution tag, cancellation, or errors
-      let status = 'in_progress'; // Default status
-      let solutionFoundInScan = false;
-      let lastValidEvent: any = null; // Store the last successfully parsed event
-      let solutionContent = ''; // Store solution content when found
-      // Use module-level terminatedPids set
+      let status = 'in_progress';
+      let lastValidEvent: any = null;
+      let solutionContent = '';
 
-      for (let i = motherLines.length - 1; i >= 0; i--) {
+      // First pass - find completion indicators
+      for (const line of motherLines.reverse()) {
         try {
-          const event = JSON.parse(motherLines[i]);
-          if (!lastValidEvent) lastValidEvent = event; // Capture the last valid event
+          const event = JSON.parse(line);
+          if (!lastValidEvent) lastValidEvent = event;
 
-          const content = event.data?.response || event.data?.response?.content || event.message || '';
+          const content = event.data?.response || event.message || '';
           
           // Check for process spawn and termination with comprehensive pattern
           const SCENARIO_PID_PATTERN = /(?:Spawned|Removed|Terminated|Cancelled) Scenario .* PID (\d+)/;
           const pidMatch = content.match(SCENARIO_PID_PATTERN);
           if (pidMatch) {
             const pid = parseInt(pidMatch[1]);
-            // Check for any termination-related terms
             if (content.match(/(Removed|Terminated|Cancelled)/)) {
               terminatedPids.add(pid);
             }
@@ -251,34 +274,32 @@ server.tool(
             break;
           }
           
-          // Check for solution tag or completion message
-          if (content.includes('<solution>')) {
-            const match = content.match(/<solution>([\s\S]*?)<\/solution>/);
-            if (match && match[1].trim()) {
-              status = 'completed';
-              solutionFoundInScan = true;
-              solutionContent = match[1].trim();
-              // Don't break - keep scanning to gather all info
-            }
-          } else if (content === 'Solution found or investigation concluded.') {
+          // Check for solution tag with improved regex
+          const solutionMatch = content.match(/<solution>\s*([\s\S]*?)\s*<\/solution>/);
+          if (solutionMatch && solutionMatch[1].trim()) {
             status = 'completed';
-            solutionFoundInScan = true;
-            // Don't break - keep scanning to find solution content
+            solutionContent = solutionMatch[1].trim();
+            break;
           }
           
-          // Check for error status
-          if (event.level === 'error') {
+          // Check for completion message
+          if (content === 'Solution found or investigation concluded.') {
+            status = 'completed';
+            // Continue searching for actual solution content
+            continue;
+          }
+          
+          // Only mark as failed if we haven't found a solution
+          if (event.level === 'error' && status !== 'completed') {
             status = 'failed';
-            // Continue scanning for potential solution or cancellation
           }
         } catch (e) {
-          // Skip invalid JSON lines
           continue;
         }
       }
 
       // If status is still 'in_progress' after scan, check the last valid event's level
-      if (status === 'in_progress' && lastValidEvent && lastValidEvent.level === 'error') {
+      if (status === 'in_progress' && lastValidEvent?.level === 'error') {
         status = 'failed';
       }
 
@@ -352,14 +373,13 @@ server.tool(
       
       if (status === 'completed') {
         pulse += `Mother Log: ${motherLink}\n\n`;
-        // Display solution if found during scan
         if (solutionContent) {
           pulse += `MOTHER SOLUTION:\n`;
           pulse += `<<<<<<< SOLUTION\n`;
           pulse += solutionContent + '\n';
           pulse += `======= SOLUTION END >>>>>>>\n\n`;
         } else {
-          pulse += `STATUS COMPLETE BUT NO SOLUTION TAG FOUND IN LOGS\n`;
+          pulse += `STATUS COMPLETE BUT SOLUTION CONTENT NOT FOUND\n`;
           pulse += `Check the mother.log file for more details.\n\n`;
         }
       } else if (status === 'in_progress' || status === 'failed') {
@@ -457,7 +477,7 @@ server.tool(
           }
         }
 
-        pulse += `  (Full report: ${join(reportsDir, `${scenarioId}.json`)})\n\n`;
+        pulse += `  (Full report: file://${join(reportsDir, `${scenarioId}.json`)})\n\n`;
       }
 
       // Process unreported scenarios (either running or terminated without report)
@@ -504,7 +524,7 @@ server.tool(
           pulse += `  Hypothesis: "${hypothesis}"\n`;
           pulse += `  Runtime: ${runtime}s\n`;
           pulse += `  Latest Activity: ${lastEvent.message}\n`;
-          pulse += `  (Log: ${join(logsDir, file)})\n\n`;
+          pulse += `  (Log: file://${join(logsDir, file)})\n\n`;
         } catch (e) {
           // Skip scenarios with invalid JSON
           continue;
