@@ -171,7 +171,7 @@ jobs:
           ls -R memory-bank/${PROJECT_ID}/sessions/${SESSION_ID}
 
       - name: Upload mother log
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: mother-log
           path: memory-bank/${{ env.PROJECT_ID }}/sessions/${{ env.SESSION_ID }}/logs/mother.log
