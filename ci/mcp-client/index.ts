@@ -120,12 +120,20 @@ class MinimalMCPClient {
   }
 
 
-  async forceCheckSession(sessionId: string, maxRetries = 10, delayMs = 15000): Promise<string> {
+  async forceCheckSession(sessionId: string, maxRetries = 10): Promise<string> {
     this.ensureConnected(); // Check connection status
 
-    console.log(`Starting check loop for session ${sessionId} (Max ${maxRetries} attempts, ${delayMs}ms delay)...`);
+    const baseDelay = 1000; // Start with 1 second
+    const maxDelay = 300000; // Cap at 5 minutes
+
+    console.log(`Starting check loop for session ${sessionId} (Max ${maxRetries} attempts with exponential backoff)...`);
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      console.log(`--- Check Attempt ${attempt}/${maxRetries} for ${sessionId} ---`);
+      // Calculate delay with exponential backoff and jitter
+      const delay = Math.min(baseDelay * Math.pow(2, attempt - 1), maxDelay);
+      const jitter = delay * 0.1 * Math.random(); // Add 0-10% jitter
+      const finalDelay = Math.floor(delay + jitter);
+
+      console.log(`--- Check Attempt ${attempt}/${maxRetries} for ${sessionId} (delay: ${finalDelay}ms) ---`);
       let result : any; // Use 'any' type for result
       let text = "";
       try {
@@ -156,10 +164,10 @@ class MinimalMCPClient {
            throw new Error(`Session ${sessionId} not found during check.`);
       }
 
-      // If not the last attempt, wait
+      // If not the last attempt, wait with exponential backoff
       if (attempt < maxRetries) {
-        console.log(`Session not finished, waiting ${delayMs}ms before next check...`);
-        await new Promise((res) => setTimeout(res, delayMs));
+        console.log(`Session not finished, waiting ${finalDelay}ms before next check...`);
+        await new Promise((res) => setTimeout(res, finalDelay));
       } else {
         console.error(`Session ${sessionId} did not finish after ${maxRetries} attempts.`);
         console.error(`Final check response text:\n${text}`);
