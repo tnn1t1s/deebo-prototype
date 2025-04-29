@@ -30,4 +30,5 @@ export interface SetupConfig {
   apiKey: string;
   clineConfigPath?: string;
   claudeConfigPath?: string;
+  vscodePath?: string;
 }

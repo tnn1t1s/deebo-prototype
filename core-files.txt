@@ -2509,6 +2509,7 @@ That's it! Follow the prompts to configure your API key and you're ready to go.
 ```bash
 npx deebo-setup ping
 ```
+## VSCode Agent users: if you have Claude Desktop installed, 
 ## Cursor users: https://cursor.directory/mcp/deebo
 
 <details>
