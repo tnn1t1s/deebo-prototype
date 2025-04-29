@@ -142,7 +142,7 @@ jobs:
 
           # shut down server
           echo "Stopping Deebo server..."
-          kill $SERVER_PID
+          kill $SERVER_PID || true
           wait $SERVER_PID 2>/dev/null || true
 
           # extract IDs and assert

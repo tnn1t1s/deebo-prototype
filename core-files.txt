@@ -192,12 +192,22 @@ server.tool(
   },
   async ({ sessionId }, extra) => {
     try {
+      // track whether we've already shown the hint
+      const entry = processRegistry.get(sessionId) || {} as any;
+      let hintText = "";
+      if (!entry.hasShownCheckHint) {
+        hintText = "hint: wait around 30 seconds on first check\n\n";
+        entry.hasShownCheckHint = true;
+        processRegistry.set(sessionId, entry);
+      }
+
+      // locate the session dir
       const sessionDir = await findSessionDir(sessionId);
       if (!sessionDir) {
         return {
           content: [{ 
             type: "text",
-            text: `Session ${sessionId} not found`
+            text: hintText + `Session ${sessionId} not found`
           }]
         };
       }
@@ -208,31 +218,54 @@ server.tool(
       const motherLog = await readFile(motherLogPath, 'utf8');
       const motherLines = motherLog.split('\n').filter(Boolean);
 
-      if (!motherLines.length) return { content: [{ type: "text", text: 'Session initializing' }] };
+      if (!motherLines.length) return { content: [{ type: "text", text: hintText + 'Session initializing' }] };
 
       const firstEvent = JSON.parse(motherLines[0]);
       const durationMs = Date.now() - new Date(firstEvent.timestamp).getTime();
 
+      // Add atomic log reading function
+      const readLogAtomically = async (logPath: string, maxRetries = 3): Promise<string> => {
+        for (let i = 0; i < maxRetries; i++) {
+          try {
+            const content = await readFile(logPath, 'utf8');
+            // Verify log entry completeness by checking for valid JSON and tags
+            const lines = content.split('\n').filter(Boolean);
+            if (lines.every(line => {
+              try {
+                JSON.parse(line);
+                return true;
+              } catch {
+                return false;
+              }
+            })) {
+              return content;
+            }
+          } catch (e) {
+            if (i === maxRetries - 1) throw e;
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+        }
+        throw new Error('Failed to read log atomically');
+      };
+
       // Determine status by scanning for solution tag, cancellation, or errors
-      let status = 'in_progress'; // Default status
-      let solutionFoundInScan = false;
-      let lastValidEvent: any = null; // Store the last successfully parsed event
-      let solutionContent = ''; // Store solution content when found
-      // Use module-level terminatedPids set
+      let status = 'in_progress';
+      let lastValidEvent: any = null;
+      let solutionContent = '';
 
-      for (let i = motherLines.length - 1; i >= 0; i--) {
+      // First pass - find completion indicators
+      for (const line of motherLines.reverse()) {
         try {
-          const event = JSON.parse(motherLines[i]);
-          if (!lastValidEvent) lastValidEvent = event; // Capture the last valid event
+          const event = JSON.parse(line);
+          if (!lastValidEvent) lastValidEvent = event;
 
-          const content = event.data?.response || event.data?.response?.content || event.message || '';
+          const content = event.data?.response || event.message || '';
           
           // Check for process spawn and termination with comprehensive pattern
           const SCENARIO_PID_PATTERN = /(?:Spawned|Removed|Terminated|Cancelled) Scenario .* PID (\d+)/;
           const pidMatch = content.match(SCENARIO_PID_PATTERN);
           if (pidMatch) {
             const pid = parseInt(pidMatch[1]);
-            // Check for any termination-related terms
             if (content.match(/(Removed|Terminated|Cancelled)/)) {
               terminatedPids.add(pid);
             }
@@ -244,34 +277,32 @@ server.tool(
             break;
           }
           
-          // Check for solution tag or completion message
-          if (content.includes('<solution>')) {
-            const match = content.match(/<solution>([\s\S]*?)<\/solution>/);
-            if (match && match[1].trim()) {
-              status = 'completed';
-              solutionFoundInScan = true;
-              solutionContent = match[1].trim();
-              // Don't break - keep scanning to gather all info
-            }
-          } else if (content === 'Solution found or investigation concluded.') {
+          // Check for solution tag with improved regex
+          const solutionMatch = content.match(/<solution>\s*([\s\S]*?)\s*<\/solution>/);
+          if (solutionMatch && solutionMatch[1].trim()) {
             status = 'completed';
-            solutionFoundInScan = true;
-            // Don't break - keep scanning to find solution content
+            solutionContent = solutionMatch[1].trim();
+            break;
           }
           
-          // Check for error status
-          if (event.level === 'error') {
+          // Check for completion message
+          if (content === 'Solution found or investigation concluded.') {
+            status = 'completed';
+            // Continue searching for actual solution content
+            continue;
+          }
+          
+          // Only mark as failed if we haven't found a solution
+          if (event.level === 'error' && status !== 'completed') {
             status = 'failed';
-            // Continue scanning for potential solution or cancellation
           }
         } catch (e) {
-          // Skip invalid JSON lines
           continue;
         }
       }
 
       // If status is still 'in_progress' after scan, check the last valid event's level
-      if (status === 'in_progress' && lastValidEvent && lastValidEvent.level === 'error') {
+      if (status === 'in_progress' && lastValidEvent?.level === 'error') {
         status = 'failed';
       }
 
@@ -325,8 +356,15 @@ server.tool(
         }
       }
 
+      // build clickable links
+      const projectId = sessionDir.split("/memory-bank/")[1].split("/")[0];
+      const progressMdPath = join(DEEBO_ROOT, "memory-bank", projectId, "progress.md");
+      const progressLink = `file://${progressMdPath}`;
+      const motherLink = `file://${motherLogPath}`;
+
       // Build the pulse
-      let pulse = `=== Deebo Session Pulse: ${sessionId} ===\n`;
+      let pulse = hintText;
+      pulse += `=== Deebo Session Pulse: ${sessionId} ===\n`;
       pulse += `Timestamp: ${new Date().toISOString()}\n`;
       pulse += `Overall Status: ${status}\n`;
       pulse += `Session Duration: ${Math.floor(durationMs / 1000)}s\n\n`;
@@ -334,25 +372,17 @@ server.tool(
       pulse += `--- Mother Agent ---\n`;
       pulse += `Status: ${status === 'in_progress' ? 'working' : status}\n`;
       pulse += `Last Activity: ${lastValidEvent ? lastValidEvent.timestamp : 'N/A'}\n`;
+      pulse += `Progress Log: ${progressLink}\n`;
+      
       if (status === 'completed') {
-        // Get projectId from session directory path
-        const projectId = sessionDir.split('/memory-bank/')[1].split('/')[0];
-        pulse += `Progress Log: ${join(DEEBO_ROOT, 'memory-bank', projectId, 'progress.md')}\n`;
-      }
-
-      // Update summary line to include terminated count
-      pulse += `--- Scenario Agents (${scenarioLogs.filter(f => f.startsWith('scenario-')).length} Total: ${runningCount} Running, ${terminatedCount} Terminated, ${reportedCount} Reported) ---\n\n`;
-
-      // For completed sessions, find and show solution
-      if (status === 'completed') {
-        // Display solution if found during scan
+        pulse += `Mother Log: ${motherLink}\n\n`;
         if (solutionContent) {
           pulse += `MOTHER SOLUTION:\n`;
           pulse += `<<<<<<< SOLUTION\n`;
           pulse += solutionContent + '\n';
           pulse += `======= SOLUTION END >>>>>>>\n\n`;
         } else {
-          pulse += `STATUS COMPLETE BUT NO SOLUTION TAG FOUND IN LOGS\n`;
+          pulse += `STATUS COMPLETE BUT SOLUTION CONTENT NOT FOUND\n`;
           pulse += `Check the mother.log file for more details.\n\n`;
         }
       } else if (status === 'in_progress' || status === 'failed') {
@@ -370,7 +400,6 @@ server.tool(
         }
 
       }
-
 
       // Process reported scenarios
       for (const file of reportFiles) {
@@ -451,7 +480,7 @@ server.tool(
           }
         }
 
-        pulse += `  (Full report: ${join(reportsDir, `${scenarioId}.json`)})\n\n`;
+        pulse += `  (Full report: file://${join(reportsDir, `${scenarioId}.json`)})\n\n`;
       }
 
       // Process unreported scenarios (either running or terminated without report)
@@ -498,7 +527,7 @@ server.tool(
           pulse += `  Hypothesis: "${hypothesis}"\n`;
           pulse += `  Runtime: ${runtime}s\n`;
           pulse += `  Latest Activity: ${lastEvent.message}\n`;
-          pulse += `  (Log: ${join(logsDir, file)})\n\n`;
+          pulse += `  (Log: file://${join(logsDir, file)})\n\n`;
         } catch (e) {
           // Skip scenarios with invalid JSON
           continue;
@@ -507,14 +536,14 @@ server.tool(
 
       pulse += `--- End Session Pulse ---\n\n`;
 
-if (status === 'completed' || status === 'failed') {
-  pulse += `\n=======================================\n`;
-  pulse += `Not the result you were looking for?\n`;
-  pulse += `Start another session and guide Deebo with what you learned!\n`;
-  pulse += `Need a refresher? Check out the Deebo GitHub:\n`;
-  pulse += `https://github.com/snagasuri/deebo-prototype\n`;
-  pulse += `=======================================\n`;
-}
+      if (status === 'completed' || status === 'failed') {
+        pulse += `\n=======================================\n`;
+        pulse += `Not the result you were looking for?\n`;
+        pulse += `Start another session and guide Deebo with what you learned!\n`;
+        pulse += `Need a refresher? Check out the Deebo GitHub:\n`;
+        pulse += `https://github.com/snagasuri/deebo-prototype\n`;
+        pulse += `=======================================\n`;
+      }
 
       return {
         content: [{ 
@@ -619,13 +648,13 @@ server.tool(
 // Register add_observation tool
 server.tool(
   "add_observation",
-  "Adds an external observation to an agent in the debugging session. This allows other tools or human insights to be incorporated into the ongoing investigation. Observations are logged and considered by the agent in subsequent reasoning steps.",
+  "Adds an external observation to an agent in the debugging session. If agentId is not specified, defaults to 'mother'. This allows other tools or human insights to be incorporated into the ongoing investigation. Observations are logged and considered by the agent in subsequent reasoning steps.",
   {
-    agentId: z.string(),
     observation: z.string(),
-    sessionId: z.string()
+    sessionId: z.string(),
+    agentId: z.string().optional()
   },
-  async ({ agentId, observation, sessionId }, extra) => {
+  async ({ observation, sessionId, agentId = 'mother' }, extra) => {
     try {
       // Get session directory
       const sessionDir = await findSessionDir(sessionId);
@@ -703,10 +732,38 @@ export async function connectMcpTool(name: string, toolName: string, sessionId: 
       .replace(/{memoryRoot}/g, memoryRoot)
   );
 
+  // Handle environment variable substitutions
+  if (def.env) {
+    for (const [key, value] of Object.entries(def.env)) {
+      if (typeof value === 'string') {
+        def.env[key] = value
+          .replace(/{ripgrepPath}/g, process.env.RIPGREP_PATH!)
+          .replace(/{repoPath}/g, repoPath)
+          .replace(/{memoryPath}/g, memoryPath)
+          .replace(/{memoryRoot}/g, memoryRoot);
+      }
+    }
+  }
+
   // No shell: spawn the .cmd/binary directly on all platforms
   const options = {};
 
-  const transport = new StdioClientTransport({ command, args, ...options });
+  const transport = new StdioClientTransport({ 
+    command, 
+    args, 
+    ...options,
+    env: {
+      ...process.env, // Inherit all environment variables
+      // Explicitly set critical variables
+      NODE_ENV: process.env.NODE_ENV!,
+      USE_MEMORY_BANK: process.env.USE_MEMORY_BANK!,
+      MOTHER_HOST: process.env.MOTHER_HOST!,
+      MOTHER_MODEL: process.env.MOTHER_MODEL!,
+      SCENARIO_HOST: process.env.SCENARIO_HOST!,
+      SCENARIO_MODEL: process.env.SCENARIO_MODEL!,
+      OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY!
+    }
+  });
   const client = new Client({ name, version: '1.0.0' }, { capabilities: { tools: true } });
   await client.connect(transport);
   return client;
@@ -733,7 +790,10 @@ export async function connectRequiredTools(agentName: string, sessionId: string,
       "command": "{npxPath}",
       "args": [
         "@wonderwhy-er/desktop-commander"
-      ]
+      ],
+      "env": {
+        "RIPGREP_PATH": "{ripgrepPath}"
+      }
     },
     "git-mcp": {
       "command": "{uvxPath}",
@@ -745,6 +805,7 @@ export async function connectRequiredTools(agentName: string, sessionId: string,
     }
   }
 }
+
 === src/util/sanitize.ts ===
 
 // src/util/sanitize.ts
@@ -756,24 +817,32 @@ export function getProjectId(repoPath: string): string {
 }
 === src/util/reports.ts ===
 
-import { mkdir, writeFile } from 'fs/promises';
-import { join } from 'path';
-import { DEEBO_ROOT } from '../index.js';
-import { getProjectId } from './sanitize.js';
+import { mkdir, writeFile } from "fs/promises";
+import { join }           from "path";
+import { DEEBO_ROOT }     from "../index.js";
+import { getProjectId }   from "./sanitize.js";
 
-// src/util/reports.ts
-//we changed it to text to make check tool work better then changed it back to json
-// after removing validation.ts which was blocking access to memory bank files 
-// but really inelegantly so i took it out but i might have not reverted all the 
-// changes so there's probably that if you're still getting bugs
-export async function writeReport(repoPath: string, sessionId: string, scenarioId: string, report: string) {
-    const projectId = getProjectId(repoPath);
-    const reportDir = join(DEEBO_ROOT, 'memory-bank', projectId, 'sessions', sessionId, 'reports');
-    await mkdir(reportDir, { recursive: true });
-    const reportPath = join(reportDir, `${scenarioId}.json`);
-    await writeFile(reportPath, JSON.stringify(report, null, 2));
+export async function writeReport(
+  repoPath: string,
+  sessionId: string,
+  scenarioId: string,
+  report: any
+) {
+  const projectId = getProjectId(repoPath);
+  const reportDir = join(
+    DEEBO_ROOT,
+    "memory-bank",
+    projectId,
+    "sessions",
+    sessionId,
+    "reports"
+  );
+  await mkdir(reportDir, { recursive: true });
+
+  // pretty-print with 2-space indent
+  const reportPath = join(reportDir, `${scenarioId}.json`);
+  await writeFile(reportPath, JSON.stringify(report, null, 2), "utf8");
 }
-
 === src/util/branch-manager.ts ===
 
 // src/util/branch-manager.ts
@@ -827,6 +896,7 @@ KEY DIRECTIVES:
 - AVOID REDUNDANT HYPOTHESES - read scenario reports to learn what's been tried
 - Pass what failed to scenarios via context argument so they don't waste time
 - Take notes! You're a scientist mother (think Dr. Akagi), not a robot. Be creative and curious.
+- IF YOU SPAWN ONE HYPOTHESIS THATS PRETTY MUCH COMPLETELY DEFEATS THE PURPOSE OF PARALLEL INVESTIGATION SO PLEASE BE CREATIVE AND NOTICE SMALL CLUES THAT YOU THINK COULD LEAD SOMEWHERE AND GENERATE HYPOTHESES THANKS!
 
 SOLUTION CONFIDENCE:
 Only use <solution> tags when you are at least 96% confident in the solution.
@@ -1647,6 +1717,12 @@ export async function writeObservation(repoPath: string, sessionId: string, agen
       signal: AbortSignal, // Added: Cancellation signal
       scenarioPids: Set<number> // Added: Set to track scenario PIDs
     ) {
+      // Add unhandled rejection handler to catch and log promise rejections
+      process.on('unhandledRejection', (reason, promise) => {
+        log(sessionId, 'mother', 'error', `UNHANDLED REJECTION: ${reason}`, { repoPath })
+          .catch(err => console.error('Failed to log unhandled rejection:', err));
+      });
+
       await log(sessionId, 'mother', 'info', 'Mother agent started', { repoPath });
       const projectId = getProjectId(repoPath);
       let scenarioCounter = 0; // Simple counter for unique scenario IDs within the session
@@ -1724,8 +1800,9 @@ export async function writeObservation(repoPath: string, sessionId: string, agen
         // ORIENT: Begin investigation loop
         await log(sessionId, 'mother', 'info', 'OODA: orient', { repoPath });
     
-        // Loop while the last reply exists, doesn't contain a valid solution, AND cancellation hasn't been requested
-        while (replyText && !(replyText.includes('<solution>') && replyText.match(/<solution>([\s\S]*?)<\/solution>/)?.[1]?.trim()) && !signal.aborted) {
+        // Loop until we get a valid solution or cancellation is requested
+        let consecutiveFailures = 0;
+        while (!(replyText?.includes('<solution>') && replyText?.match(/<solution>([\s\S]*?)<\/solution>/)?.[1]?.trim()) && !signal.aborted && consecutiveFailures < 3) {
           if (Date.now() - startTime > MAX_RUNTIME) {
             await log(sessionId, 'mother', 'warn', 'Investigation exceeded maximum runtime', { repoPath });
             throw new Error('Investigation exceeded maximum runtime');
@@ -1979,11 +2056,16 @@ export async function writeObservation(repoPath: string, sessionId: string, agen
           replyText = await callLlm(messages, llmConfig); // Update replyText for the next loop iteration
     
           if (!replyText) {
-            // Log the failure and let the loop condition handle termination
-            await log(sessionId, 'mother', 'warn', 'Received empty/malformed response from LLM', { provider: llmConfig.provider, model: llmConfig.model, repoPath });
+            // Log the failure and increment counter
+            consecutiveFailures++;
+            await log(sessionId, 'mother', 'warn', `Received empty/malformed response from LLM (Failure ${consecutiveFailures}/3)`, { provider: llmConfig.provider, model: llmConfig.model, repoPath });
             // Push a message indicating the failure, maybe helps LLM recover?
-            messages.push({ role: 'user', content: 'INTERNAL_NOTE: Previous LLM call failed to return valid content.' });
+            messages.push({ role: 'user', content: `INTERNAL_NOTE: Previous LLM call failed to return valid content (Attempt ${consecutiveFailures}/3). Please try again.` });
+            // Add delay before next attempt
+            await new Promise(resolve => setTimeout(resolve, 2000 * consecutiveFailures));
           } else {
+            // Reset failure counter on success
+            consecutiveFailures = 0;
             // Add the valid response to messages history for the *next* turn
             messages.push({ role: 'assistant', content: replyText });
             await log(sessionId, 'mother', 'debug', 'Received response from LLM', { response: replyText, provider: llmConfig.provider, model: llmConfig.model, repoPath });
@@ -2205,16 +2287,47 @@ Hypothesis: ${args.hypothesis}`
     };
 
     await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to LLM', { model: llmConfig.model, provider: llmConfig.provider, messages, repoPath: args.repoPath });
-    let replyText = await callLlm(messages, llmConfig);
-    if (!replyText) {
-      await log(args.session, `scenario-${args.id}`, 'warn', 'Received empty/malformed response from LLM on initial call', { repoPath: args.repoPath });
-      // Exit if the first call fails, as there's no response to process
-      await writeReport(args.repoPath, args.session, args.id, 'Initial LLM call returned empty response.');
-      console.log('Initial LLM call returned empty response.');
-      process.exit(1);
-    } else {
+    
+    // Add retry logic with exponential backoff for initial call
+    let consecutiveFailures = 0;
+    const MAX_RETRIES = 3;
+    let replyText: string | undefined;
+    
+    while (consecutiveFailures < MAX_RETRIES) {
+      replyText = await callLlm(messages, llmConfig);
+      
+      if (!replyText) {
+        // Log the failure and increment counter
+        consecutiveFailures++;
+        await log(args.session, `scenario-${args.id}`, 'warn', `Received empty/malformed response from LLM on initial call (Failure ${consecutiveFailures}/${MAX_RETRIES})`, { provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
+        
+        // Push a message indicating the failure to help LLM recover
+        messages.push({ 
+          role: 'user', 
+          content: `INTERNAL_NOTE: Initial LLM call failed to return valid content (Attempt ${consecutiveFailures}/${MAX_RETRIES}). Please try again.` 
+        });
+        
+        // Add exponential backoff delay
+        const delay = 2000 * Math.pow(2, consecutiveFailures - 1);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        
+        // Try again if we haven't hit max retries
+        if (consecutiveFailures < MAX_RETRIES) {
+          continue;
+        }
+        
+        // Max retries hit - write report and exit
+        const errorMsg = `Initial LLM call failed to return valid response after ${MAX_RETRIES} attempts`;
+        await log(args.session, `scenario-${args.id}`, 'error', errorMsg, { provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
+        await writeReport(args.repoPath, args.session, args.id, errorMsg);
+        console.log(errorMsg);
+        process.exit(1);
+      }
+      
+      // Valid response received
       messages.push({ role: 'assistant', content: replyText });
-      await log(args.session, `scenario-${args.id}`, 'debug', 'Received from LLM', { response: { content: replyText }, repoPath: args.repoPath });
+      await log(args.session, `scenario-${args.id}`, 'debug', 'Received response from LLM', { response: { content: replyText }, repoPath: args.repoPath });
+      break; // Exit retry loop on success
     }
 
     // --- Main Investigation Loop ---
@@ -2228,11 +2341,17 @@ Hypothesis: ${args.hypothesis}`
       }
 
       // Get the latest assistant response
-      const responseText = replyText; // replyText holds the latest LLM response
+      if (!replyText) {
+        const errorMsg = 'Unexpected undefined response in main loop';
+        await log(args.session, `scenario-${args.id}`, 'error', errorMsg, { repoPath: args.repoPath });
+        await writeReport(args.repoPath, args.session, args.id, errorMsg);
+        console.log(errorMsg);
+        process.exit(1);
+      }
 
       // --- Check for Report and Tool Calls ---
-      const toolCalls = responseText.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
-      const reportMatch = responseText.match(/<report>\s*([\s\S]*?)<\/report>/i);
+      const toolCalls = replyText.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
+      const reportMatch = replyText.match(/<report>\s*([\s\S]*?)<\/report>/i);
 
       let executeToolsThisTurn = false;
       let exitThisTurn = false;
@@ -2350,18 +2469,46 @@ Hypothesis: ${args.hypothesis}`
 
       // --- Make Next LLM Call ---
       await log(args.session, `scenario-${args.id}`, 'debug', `Sending message history (${messages.length} items) to LLM`, { model: llmConfig.model, provider: llmConfig.provider, repoPath: args.repoPath });
-      replyText = await callLlm(messages, llmConfig); // Update replyText for the next loop iteration
-      if (!replyText) {
-        // LLM failed mid-conversation
-        const errorMsg = 'LLM returned empty response mid-investigation.';
-        await log(args.session, `scenario-${args.id}`, 'error', errorMsg, { provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
-        await writeReport(args.repoPath, args.session, args.id, errorMsg);
-        console.log(errorMsg);
-        process.exit(1);
-      } else {
-        // Add the valid response to messages history for the *next* turn
+      
+      // Add retry logic with exponential backoff
+      let consecutiveFailures = 0;
+      const MAX_RETRIES = 3;
+      
+      while (consecutiveFailures < MAX_RETRIES) {
+        replyText = await callLlm(messages, llmConfig);
+        
+        if (!replyText) {
+          // Log the failure and increment counter
+          consecutiveFailures++;
+          await log(args.session, `scenario-${args.id}`, 'warn', `Received empty/malformed response from LLM (Failure ${consecutiveFailures}/${MAX_RETRIES})`, { provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
+          
+          // Push a message indicating the failure to help LLM recover
+          messages.push({ 
+            role: 'user', 
+            content: `INTERNAL_NOTE: Previous LLM call failed to return valid content (Attempt ${consecutiveFailures}/${MAX_RETRIES}). Please try again.` 
+          });
+          
+          // Add exponential backoff delay
+          const delay = 2000 * Math.pow(2, consecutiveFailures - 1);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          
+          // Try again if we haven't hit max retries
+          if (consecutiveFailures < MAX_RETRIES) {
+            continue;
+          }
+          
+          // Max retries hit - write report and exit
+          const errorMsg = `LLM failed to return valid response after ${MAX_RETRIES} attempts`;
+          await log(args.session, `scenario-${args.id}`, 'error', errorMsg, { provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
+          await writeReport(args.repoPath, args.session, args.id, errorMsg);
+          console.log(errorMsg);
+          process.exit(1);
+        }
+        
+        // Valid response received
         messages.push({ role: 'assistant', content: replyText });
         await log(args.session, `scenario-${args.id}`, 'debug', 'Received response from LLM', { responseLength: replyText.length, provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
+        break; // Exit retry loop on success
       }
 
       // Small delay before next iteration (optional)
@@ -2402,6 +2549,995 @@ process.on('uncaughtException', (error) => {
   // Log this?
   process.exit(1); // Exit on uncaught exception
 });
+
+=== packages/deebo-setup/src/utils.ts ===
+
+import { homedir } from 'os';
+import { join, dirname } from 'path';
+import { access, mkdir, readFile, writeFile } from 'fs/promises';
+import { McpConfig, SetupConfig } from './types.js';
+import chalk from 'chalk';
+import { simpleGit as createGit } from 'simple-git';
+import inquirer from 'inquirer';
+
+export const DEEBO_REPO = 'https://github.com/snagasuri/deebo-prototype.git';
+
+export async function checkPrerequisites(): Promise<void> {
+  // Check Node version
+  // new (allow ANY major ≥18)
+  const nodeVersion = process.version;                     // e.g. "v23.11.0"
+  const major = Number(nodeVersion.slice(1).split('.')[0]); // 23
+
+  if (major >= 18) {
+    console.log(chalk.green('✔ Node version:', nodeVersion));
+  } else {
+    throw new Error(`Node.js v18+ is required (found ${nodeVersion})`);
+  }
+
+  // Check git
+  try {
+    const git = createGit();
+    await git.version();
+    console.log(chalk.green('✔ git found'));
+  } catch {
+    throw new Error('git is required but not found');
+  }
+}
+
+export async function findConfigPaths(): Promise<{ cline?: string; claude?: string; vscode?: string }> {
+  const home = homedir();
+  const platform = process.platform;
+
+  // Get VS Code settings path based on platform
+  let vscodePath: string;
+  if (platform === 'win32') {
+    vscodePath = join(process.env.APPDATA || '', 'Code', 'User');
+  } else if (platform === 'linux') {
+    vscodePath = join(home, '.config', 'Code', 'User');
+  } else {
+    vscodePath = join(home, 'Library', 'Application Support', 'Code', 'User');
+  }
+
+  // Create VS Code settings directory if it doesn't exist
+  try {
+    await mkdir(vscodePath, { recursive: true });
+    console.log(chalk.green('✔ Created VS Code settings directory'));
+  } catch (err) {
+    console.log(chalk.yellow('⚠ Could not create VS Code settings directory'));
+  }
+
+  type Paths = { cline: string; claude: string; vscode: string };
+  let candidates: Paths[] = [];
+
+  if (platform === 'win32') {
+    // Standard VS Code
+    candidates.push({
+      cline: join(process.env.APPDATA || '', 'Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
+      claude: join(process.env.APPDATA || '', 'Claude/claude_desktop_config.json'),
+      vscode: join(vscodePath, 'settings.json')
+    });
+    // VS Code Insiders
+    candidates.push({
+      cline: join(process.env.APPDATA || '', 'Code - Insiders/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
+      claude: join(process.env.APPDATA || '', 'Claude/claude_desktop_config.json'),
+      vscode: join(vscodePath, 'settings.json')
+    });
+  } else if (platform === 'linux') {
+    // Remote‐SSH / WSL
+    candidates.push({
+      cline: join(home, '.vscode-server/data/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
+      claude: join(home, '.vscode-server/data/User/globalStorage/saoudrizwan.claude-dev/settings/claude_desktop_config.json'),
+      vscode: join(vscodePath, 'settings.json')
+    });
+    // Local VS Code
+    candidates.push({
+      cline: join(home, '.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
+      claude: join(home, '.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/claude_desktop_config.json'),
+      vscode: join(vscodePath, 'settings.json')
+    });
+  } else {
+    // macOS
+    candidates.push({
+      cline: join(home, 'Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
+      claude: join(home, 'Library/Application Support/Claude/claude_desktop_config.json'),
+      vscode: join(vscodePath, 'settings.json')
+    });
+  }
+
+  const result: { cline?: string; claude?: string; vscode?: string } = {
+    // Always include VS Code path since we created the directory
+    vscode: join(vscodePath, 'settings.json')
+  };
+
+  for (const { cline, claude } of candidates) {
+    try {
+      await access(cline);
+      result.cline = cline;
+      console.log(chalk.green(`✔ Cline config found at ${cline}`));
+    } catch {
+      // not found here
+    }
+
+    try {
+      await access(claude);
+      result.claude = claude;
+      console.log(chalk.green(`✔ Claude Desktop config found at ${claude}`));
+    } catch {
+      // not found here
+    }
+
+    // stop as soon as we find something
+    if (result.cline || result.claude) break;
+  }
+
+  // Don't throw error if only VS Code is found
+  if (!result.cline && !result.claude) {
+    console.log(chalk.yellow('⚠ No Cline or Claude Desktop configuration found'));
+  }
+
+  return result;
+}
+
+export async function setupDeeboDirectory(config: SetupConfig): Promise<void> {
+  let needsCleanup = false;
+
+  try {
+    await access(config.deeboPath);
+    // Directory exists, ask for confirmation
+    const { confirm } = await inquirer.prompt([{
+      type: 'confirm',
+      name: 'confirm',
+      message: 'Deebo is already installed. Update to latest version?',
+      default: true
+    }]);
+
+    if (!confirm) {
+      console.log(chalk.yellow('Installation cancelled.'));
+      process.exit(0);
+    }
+
+    needsCleanup = true;
+  } catch (err) {
+    // Directory doesn't exist, create it
+    await mkdir(config.deeboPath, { recursive: true });
+  }
+
+  // Clean up if needed
+  if (needsCleanup) {
+    const { rm } = await import('fs/promises');
+    await rm(config.deeboPath, { recursive: true, force: true });
+    console.log(chalk.green('✔ Removed existing installation'));
+    await mkdir(config.deeboPath, { recursive: true });
+  }
+
+  console.log(chalk.green('✔ Created Deebo directory'));
+
+  // Clone repository
+  const git = createGit();
+  await git.clone(DEEBO_REPO, config.deeboPath);
+  console.log(chalk.green('✔ Cloned Deebo repository'));
+
+  // Install dependencies
+  const { execSync } = await import('child_process');
+  execSync('npm install', { cwd: config.deeboPath });
+  console.log(chalk.green('✔ Installed dependencies'));
+
+  // Build project
+  execSync('npm run build', { cwd: config.deeboPath });
+  console.log(chalk.green('✔ Built project'));
+}
+
+export async function writeEnvFile(config: SetupConfig): Promise<void> {
+  let envContent = `MOTHER_HOST=${config.motherHost}
+MOTHER_MODEL=${config.motherModel}
+SCENARIO_HOST=${config.scenarioHost}
+SCENARIO_MODEL=${config.scenarioModel}
+${getApiKeyEnvVar(config.motherHost)}=${config.motherApiKey}`;
+
+  // Add scenario API key if different from mother
+  if (config.scenarioHost !== config.motherHost && config.scenarioApiKey) {
+    envContent += `\n${getApiKeyEnvVar(config.scenarioHost)}=${config.scenarioApiKey}`;
+  }
+
+  envContent += `\nUSE_MEMORY_BANK=true
+NODE_ENV=development`;
+
+  await writeFile(config.envPath, envContent);
+  console.log(chalk.green('✔ Created environment file'));
+}
+
+export async function updateMcpConfig(config: SetupConfig): Promise<void> {
+  const deeboConfig = {
+    autoApprove: [],
+    disabled: false,
+    timeout: 30,
+    command: 'node',
+    args: [
+      '--experimental-specifier-resolution=node',
+      '--experimental-modules',
+      '--max-old-space-size=4096',
+      join(config.deeboPath, 'build/index.js')
+    ],
+    env: {
+      NODE_ENV: 'development',
+      USE_MEMORY_BANK: 'true',
+      MOTHER_HOST: config.motherHost,
+      MOTHER_MODEL: config.motherModel,
+      SCENARIO_HOST: config.scenarioHost,
+      SCENARIO_MODEL: config.scenarioModel,
+      [getApiKeyEnvVar(config.motherHost)]: config.motherApiKey,
+      ...(config.scenarioHost !== config.motherHost && config.scenarioApiKey ? {
+        [getApiKeyEnvVar(config.scenarioHost)]: config.scenarioApiKey
+      } : {})
+    },
+    transportType: 'stdio'
+  };
+
+  // Update Cline config if available
+  if (config.clineConfigPath) {
+    const clineConfig = JSON.parse(await readFile(config.clineConfigPath, 'utf8')) as McpConfig;
+    clineConfig.mcpServers.deebo = deeboConfig;
+    await writeFile(config.clineConfigPath, JSON.stringify(clineConfig, null, 2));
+    console.log(chalk.green('✔ Updated Cline configuration'));
+  }
+
+  // Update Claude config if available
+  if (config.claudeConfigPath) {
+    const claudeConfig = JSON.parse(await readFile(config.claudeConfigPath, 'utf8')) as McpConfig;
+    claudeConfig.mcpServers.deebo = deeboConfig;
+    await writeFile(config.claudeConfigPath, JSON.stringify(claudeConfig, null, 2));
+    console.log(chalk.green('✔ Updated Claude Desktop configuration'));
+  }
+
+  // Update VS Code settings if available
+  if (config.vscodePath) {
+    try {
+      let settings = {};
+      try {
+        settings = JSON.parse(await readFile(config.vscodePath, 'utf8'));
+      } catch {
+        // File doesn't exist or is empty, use empty object
+      }
+
+      // Add MCP settings
+      const mcpSettings = settings as Record<string, any>;
+      mcpSettings.mcp = mcpSettings.mcp || {};
+      mcpSettings.mcp.servers = mcpSettings.mcp.servers || {};
+      mcpSettings.mcp.servers.deebo = deeboConfig;
+      mcpSettings['chat.mcp.enabled'] = true;
+
+      // Create parent directory if it doesn't exist
+      await mkdir(dirname(config.vscodePath), { recursive: true });
+
+      // Write settings file
+      await writeFile(config.vscodePath, JSON.stringify(mcpSettings, null, 2));
+      console.log(chalk.green('✔ Updated VS Code settings'));
+      console.log(chalk.dim(`  Settings file: ${config.vscodePath}`));
+    } catch (err) {
+      console.log(chalk.yellow('⚠ Could not update VS Code settings'));
+      console.log(chalk.dim(err instanceof Error ? err.message : String(err)));
+    }
+  }
+
+}
+
+function getDefaultModel(host: string): string {
+  switch (host) {
+    case 'openrouter':
+      return 'anthropic/claude-3.5-sonnet';
+    case 'anthropic':
+      return 'claude-3-sonnet-20240229';
+    case 'gemini':
+      return 'gemini-2.5-pro-preview-03-25';
+    default:
+      return 'anthropic/claude-3.5-sonnet';
+  }
+}
+
+function getApiKeyEnvVar(host: string): string {
+  switch (host) {
+    case 'openrouter':
+      return 'OPENROUTER_API_KEY';
+    case 'openai':
+      return 'OPENAI_API_KEY';
+    case 'anthropic':
+      return 'ANTHROPIC_API_KEY';
+    case 'gemini':
+      return 'GEMINI_API_KEY';
+    default:
+      return 'OPENROUTER_API_KEY';
+  }
+}
+
+// Removed the pingInstallation function - implemented directly in index.ts
+
+=== packages/deebo-setup/src/types.ts ===
+
+import { z } from 'zod';
+
+export const LlmHostSchema = z.enum(['openrouter', 'anthropic', 'gemini', 'openai']);
+export type LlmHost = z.infer<typeof LlmHostSchema>;
+
+export const McpConfigSchema = z.object({
+  mcpServers: z.record(z.object({
+    autoApprove: z.array(z.string()),
+    disabled: z.boolean(),
+    timeout: z.number(),
+    command: z.string(),
+    args: z.array(z.string()),
+    env: z.record(z.string()),
+    transportType: z.string()
+  }))
+});
+
+export type McpConfig = z.infer<typeof McpConfigSchema>;
+
+export const LlmModelSchema = z.string();
+export type LlmModel = z.infer<typeof LlmModelSchema>;
+
+export interface SetupConfig {
+  deeboPath: string;
+  envPath: string;
+  motherHost: LlmHost;
+  motherModel: LlmModel;
+  scenarioHost: LlmHost;
+  scenarioModel: LlmModel;
+  motherApiKey: string;
+  scenarioApiKey?: string; // Optional - defaults to motherApiKey if hosts are same
+  clineConfigPath?: string;
+  claudeConfigPath?: string;
+  vscodePath?: string;
+}
+
+=== packages/deebo-setup/src/index.ts ===
+
+#!/usr/bin/env node
+import { homedir } from 'os';
+import { join } from 'path';
+import inquirer from 'inquirer';
+import chalk from 'chalk';
+import { LlmHostSchema } from './types.js';
+import {
+  checkPrerequisites,
+  findConfigPaths,
+  setupDeeboDirectory,
+  writeEnvFile,
+  updateMcpConfig
+} from './utils.js';
+
+async function main() {
+  // Check if this is a ping command
+  if (process.argv.length > 2 && process.argv[2] === 'ping') {
+    try {
+      console.log(chalk.blue('Pinging Deebo installation tracker...'));
+      // Simple ping with no extra dependencies or complexity
+      const response = await fetch('https://deebo-active-counter.ramnag2003.workers.dev/ping', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hash: `user-${Date.now()}` })
+      });
+      
+      if (response.ok) {
+        console.log(chalk.green('✓ Successfully pinged Deebo installation tracker'));
+      } else {
+        console.log(chalk.yellow('⚠ Failed to ping installation tracker'));
+      }
+    } catch (error) {
+      console.log(chalk.yellow('⚠ Could not reach installation tracker'));
+    }
+    return;
+  }
+
+  try {
+    // Check prerequisites
+    await checkPrerequisites();
+
+    // Find config paths
+    const configPaths = await findConfigPaths();
+
+    // Get Mother agent configuration
+    // Default models for mother agent
+    const defaultModels: Record<string, string> = {
+      openrouter: 'anthropic/claude-3.5-sonnet',
+      openai: 'gpt-4o',
+      anthropic: 'claude-3-5-sonnet-20241022',
+      gemini: 'gemini-2.5-pro-preview-03-25'
+    };
+
+    // Default models for scenario agents
+    const scenarioDefaultModels: Record<string, string> = {
+      openrouter: 'deepseek/deepseek-chat',
+      openai: 'gpt-4o',
+      anthropic: 'claude-3-5-sonnet-20241022',
+      gemini: 'gemini-2.5-pro-preview-03-25'
+    };
+
+    // Get Mother agent configuration
+    const { motherHost } = await inquirer.prompt([{
+      type: 'list',
+      name: 'motherHost',
+      message: 'Choose LLM host for Mother agent:',
+      choices: Object.keys(defaultModels)
+    }]);
+
+    const parsedMotherHost = LlmHostSchema.parse(motherHost);
+
+    const { motherModel } = await inquirer.prompt([{
+      type: 'input',
+      name: 'motherModel',
+      message: `Enter model for Mother agent (press Enter for ${defaultModels[parsedMotherHost]}):`,
+      default: defaultModels[parsedMotherHost]
+    }]);
+
+    // Get Scenario agent configuration
+    const { scenarioHost } = await inquirer.prompt([{
+      type: 'list',
+      name: 'scenarioHost',
+      message: 'Choose LLM host for Scenario agents (press Enter to use same as Mother):',
+      choices: Object.keys(defaultModels),
+      default: parsedMotherHost
+    }]);
+
+    const parsedScenarioHost = LlmHostSchema.parse(scenarioHost);
+
+    const { scenarioModel } = await inquirer.prompt([{
+      type: 'input',
+      name: 'scenarioModel',
+      message: `Enter model for Scenario agents (press Enter for ${scenarioDefaultModels[parsedScenarioHost]}):`,
+      default: scenarioDefaultModels[parsedScenarioHost]
+    }]);
+
+    // Get Mother agent API key
+    const { motherApiKey } = await inquirer.prompt([{
+      type: 'password',
+      name: 'motherApiKey',
+      message: `Enter your ${motherHost.toUpperCase()}_API_KEY for Mother agent:`
+    }]);
+
+    // Show mother API key preview
+    console.log(chalk.dim(`Mother API key preview: ${motherApiKey.substring(0, 8)}...`));
+    const { confirmMotherKey } = await inquirer.prompt([{
+      type: 'confirm',
+      name: 'confirmMotherKey',
+      message: 'Is this Mother API key correct?',
+      default: true
+    }]);
+
+    if (!confirmMotherKey) {
+      throw new Error('Mother API key confirmation failed. Please try again.');
+    }
+
+    // Get Scenario agent API key if using different host
+    let scenarioApiKey = motherApiKey;
+    if (parsedScenarioHost !== parsedMotherHost) {
+      const { useNewKey } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'useNewKey',
+        message: `Scenario agent uses different host (${scenarioHost}). Use different API key?`,
+        default: true
+      }]);
+
+      if (useNewKey) {
+        const { key } = await inquirer.prompt([{
+          type: 'password',
+          name: 'key',
+          message: `Enter your ${scenarioHost.toUpperCase()}_API_KEY for Scenario agents:`
+        }]);
+
+        // Show scenario API key preview
+        console.log(chalk.dim(`Scenario API key preview: ${key.substring(0, 8)}...`));
+        const { confirmKey } = await inquirer.prompt([{
+          type: 'confirm',
+          name: 'confirmKey',
+          message: 'Is this Scenario API key correct?',
+          default: true
+        }]);
+
+        if (!confirmKey) {
+          throw new Error('Scenario API key confirmation failed. Please try again.');
+        }
+
+        scenarioApiKey = key;
+      }
+    }
+
+    // Setup paths
+    const home = homedir();
+    const deeboPath = join(home, '.deebo');
+    const envPath = join(deeboPath, '.env');
+
+    // Create config object
+    const config = {
+      deeboPath,
+      envPath,
+      motherHost: parsedMotherHost,
+      motherModel,
+      scenarioHost: parsedScenarioHost,
+      scenarioModel,
+      motherApiKey,
+      scenarioApiKey,
+      clineConfigPath: configPaths.cline,
+      claudeConfigPath: configPaths.claude,
+      vscodePath: configPaths.vscode
+    };
+
+    console.log(chalk.blue('\nDetected configurations:'));
+    if (configPaths.cline) console.log('- Cline');
+    if (configPaths.claude) console.log('- Claude Desktop');
+    if (configPaths.vscode) console.log('- VS Code');
+
+    // Setup Deebo
+    await setupDeeboDirectory(config);
+    await writeEnvFile(config);
+    await updateMcpConfig(config);
+
+    console.log(chalk.green('\n✔ Deebo installation complete!'));
+    console.log(chalk.blue('\nNext steps:'));
+    console.log('1. Restart your MCP client');
+    console.log('2. Run npx deebo-doctor to verify the installation (use --verbose for more details)');
+    
+  } catch (error) {
+    console.error(chalk.red('\n✖ Installation failed:'));
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+}
+
+main();
+
+=== packages/deebo-setup/package.json ===
+
+{
+  "name": "deebo-setup",
+  "version": "1.0.85",
+  "description": "System installer for Deebo debugging tool",
+  "type": "module",
+  "bin": {
+    "deebo-setup": "build/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node build/index.js"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "inquirer": "^9.2.16",
+    "simple-git": "^3.22.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/inquirer": "^9.0.7",
+    "@types/node": "^20.11.28",
+    "typescript": "^5.4.2"
+  }
+}
+
+=== packages/deebo-doctor/src/types.ts ===
+
+export interface CheckResult {
+  name: string;
+  status: 'pass' | 'fail' | 'warn';
+  message: string;
+  details?: string;
+}
+
+export interface DoctorConfig {
+  verbose: boolean;
+  deeboPath: string;
+  logPath?: string;
+}
+
+export interface SystemCheck {
+  name: string;
+  check: (config: DoctorConfig) => Promise<CheckResult>;
+  fix?: (config: DoctorConfig) => Promise<void>;
+}
+
+=== packages/deebo-doctor/src/checks.ts ===
+
+import { CheckResult, DoctorConfig, SystemCheck } from './types.js';
+import { homedir } from 'os';
+import { join } from 'path';
+import { access, readFile } from 'fs/promises';
+import { simpleGit as createGit } from 'simple-git';
+
+export const nodeVersionCheck: SystemCheck = {
+  name: 'Node.js Version',
+  async check() {
+    const version = process.version;
+    if (version.startsWith('v18') || version.startsWith('v20') || version.startsWith('v22')) {
+      return {
+        name: 'Node.js Version',
+        status: 'pass',
+        message: `Node ${version} detected`,
+      };
+    }
+    return {
+      name: 'Node.js Version',
+      status: 'fail',
+      message: `Node.js v18+ required, found ${version}`,
+      details: 'Install Node.js v18 or later from https://nodejs.org'
+    };
+  }
+};
+
+export const gitCheck: SystemCheck = {
+  name: 'Git Installation',
+  async check() {
+    try {
+      const git = createGit();
+      const version = await git.version();
+      return {
+        name: 'Git Installation',
+        status: 'pass',
+        message: `Git ${version} detected`,
+      };
+    } catch {
+      return {
+        name: 'Git Installation',
+        status: 'fail',
+        message: 'Git not found',
+        details: 'Install Git from https://git-scm.com'
+      };
+    }
+  }
+};
+
+export const mcpToolsCheck: SystemCheck = {
+  name: 'MCP Tools',
+  async check() {
+    const results: CheckResult[] = [];
+    
+    // Check git-mcp
+    try {
+      const { execSync } = await import('child_process');
+      execSync('uvx mcp-server-git --help');
+      results.push({
+        name: 'git-mcp',
+        status: 'pass',
+        message: 'git-mcp installed'
+      });
+    } catch {
+      results.push({
+        name: 'git-mcp',
+        status: 'fail',
+        message: 'git-mcp not found',
+        details: 'Install with: uvx mcp-server-git --help'
+      });
+    }
+
+    // Check desktop-commander
+    try {
+      const { execSync } = await import('child_process');
+      execSync('npx @wonderwhy-er/desktop-commander --help 2>/dev/null');
+      results.push({
+        name: 'desktop-commander',
+        status: 'pass',
+        message: 'desktop-commander installed'
+      });
+    } catch {
+      results.push({
+        name: 'desktop-commander',
+        status: 'fail',
+        message: 'desktop-commander not found',
+        details: 'Install with: npx @wonderwhy-er/desktop-commander setup'
+      });
+    }
+
+    // Aggregate results
+    const allPass = results.every(r => r.status === 'pass');
+    return {
+      name: 'MCP Tools',
+      status: allPass ? 'pass' : 'fail',
+      message: allPass ? 'All MCP tools installed' : 'Some MCP tools missing',
+      details: results.map(r => `${r.name}: ${r.message}`).join('\n')
+    };
+  }
+};
+
+export const toolPathsCheck: SystemCheck = {
+  name: 'Tool Paths', 
+  async check() {
+    const results: CheckResult[] = [];
+    const isWindows = process.platform === 'win32';
+    const { execSync } = await import('child_process');
+    
+    // Check npx
+    try {
+      const npxPath = execSync(
+        isWindows ? 'cmd.exe /c where npx.cmd' : 'which npx'
+      ).toString().trim().split('\n')[0]; // Take first path if multiple returned
+      results.push({
+        name: 'npx',
+        status: 'pass',
+        message: 'npx found',
+        details: `Path: ${npxPath}`
+      });
+    } catch {
+      results.push({
+        name: 'npx',
+        status: 'fail',
+        message: 'npx not found',
+        details: 'Install Node.js to get npx'
+      });
+    }
+
+    // Check uvx 
+    try {
+      const uvxPath = execSync(
+        isWindows ? 'cmd.exe /c where uvx.exe' : 'which uvx'
+      ).toString().trim().split('\n')[0]; // Take first path if multiple returned
+      results.push({
+        name: 'uvx',
+        status: 'pass',
+        message: 'uvx found',
+        details: `Path: ${uvxPath}`
+      });
+    } catch {
+      results.push({
+        name: 'uvx',
+        status: 'fail',
+        message: 'uvx not found',
+        details: isWindows ? 'Install uv using pip: pip install uv' : 'Install uv: curl -LsSf https://astral.sh/uv/install.sh | sh'
+      });
+    }
+
+    // Aggregate results
+    const allPass = results.every(r => r.status === 'pass');
+    return {
+      name: 'Tool Paths',
+      status: allPass ? 'pass' : 'fail', 
+      message: allPass ? 'All tool paths found' : 'Some tool paths missing',
+      details: results.map(r => `${r.name}: ${r.details || r.message}`).join('\n')
+    };
+  }
+};
+
+export const configFilesCheck: SystemCheck = {
+  name: 'Configuration Files',
+  async check(config: DoctorConfig) {
+    const home = homedir();
+    const isWindows = process.platform === 'win32';
+    
+    const paths = isWindows ? {
+      cline: join(process.env.APPDATA || '', 'Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
+      claude: join(process.env.APPDATA || '', 'Claude/claude_desktop_config.json'),
+      env: join(config.deeboPath, '.env'),
+      tools: join(config.deeboPath, 'config/tools.json')
+    } : {
+      cline: join(home, 'Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
+      claude: join(home, 'Library/Application Support/Claude/claude_desktop_config.json'),
+      env: join(config.deeboPath, '.env'),
+      tools: join(config.deeboPath, 'config/tools.json')
+    };
+
+    const results: CheckResult[] = [];
+
+    // Check each config file
+    for (const [name, path] of Object.entries(paths)) {
+      try {
+        await access(path);
+        const content = await readFile(path, 'utf8');
+        
+        // Parse JSON if applicable
+        if (name !== 'env') {
+          const json = JSON.parse(content);
+          
+          // Check if Deebo is configured in MCP configs
+          if ((name === 'cline' || name === 'claude') && (!json.mcpServers?.deebo)) {
+            results.push({
+              name,
+              status: 'fail',
+              message: `${name} config exists but Deebo not configured`,
+              details: `Path: ${path}\nAdd Deebo configuration to mcpServers`
+            });
+            continue;
+          }
+
+          // Check tools.json structure
+          if (name === 'tools' && (!json.tools?.desktopCommander || !json.tools?.['git-mcp'])) {
+            results.push({
+              name,
+              status: 'fail',
+              message: `${name} config exists but missing required tools`,
+              details: `Path: ${path}\nMissing one or more required tools: desktopCommander, git-mcp`
+            });
+            continue;
+          }
+        }
+
+        results.push({
+          name,
+          status: 'pass',
+          message: `${name} config found and valid`,
+          details: `Path: ${path}`
+        });
+      } catch {
+        results.push({
+          name,
+          status: 'fail',
+          message: `${name} config not found or invalid`,
+          details: `Expected at: ${path}`
+        });
+      }
+    }
+
+    // Aggregate results
+    const allPass = results.every(r => r.status === 'pass');
+    return {
+      name: 'Configuration Files',
+      status: allPass ? 'pass' : 'fail',
+      message: allPass ? 'All configuration files valid' : 'Some configuration files missing or invalid',
+      details: results.map(r => `${r.name}: ${r.message}\n${r.details || ''}`).join('\n\n')
+    };
+  }
+};
+
+export const apiKeysCheck: SystemCheck = {
+  name: 'API Keys',
+  async check(config: DoctorConfig) {
+    const envPath = join(config.deeboPath, '.env');
+    try {
+      const content = await readFile(envPath, 'utf8');
+      const lines = content.split('\n');
+      const results: CheckResult[] = [];
+
+      // Check each potential API key
+      const keyChecks = {
+        OPENROUTER_API_KEY: 'sk-or-v1-',
+        OPENAI_API_KEY: 'sk-',
+        ANTHROPIC_API_KEY: 'sk-ant-',
+        GEMINI_API_KEY: 'AI'
+      };
+
+      for (const [key, prefix] of Object.entries(keyChecks)) {
+        const line = lines.find(l => l.startsWith(key));
+        if (!line) {
+          results.push({
+            name: key,
+            status: 'warn',
+            message: `${key} not found`
+          });
+          continue;
+        }
+
+        const value = line.split('=')[1]?.trim();
+        if (!value || !value.startsWith(prefix)) {
+          results.push({
+            name: key,
+            status: 'warn',
+            message: `${key} may be invalid`,
+            details: `Expected prefix: ${prefix}`
+          });
+          continue;
+        }
+
+        results.push({
+          name: key,
+          status: 'pass',
+          message: `${key} found and valid`
+        });
+      }
+
+      // Aggregate results
+      const allPass = results.some(r => r.status === 'pass');
+      return {
+        name: 'API Keys',
+        status: allPass ? 'pass' : 'warn',
+        message: allPass ? 'At least one valid API key found' : 'No valid API keys found',
+        details: results.map(r => `${r.name}: ${r.message}`).join('\n')
+      };
+    } catch {
+      return {
+        name: 'API Keys',
+        status: 'fail',
+        message: 'Could not read .env file',
+        details: `Expected at ${envPath}`
+      };
+    }
+  }
+};
+
+export const allChecks = [
+  nodeVersionCheck,
+  gitCheck,
+  toolPathsCheck,
+  mcpToolsCheck,
+  configFilesCheck,
+  apiKeysCheck
+];
+
+=== packages/deebo-doctor/src/index.ts ===
+
+#!/usr/bin/env node
+import { homedir } from 'os';
+import { join } from 'path';
+import chalk from 'chalk';
+import { allChecks } from './checks.js';
+import { DoctorConfig } from './types.js';
+
+async function main() {
+  // Parse arguments
+  const verbose = process.argv.includes('--verbose');
+  const deeboPath = join(homedir(), '.deebo');
+  const logPath = verbose ? join(deeboPath, 'doctor.log') : undefined;
+
+  const config: DoctorConfig = {
+    verbose,
+    deeboPath,
+    logPath
+  };
+
+  console.log(chalk.bold('\nDeebo Doctor - System Health Check\n'));
+
+  // Run all checks
+  let allPassed = true;
+  for (const check of allChecks) {
+    try {
+      const result = await check.check(config);
+      
+      // Print result
+      const icon = result.status === 'pass' ? '✔' : result.status === 'warn' ? '⚠' : '✖';
+      const color = result.status === 'pass' ? chalk.green : result.status === 'warn' ? chalk.yellow : chalk.red;
+      
+      console.log(color(`${icon} ${result.name}: ${result.message}`));
+      
+      if (verbose && result.details) {
+        console.log(chalk.dim(result.details));
+      }
+
+      if (result.status === 'fail') {
+        allPassed = false;
+      }
+    } catch (err) {
+      console.error(chalk.red(`✖ ${check.name}: Error running check`));
+      if (verbose) {
+        console.error(chalk.dim(err));
+      }
+      allPassed = false;
+    }
+  }
+
+  // Print summary
+  console.log('\n' + (allPassed 
+    ? chalk.green('✔ All checks passed!')
+    : chalk.red('✖ Some checks failed. Run with --verbose for more details.')));
+
+  process.exit(allPassed ? 0 : 1);
+}
+
+main().catch(err => {
+  console.error(chalk.red('\n✖ Error running doctor:'), err);
+  process.exit(1);
+});
+
+=== packages/deebo-doctor/package.json ===
+
+{
+  "name": "deebo-doctor",
+  "version": "1.0.8",
+  "description": "Health check tool for Deebo debugging system",
+  "type": "module",
+  "bin": {
+    "deebo-doctor": "build/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node build/index.js"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "inquirer": "^9.2.16",
+    "simple-git": "^3.22.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/inquirer": "^9.0.7",
+    "@types/node": "^20.11.28",
+    "typescript": "^5.4.2"
+  }
+}
+
 === package.json ===
 
 {
@@ -2413,6 +3549,7 @@ process.on('uncaughtException', (error) => {
   },
   "type": "module",
   "scripts": {
+    "preinstall": "if ! command -v rg &> /dev/null; then echo 'Error: ripgrep is not installed via brew'; exit 1; fi",
     "build": "tsc",
     "start": "node --experimental-specifier-resolution=node --experimental-modules --max-old-space-size=4096 build/index.js",
     "dev": "tsc --watch & node --experimental-specifier-resolution=node --experimental-modules --max-old-space-size=4096 --watch build/index.js",
@@ -2442,6 +3579,9 @@ process.on('uncaughtException', (error) => {
     "uuid": "^11.1.0",
     "zod": "^3.24.2"
   },
+  "optionalDependencies": {
+    "@vscode/ripgrep": "^1.15.11"
+  },
   "devDependencies": {
     "@types/cors": "^2.8.17",
     "@types/dockerode": "^3.3.23",
@@ -2454,7 +3594,6 @@ process.on('uncaughtException', (error) => {
     "@modelcontextprotocol/sdk": "1.7.0"
   }
 }
-
 === tsconfig.json ===
 
 {
@@ -2499,18 +3638,21 @@ Reach out for a live walkthrough, custom setup support, or to explore early acce
 
 Deebo scales to production codebases, too. Here's [an example of Deebo solving the test53 linearizer failure $100 tinygrad bug bounty](https://github.com/snagasuri/deebo-prototype/tree/master/memory-bank/9bd38e9840d3/sessions/session-1744006973678) by spawning 17 scenario agents and coming up with 2 valid fixes. Check out [progress.md](https://github.com/snagasuri/deebo-prototype/blob/master/memory-bank/9bd38e9840d3/progress.md) for just the solution.
 
-## 🚀 Quick Install (for Cline/Claude Desktop users) 
+## 🚀 Quick Install
 ```bash
 npx deebo-setup
 ```
-That's it! Follow the prompts to configure your API key and you're ready to go.
+That's it! Follow the prompts to configure your API key and you're ready to go. Works with:
+- VS Code Agent Mode
+- Cline
+- Claude Desktop
 
 **show us you're alive!!**
 ```bash
 npx deebo-setup ping
 ```
-## VSCode Agent users: if you have Claude Desktop installed, 
-## Cursor users: https://cursor.directory/mcp/deebo
+
+**Cursor users: https://cursor.directory/mcp/deebo**
 
 <details>
 <summary>🛠️ Manual Installation (for other setups)</summary>
@@ -2583,6 +3725,7 @@ If you're not using Cline or Claude Desktop, follow these steps:
 - **Python**: 3.10+ (for git-mcp)
 
 ### Configuration Files
+- **VS Code:** `~/Library/Application Support/Code/User/settings.json`
 - **Cline:** `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json`
 - **Claude Desktop:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 
