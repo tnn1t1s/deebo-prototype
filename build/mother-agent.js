@@ -101,8 +101,9 @@ scenarioPids // Added: Set to track scenario PIDs
         }
         // ORIENT: Begin investigation loop
         await log(sessionId, 'mother', 'info', 'OODA: orient', { repoPath });
-        // Loop while the last reply exists, doesn't contain a valid solution, AND cancellation hasn't been requested
-        while (replyText && !(replyText.includes('<solution>') && replyText.match(/<solution>([\s\S]*?)<\/solution>/)?.[1]?.trim()) && !signal.aborted) {
+        // Loop until we get a valid solution or cancellation is requested
+        let consecutiveFailures = 0;
+        while (!(replyText?.includes('<solution>') && replyText?.match(/<solution>([\s\S]*?)<\/solution>/)?.[1]?.trim()) && !signal.aborted && consecutiveFailures < 3) {
             if (Date.now() - startTime > MAX_RUNTIME) {
                 await log(sessionId, 'mother', 'warn', 'Investigation exceeded maximum runtime', { repoPath });
                 throw new Error('Investigation exceeded maximum runtime');
@@ -329,12 +330,17 @@ scenarioPids // Added: Set to track scenario PIDs
             await log(sessionId, 'mother', 'debug', `Sending message history (${messages.length} items) to LLM`, { model: llmConfig.model, provider: llmConfig.provider, repoPath });
             replyText = await callLlm(messages, llmConfig); // Update replyText for the next loop iteration
             if (!replyText) {
-                // Log the failure and let the loop condition handle termination
-                await log(sessionId, 'mother', 'warn', 'Received empty/malformed response from LLM', { provider: llmConfig.provider, model: llmConfig.model, repoPath });
+                // Log the failure and increment counter
+                consecutiveFailures++;
+                await log(sessionId, 'mother', 'warn', `Received empty/malformed response from LLM (Failure ${consecutiveFailures}/3)`, { provider: llmConfig.provider, model: llmConfig.model, repoPath });
                 // Push a message indicating the failure, maybe helps LLM recover?
-                messages.push({ role: 'user', content: 'INTERNAL_NOTE: Previous LLM call failed to return valid content.' });
+                messages.push({ role: 'user', content: `INTERNAL_NOTE: Previous LLM call failed to return valid content (Attempt ${consecutiveFailures}/3). Please try again.` });
+                // Add delay before next attempt
+                await new Promise(resolve => setTimeout(resolve, 2000 * consecutiveFailures));
             }
             else {
+                // Reset failure counter on success
+                consecutiveFailures = 0;
                 // Add the valid response to messages history for the *next* turn
                 messages.push({ role: 'assistant', content: replyText });
                 await log(sessionId, 'mother', 'debug', 'Received response from LLM', { response: replyText, provider: llmConfig.provider, model: llmConfig.model, repoPath });

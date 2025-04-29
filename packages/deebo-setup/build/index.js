@@ -34,8 +34,16 @@ async function main() {
         // Find config paths
         const configPaths = await findConfigPaths();
         // Get Mother agent configuration
+        // Default models for mother agent
         const defaultModels = {
             openrouter: 'anthropic/claude-3.5-sonnet',
+            openai: 'gpt-4o',
+            anthropic: 'claude-3-5-sonnet-20241022',
+            gemini: 'gemini-2.5-pro-preview-03-25'
+        };
+        // Default models for scenario agents
+        const scenarioDefaultModels = {
+            openrouter: 'deepseek/deepseek-chat',
             openai: 'gpt-4o',
             anthropic: 'claude-3-5-sonnet-20241022',
             gemini: 'gemini-2.5-pro-preview-03-25'
@@ -66,25 +74,54 @@ async function main() {
         const { scenarioModel } = await inquirer.prompt([{
                 type: 'input',
                 name: 'scenarioModel',
-                message: `Enter model for Scenario agents (press Enter for ${defaultModels[parsedScenarioHost]}):`,
-                default: defaultModels[parsedScenarioHost]
+                message: `Enter model for Scenario agents (press Enter for ${scenarioDefaultModels[parsedScenarioHost]}):`,
+                default: scenarioDefaultModels[parsedScenarioHost]
             }]);
-        // Get API key
-        const { apiKey } = await inquirer.prompt([{
+        // Get Mother agent API key
+        const { motherApiKey } = await inquirer.prompt([{
                 type: 'password',
-                name: 'apiKey',
-                message: `Enter your ${motherHost.toUpperCase()}_API_KEY:`
+                name: 'motherApiKey',
+                message: `Enter your ${motherHost.toUpperCase()}_API_KEY for Mother agent:`
             }]);
-        // Show API key preview
-        console.log(chalk.dim(`API key preview: ${apiKey.substring(0, 8)}...`));
-        const { confirmKey } = await inquirer.prompt([{
+        // Show mother API key preview
+        console.log(chalk.dim(`Mother API key preview: ${motherApiKey.substring(0, 8)}...`));
+        const { confirmMotherKey } = await inquirer.prompt([{
                 type: 'confirm',
-                name: 'confirmKey',
-                message: 'Is this API key correct?',
+                name: 'confirmMotherKey',
+                message: 'Is this Mother API key correct?',
                 default: true
             }]);
-        if (!confirmKey) {
-            throw new Error('API key confirmation failed. Please try again.');
+        if (!confirmMotherKey) {
+            throw new Error('Mother API key confirmation failed. Please try again.');
+        }
+        // Get Scenario agent API key if using different host
+        let scenarioApiKey = motherApiKey;
+        if (parsedScenarioHost !== parsedMotherHost) {
+            const { useNewKey } = await inquirer.prompt([{
+                    type: 'confirm',
+                    name: 'useNewKey',
+                    message: `Scenario agent uses different host (${scenarioHost}). Use different API key?`,
+                    default: true
+                }]);
+            if (useNewKey) {
+                const { key } = await inquirer.prompt([{
+                        type: 'password',
+                        name: 'key',
+                        message: `Enter your ${scenarioHost.toUpperCase()}_API_KEY for Scenario agents:`
+                    }]);
+                // Show scenario API key preview
+                console.log(chalk.dim(`Scenario API key preview: ${key.substring(0, 8)}...`));
+                const { confirmKey } = await inquirer.prompt([{
+                        type: 'confirm',
+                        name: 'confirmKey',
+                        message: 'Is this Scenario API key correct?',
+                        default: true
+                    }]);
+                if (!confirmKey) {
+                    throw new Error('Scenario API key confirmation failed. Please try again.');
+                }
+                scenarioApiKey = key;
+            }
         }
         // Setup paths
         const home = homedir();
@@ -98,7 +135,8 @@ async function main() {
             motherModel,
             scenarioHost: parsedScenarioHost,
             scenarioModel,
-            apiKey,
+            motherApiKey,
+            scenarioApiKey,
             clineConfigPath: configPaths.cline,
             claudeConfigPath: configPaths.claude,
             vscodePath: configPaths.vscode

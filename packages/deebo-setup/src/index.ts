@@ -43,8 +43,17 @@ async function main() {
     const configPaths = await findConfigPaths();
 
     // Get Mother agent configuration
+    // Default models for mother agent
     const defaultModels: Record<string, string> = {
       openrouter: 'anthropic/claude-3.5-sonnet',
+      openai: 'gpt-4o',
+      anthropic: 'claude-3-5-sonnet-20241022',
+      gemini: 'gemini-2.5-pro-preview-03-25'
+    };
+
+    // Default models for scenario agents
+    const scenarioDefaultModels: Record<string, string> = {
+      openrouter: 'deepseek/deepseek-chat',
       openai: 'gpt-4o',
       anthropic: 'claude-3-5-sonnet-20241022',
       gemini: 'gemini-2.5-pro-preview-03-25'
@@ -81,8 +90,8 @@ async function main() {
     const { scenarioModel } = await inquirer.prompt([{
       type: 'input',
       name: 'scenarioModel',
-      message: `Enter model for Scenario agents (press Enter for ${defaultModels[parsedScenarioHost]}):`,
-      default: defaultModels[parsedScenarioHost]
+      message: `Enter model for Scenario agents (press Enter for ${scenarioDefaultModels[parsedScenarioHost]}):`,
+      default: scenarioDefaultModels[parsedScenarioHost]
     }]);
 
     // Get Mother agent API key

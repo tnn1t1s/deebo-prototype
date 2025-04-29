@@ -1,5 +1,5 @@
 import { z } from 'zod';
-export const LlmHostSchema = z.enum(['openrouter', 'anthropic', 'gemini']);
+export const LlmHostSchema = z.enum(['openrouter', 'anthropic', 'gemini', 'openai']);
 export const McpConfigSchema = z.object({
     mcpServers: z.record(z.object({
         autoApprove: z.array(z.string()),
