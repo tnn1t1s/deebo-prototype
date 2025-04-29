@@ -189,12 +189,22 @@ server.tool(
   },
   async ({ sessionId }, extra) => {
     try {
+      // track whether we've already shown the hint
+      const entry = processRegistry.get(sessionId) || {} as any;
+      let hintText = "";
+      if (!entry.hasShownCheckHint) {
+        hintText = "hint: wait around 30 seconds on first check\n\n";
+        entry.hasShownCheckHint = true;
+        processRegistry.set(sessionId, entry);
+      }
+
+      // locate the session dir
       const sessionDir = await findSessionDir(sessionId);
       if (!sessionDir) {
         return {
           content: [{ 
             type: "text",
-            text: `Session ${sessionId} not found`
+            text: hintText + `Session ${sessionId} not found`
           }]
         };
       }
@@ -205,7 +215,7 @@ server.tool(
       const motherLog = await readFile(motherLogPath, 'utf8');
       const motherLines = motherLog.split('\n').filter(Boolean);
 
-      if (!motherLines.length) return { content: [{ type: "text", text: 'Session initializing' }] };
+      if (!motherLines.length) return { content: [{ type: "text", text: hintText + 'Session initializing' }] };
 
       const firstEvent = JSON.parse(motherLines[0]);
       const durationMs = Date.now() - new Date(firstEvent.timestamp).getTime();
@@ -322,8 +332,15 @@ server.tool(
         }
       }
 
+      // build clickable links
+      const projectId = sessionDir.split("/memory-bank/")[1].split("/")[0];
+      const progressMdPath = join(DEEBO_ROOT, "memory-bank", projectId, "progress.md");
+      const progressLink = `file://${progressMdPath}`;
+      const motherLink = `file://${motherLogPath}`;
+
       // Build the pulse
-      let pulse = `=== Deebo Session Pulse: ${sessionId} ===\n`;
+      let pulse = hintText;
+      pulse += `=== Deebo Session Pulse: ${sessionId} ===\n`;
       pulse += `Timestamp: ${new Date().toISOString()}\n`;
       pulse += `Overall Status: ${status}\n`;
       pulse += `Session Duration: ${Math.floor(durationMs / 1000)}s\n\n`;
@@ -331,17 +348,10 @@ server.tool(
       pulse += `--- Mother Agent ---\n`;
       pulse += `Status: ${status === 'in_progress' ? 'working' : status}\n`;
       pulse += `Last Activity: ${lastValidEvent ? lastValidEvent.timestamp : 'N/A'}\n`;
+      pulse += `Progress Log: ${progressLink}\n`;
+      
       if (status === 'completed') {
-        // Get projectId from session directory path
-        const projectId = sessionDir.split('/memory-bank/')[1].split('/')[0];
-        pulse += `Progress Log: ${join(DEEBO_ROOT, 'memory-bank', projectId, 'progress.md')}\n`;
-      }
-
-      // Update summary line to include terminated count
-      pulse += `--- Scenario Agents (${scenarioLogs.filter(f => f.startsWith('scenario-')).length} Total: ${runningCount} Running, ${terminatedCount} Terminated, ${reportedCount} Reported) ---\n\n`;
-
-      // For completed sessions, find and show solution
-      if (status === 'completed') {
+        pulse += `Mother Log: ${motherLink}\n\n`;
         // Display solution if found during scan
         if (solutionContent) {
           pulse += `MOTHER SOLUTION:\n`;
@@ -367,7 +377,6 @@ server.tool(
         }
 
       }
-
 
       // Process reported scenarios
       for (const file of reportFiles) {
@@ -504,14 +513,14 @@ server.tool(
 
       pulse += `--- End Session Pulse ---\n\n`;
 
-if (status === 'completed' || status === 'failed') {
-  pulse += `\n=======================================\n`;
-  pulse += `Not the result you were looking for?\n`;
-  pulse += `Start another session and guide Deebo with what you learned!\n`;
-  pulse += `Need a refresher? Check out the Deebo GitHub:\n`;
-  pulse += `https://github.com/snagasuri/deebo-prototype\n`;
-  pulse += `=======================================\n`;
-}
+      if (status === 'completed' || status === 'failed') {
+        pulse += `\n=======================================\n`;
+        pulse += `Not the result you were looking for?\n`;
+        pulse += `Start another session and guide Deebo with what you learned!\n`;
+        pulse += `Need a refresher? Check out the Deebo GitHub:\n`;
+        pulse += `https://github.com/snagasuri/deebo-prototype\n`;
+        pulse += `=======================================\n`;
+      }
 
       return {
         content: [{ 

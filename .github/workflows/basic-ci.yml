@@ -1,12 +1,14 @@
-name: Deebo Basic CI 
+name: Deebo Basic CI
 
 on:
   push:
     branches:
       - master
+      - fix-ci-env-vars
   pull_request:
     branches:
       - master
+      - fix-ci-env-vars
 
 jobs:
   basic-test:
@@ -32,12 +34,14 @@ jobs:
           node-version: '18'
           cache: 'npm'
 
+      - name: Install ripgrep (macOS)
+        run: |
+          brew install ripgrep
+          echo "RIPGREP_PATH=$(which rg)" >> $GITHUB_ENV
+
       - name: Install uv (macOS)
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
-
-      - name: Add uv to PATH (macOS)
-        run: |
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: Determine tool paths
@@ -65,8 +69,11 @@ jobs:
           echo "DEEBO_NPM_BIN=${NPM_BIN_ESC}" >> $GITHUB_ENV
 
       - name: Install Deebo dependencies
+        env:
+          RIPGREP_PATH: ${{ env.RIPGREP_PATH }}
+          NPM_CONFIG_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npm install --no-optional --ignore-scripts --loglevel error
+          npm install --loglevel error --no-optional
 
       - name: Build Deebo
         run: |
@@ -74,8 +81,11 @@ jobs:
 
       - name: Build minimal MCP client
         working-directory: ci/mcp-client
+        env:
+          RIPGREP_PATH: ${{ env.RIPGREP_PATH }}
+          NPM_CONFIG_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npm install --no-optional --ignore-scripts --loglevel error
+          npm install --loglevel error --no-optional
           npm run build
 
       - name: Clone task manager fixture repo
@@ -108,14 +118,12 @@ jobs:
           CLIENT_BUILD_PATH_ABS=$(pwd)/ci/mcp-client/build/index.js
           REPO_FIXTURE_PATH_ABS=$(pwd)/task-manager-fixture
           rm -rf memory-bank
-          echo "--- Starting Deebo server ---"
-          node --experimental-specifier-resolution=node --experimental-modules "$DEEBO_BUILD_PATH_ABS" &
-          SERVER_PID=$!
-          trap 'echo "--- Cleaning up ---"; kill $SERVER_PID || echo "Server stopped"; rm -rf task-manager-fixture memory-bank' EXIT
-          echo "--- Waiting for server boot (20s) ---"
-          sleep 20
           echo "--- Running MCP client script ---"
           CLIENT_OUTPUT_FILE="client_output.log"
+          DEBUG_LOG="debug_output.log"
+          echo "Running client with debug output..."
+          node "$CLIENT_BUILD_PATH_ABS" "$DEEBO_BUILD_PATH_ABS" "$REPO_FIXTURE_PATH_ABS" 2>&1 | tee $DEBUG_LOG
+          cat $DEBUG_LOG
           node "$CLIENT_BUILD_PATH_ABS" "$DEEBO_BUILD_PATH_ABS" "$REPO_FIXTURE_PATH_ABS" | tee $CLIENT_OUTPUT_FILE
           CLIENT_EXIT_CODE=${PIPESTATUS[0]}
           if [[ $CLIENT_EXIT_CODE -ne 0 ]]; then

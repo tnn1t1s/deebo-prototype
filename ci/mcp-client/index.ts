@@ -37,13 +37,42 @@ class MinimalMCPClient {
         throw new Error(`Server script path must be absolute: ${deeboServerScriptPath}`);
     }
     try {
+      // Ensure all required environment variables are present
+      const requiredEnvVars = [
+        'NODE_ENV',
+        'USE_MEMORY_BANK',
+        'MOTHER_HOST',
+        'MOTHER_MODEL',
+        'SCENARIO_HOST',
+        'SCENARIO_MODEL',
+        'OPENROUTER_API_KEY'
+      ];
+
+      for (const envVar of requiredEnvVars) {
+        if (!process.env[envVar]) {
+          throw new Error(`Required environment variable ${envVar} is not set`);
+        }
+      }
+
       this.transport = new StdioClientTransport({
         command: process.execPath,
         args: [
             "--experimental-specifier-resolution=node",
             "--experimental-modules",
+            "--max-old-space-size=4096",
             deeboServerScriptPath
         ],
+        env: {
+          ...process.env, // Inherit all environment variables from parent process
+          // Explicitly set critical variables to ensure they're passed correctly
+          NODE_ENV: process.env.NODE_ENV!,
+          USE_MEMORY_BANK: process.env.USE_MEMORY_BANK!,
+          MOTHER_HOST: process.env.MOTHER_HOST!,
+          MOTHER_MODEL: process.env.MOTHER_MODEL!,
+          SCENARIO_HOST: process.env.SCENARIO_HOST!,
+          SCENARIO_MODEL: process.env.SCENARIO_MODEL!,
+          OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY!
+        }
       });
       const connectPromise = this.mcp.connect(this.transport);
       const timeoutPromise = new Promise((_, reject) =>

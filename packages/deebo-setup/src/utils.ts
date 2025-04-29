@@ -174,12 +174,18 @@ export async function setupDeeboDirectory(config: SetupConfig): Promise<void> {
 }
 
 export async function writeEnvFile(config: SetupConfig): Promise<void> {
-  const envContent = `MOTHER_HOST=${config.motherHost}
+  let envContent = `MOTHER_HOST=${config.motherHost}
 MOTHER_MODEL=${config.motherModel}
 SCENARIO_HOST=${config.scenarioHost}
 SCENARIO_MODEL=${config.scenarioModel}
-${getApiKeyEnvVar(config.motherHost)}=${config.apiKey}
-USE_MEMORY_BANK=true
+${getApiKeyEnvVar(config.motherHost)}=${config.motherApiKey}`;
+
+  // Add scenario API key if different from mother
+  if (config.scenarioHost !== config.motherHost && config.scenarioApiKey) {
+    envContent += `\n${getApiKeyEnvVar(config.scenarioHost)}=${config.scenarioApiKey}`;
+  }
+
+  envContent += `\nUSE_MEMORY_BANK=true
 NODE_ENV=development`;
 
   await writeFile(config.envPath, envContent);
@@ -205,7 +211,10 @@ export async function updateMcpConfig(config: SetupConfig): Promise<void> {
       MOTHER_MODEL: config.motherModel,
       SCENARIO_HOST: config.scenarioHost,
       SCENARIO_MODEL: config.scenarioModel,
-      [getApiKeyEnvVar(config.motherHost)]: config.apiKey
+      [getApiKeyEnvVar(config.motherHost)]: config.motherApiKey,
+      ...(config.scenarioHost !== config.motherHost && config.scenarioApiKey ? {
+        [getApiKeyEnvVar(config.scenarioHost)]: config.scenarioApiKey
+      } : {})
     },
     transportType: 'stdio'
   };
@@ -265,7 +274,7 @@ function getDefaultModel(host: string): string {
     case 'anthropic':
       return 'claude-3-sonnet-20240229';
     case 'gemini':
-      return 'gemini-1.5-pro';
+      return 'gemini-2.5-pro-preview-03-25';
     default:
       return 'anthropic/claude-3.5-sonnet';
   }

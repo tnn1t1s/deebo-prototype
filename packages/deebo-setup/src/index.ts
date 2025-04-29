@@ -85,24 +85,58 @@ async function main() {
       default: defaultModels[parsedScenarioHost]
     }]);
 
-    // Get API key
-    const { apiKey } = await inquirer.prompt([{
+    // Get Mother agent API key
+    const { motherApiKey } = await inquirer.prompt([{
       type: 'password',
-      name: 'apiKey',
-      message: `Enter your ${motherHost.toUpperCase()}_API_KEY:`
+      name: 'motherApiKey',
+      message: `Enter your ${motherHost.toUpperCase()}_API_KEY for Mother agent:`
     }]);
 
-    // Show API key preview
-    console.log(chalk.dim(`API key preview: ${apiKey.substring(0, 8)}...`));
-    const { confirmKey } = await inquirer.prompt([{
+    // Show mother API key preview
+    console.log(chalk.dim(`Mother API key preview: ${motherApiKey.substring(0, 8)}...`));
+    const { confirmMotherKey } = await inquirer.prompt([{
       type: 'confirm',
-      name: 'confirmKey',
-      message: 'Is this API key correct?',
+      name: 'confirmMotherKey',
+      message: 'Is this Mother API key correct?',
       default: true
     }]);
 
-    if (!confirmKey) {
-      throw new Error('API key confirmation failed. Please try again.');
+    if (!confirmMotherKey) {
+      throw new Error('Mother API key confirmation failed. Please try again.');
+    }
+
+    // Get Scenario agent API key if using different host
+    let scenarioApiKey = motherApiKey;
+    if (parsedScenarioHost !== parsedMotherHost) {
+      const { useNewKey } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'useNewKey',
+        message: `Scenario agent uses different host (${scenarioHost}). Use different API key?`,
+        default: true
+      }]);
+
+      if (useNewKey) {
+        const { key } = await inquirer.prompt([{
+          type: 'password',
+          name: 'key',
+          message: `Enter your ${scenarioHost.toUpperCase()}_API_KEY for Scenario agents:`
+        }]);
+
+        // Show scenario API key preview
+        console.log(chalk.dim(`Scenario API key preview: ${key.substring(0, 8)}...`));
+        const { confirmKey } = await inquirer.prompt([{
+          type: 'confirm',
+          name: 'confirmKey',
+          message: 'Is this Scenario API key correct?',
+          default: true
+        }]);
+
+        if (!confirmKey) {
+          throw new Error('Scenario API key confirmation failed. Please try again.');
+        }
+
+        scenarioApiKey = key;
+      }
     }
 
     // Setup paths
@@ -118,7 +152,8 @@ async function main() {
       motherModel,
       scenarioHost: parsedScenarioHost,
       scenarioModel,
-      apiKey,
+      motherApiKey,
+      scenarioApiKey,
       clineConfigPath: configPaths.cline,
       claudeConfigPath: configPaths.claude,
       vscodePath: configPaths.vscode
