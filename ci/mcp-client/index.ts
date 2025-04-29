@@ -180,21 +180,28 @@ class MinimalMCPClient {
 
   // Optional: AI analysis function
   async analyzeDeeboOutput(checkOutputText: string): Promise<string> {
-    // ... (implementation remains the same) ...
-     try {
-        const prompt = `You are a CI assistant analyzing the final 'check' output of a Deebo debugging session. Based SOLELY on the following text, does this indicate a plausible final state for the session (completed, failed, cancelled)? Ignore transient errors mentioned in the output if a final status is present. Answer YES or NO and provide a brief one-sentence justification.
+    try {
+        const prompt = `You are a CI assistant analyzing the final 'check' output of a Deebo debugging session. Provide a comprehensive analysis of the session based on the following output. Include:
+
+1. Session Status: What was the final state (completed/failed/cancelled)? Was this expected?
+2. Scenario Agents: How many were spawned? What were their key hypotheses?
+3. Unusual Events: Were there any unexpected behaviors, errors, or interesting patterns?
+4. Solution Quality: If completed, how thorough was the investigation? Were multiple approaches tried?
+5. Performance: Any notable observations about execution time or resource usage?
+
+Keep your analysis technical and focused on actionable insights.
 
 Output to analyze:
 ---
 ${checkOutputText || "[No output provided]"}
 ---
 
-Analysis (YES/NO + Justification):`;
+Analysis:`;
 
         const completion = await openrouterClient.chat.completions.create({
             model: CI_LLM_MODEL,
             messages: [{ role: "user", content: prompt }],
-            max_tokens: 100,
+            max_tokens: 500,
             temperature: 0.1,
         });
         return completion.choices[0]?.message?.content?.trim() ?? "AI analysis failed.";

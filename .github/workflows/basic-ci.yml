@@ -138,10 +138,10 @@ jobs:
           echo "PROJECT_ID=$PROJECT_ID SESSION_ID=$SESSION_ID"
           ls -R memory-bank/${PROJECT_ID}/sessions/${SESSION_ID}
 
-      - name: Upload mother log
+      - name: Upload session logs
         uses: actions/upload-artifact@v4
         with:
-          name: mother-log
-          path: memory-bank/${{ env.PROJECT_ID }}/sessions/${{ env.SESSION_ID }}/logs/mother.log
+          name: session-logs
+          path: memory-bank/${{ env.PROJECT_ID }}/sessions/${{ env.SESSION_ID }}/logs/
           if-no-files-found: error
           retention-days: 7
