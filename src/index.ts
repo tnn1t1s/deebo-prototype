@@ -645,13 +645,13 @@ server.tool(
 // Register add_observation tool
 server.tool(
   "add_observation",
-  "Adds an external observation to an agent in the debugging session. This allows other tools or human insights to be incorporated into the ongoing investigation. Observations are logged and considered by the agent in subsequent reasoning steps.",
+  "Adds an external observation to an agent in the debugging session. If agentId is not specified, defaults to 'mother'. This allows other tools or human insights to be incorporated into the ongoing investigation. Observations are logged and considered by the agent in subsequent reasoning steps.",
   {
-    agentId: z.string(),
     observation: z.string(),
-    sessionId: z.string()
+    sessionId: z.string(),
+    agentId: z.string().optional()
   },
-  async ({ agentId, observation, sessionId }, extra) => {
+  async ({ observation, sessionId, agentId = 'mother' }, extra) => {
     try {
       // Get session directory
       const sessionDir = await findSessionDir(sessionId);

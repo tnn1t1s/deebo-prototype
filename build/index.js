@@ -172,24 +172,49 @@ server.tool("check", "Retrieves the current status of a debugging session, provi
             return { content: [{ type: "text", text: hintText + 'Session initializing' }] };
         const firstEvent = JSON.parse(motherLines[0]);
         const durationMs = Date.now() - new Date(firstEvent.timestamp).getTime();
+        // Add atomic log reading function
+        const readLogAtomically = async (logPath, maxRetries = 3) => {
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const content = await readFile(logPath, 'utf8');
+                    // Verify log entry completeness by checking for valid JSON and tags
+                    const lines = content.split('\n').filter(Boolean);
+                    if (lines.every(line => {
+                        try {
+                            JSON.parse(line);
+                            return true;
+                        }
+                        catch {
+                            return false;
+                        }
+                    })) {
+                        return content;
+                    }
+                }
+                catch (e) {
+                    if (i === maxRetries - 1)
+                        throw e;
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            }
+            throw new Error('Failed to read log atomically');
+        };
         // Determine status by scanning for solution tag, cancellation, or errors
-        let status = 'in_progress'; // Default status
-        let solutionFoundInScan = false;
-        let lastValidEvent = null; // Store the last successfully parsed event
-        let solutionContent = ''; // Store solution content when found
-        // Use module-level terminatedPids set
-        for (let i = motherLines.length - 1; i >= 0; i--) {
+        let status = 'in_progress';
+        let lastValidEvent = null;
+        let solutionContent = '';
+        // First pass - find completion indicators
+        for (const line of motherLines.reverse()) {
             try {
-                const event = JSON.parse(motherLines[i]);
+                const event = JSON.parse(line);
                 if (!lastValidEvent)
-                    lastValidEvent = event; // Capture the last valid event
-                const content = event.data?.response || event.data?.response?.content || event.message || '';
+                    lastValidEvent = event;
+                const content = event.data?.response || event.message || '';
                 // Check for process spawn and termination with comprehensive pattern
                 const SCENARIO_PID_PATTERN = /(?:Spawned|Removed|Terminated|Cancelled) Scenario .* PID (\d+)/;
                 const pidMatch = content.match(SCENARIO_PID_PATTERN);
                 if (pidMatch) {
                     const pid = parseInt(pidMatch[1]);
-                    // Check for any termination-related terms
                     if (content.match(/(Removed|Terminated|Cancelled)/)) {
                         terminatedPids.add(pid);
                     }
@@ -199,34 +224,30 @@ server.tool("check", "Retrieves the current status of a debugging session, provi
                     status = 'cancelled';
                     break;
                 }
-                // Check for solution tag or completion message
-                if (content.includes('<solution>')) {
-                    const match = content.match(/<solution>([\s\S]*?)<\/solution>/);
-                    if (match && match[1].trim()) {
-                        status = 'completed';
-                        solutionFoundInScan = true;
-                        solutionContent = match[1].trim();
-                        // Don't break - keep scanning to gather all info
-                    }
-                }
-                else if (content === 'Solution found or investigation concluded.') {
+                // Check for solution tag with improved regex
+                const solutionMatch = content.match(/<solution>\s*([\s\S]*?)\s*<\/solution>/);
+                if (solutionMatch && solutionMatch[1].trim()) {
                     status = 'completed';
-                    solutionFoundInScan = true;
-                    // Don't break - keep scanning to find solution content
+                    solutionContent = solutionMatch[1].trim();
+                    break;
                 }
-                // Check for error status
-                if (event.level === 'error') {
+                // Check for completion message
+                if (content === 'Solution found or investigation concluded.') {
+                    status = 'completed';
+                    // Continue searching for actual solution content
+                    continue;
+                }
+                // Only mark as failed if we haven't found a solution
+                if (event.level === 'error' && status !== 'completed') {
                     status = 'failed';
-                    // Continue scanning for potential solution or cancellation
                 }
             }
             catch (e) {
-                // Skip invalid JSON lines
                 continue;
             }
         }
         // If status is still 'in_progress' after scan, check the last valid event's level
-        if (status === 'in_progress' && lastValidEvent && lastValidEvent.level === 'error') {
+        if (status === 'in_progress' && lastValidEvent?.level === 'error') {
             status = 'failed';
         }
         // Helper functions for PID mapping and status
@@ -292,7 +313,6 @@ server.tool("check", "Retrieves the current status of a debugging session, provi
         pulse += `Progress Log: ${progressLink}\n`;
         if (status === 'completed') {
             pulse += `Mother Log: ${motherLink}\n\n`;
-            // Display solution if found during scan
             if (solutionContent) {
                 pulse += `MOTHER SOLUTION:\n`;
                 pulse += `<<<<<<< SOLUTION\n`;
@@ -300,7 +320,7 @@ server.tool("check", "Retrieves the current status of a debugging session, provi
                 pulse += `======= SOLUTION END >>>>>>>\n\n`;
             }
             else {
-                pulse += `STATUS COMPLETE BUT NO SOLUTION TAG FOUND IN LOGS\n`;
+                pulse += `STATUS COMPLETE BUT SOLUTION CONTENT NOT FOUND\n`;
                 pulse += `Check the mother.log file for more details.\n\n`;
             }
         }
@@ -541,11 +561,11 @@ server.tool("cancel", "Terminates all processes related to a debugging session. 
     }
 });
 // Register add_observation tool
-server.tool("add_observation", "Adds an external observation to an agent in the debugging session. This allows other tools or human insights to be incorporated into the ongoing investigation. Observations are logged and considered by the agent in subsequent reasoning steps.", {
-    agentId: z.string(),
+server.tool("add_observation", "Adds an external observation to an agent in the debugging session. If agentId is not specified, defaults to 'mother'. This allows other tools or human insights to be incorporated into the ongoing investigation. Observations are logged and considered by the agent in subsequent reasoning steps.", {
     observation: z.string(),
-    sessionId: z.string()
-}, async ({ agentId, observation, sessionId }, extra) => {
+    sessionId: z.string(),
+    agentId: z.string().optional()
+}, async ({ observation, sessionId, agentId = 'mother' }, extra) => {
     try {
         // Get session directory
         const sessionDir = await findSessionDir(sessionId);

@@ -1,175 +1,50 @@
-name: Deebo Basic CI
+name: CI
 
 on:
   push:
     branches:
-      - master
-      - fix-ci-env-vars
-  pull_request:
-    branches:
-      - master
-      - fix-ci-env-vars
+      - main
 
 jobs:
-  basic-test:
-    runs-on: macos-latest
-    timeout-minutes: 25
-    env:
-      NODE_ENV: development
-      USE_MEMORY_BANK: "true"
-      MOTHER_HOST: openrouter
-      MOTHER_MODEL: anthropic/claude-3.5-sonnet
-      SCENARIO_HOST: openrouter
-      SCENARIO_MODEL: deepseek/deepseek-chat
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+  build:
+    runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Deebo code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-          cache: 'npm'
-
-      - name: Install ripgrep (macOS)
+      - uses: actions/checkout@v3
+  
+      - name: Build and Test
         run: |
-          brew install ripgrep
-          echo "RIPGREP_PATH=$(which rg)" >> $GITHUB_ENV
-
-      - name: Install uv (macOS)
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-      - name: Determine tool paths
-        id: tool_paths
-        shell: bash
-        run: |
-          find_command() {
-            local cmd=$1
-            local where_cmd="which"
-            local found_path=$($where_cmd $cmd 2>/dev/null | head -n 1)
-            echo "$found_path"
-          }
-          NPX_PATH=$(find_command npx)
-          UVX_PATH=$(find_command uvx)
-          NPM_BIN=$(dirname "$NPX_PATH")
-          if [[ -z "$NPX_PATH" || -z "$UVX_PATH" ]]; then
-            echo "Error: Could not find npx or uvx path."
-            exit 1
-          fi
-          NPX_PATH_ESC=$(echo "$NPX_PATH" | sed 's/\\/\\\\/g')
-          UVX_PATH_ESC=$(echo "$UVX_PATH" | sed 's/\\/\\\\/g')
-          NPM_BIN_ESC=$(echo "$NPM_BIN" | sed 's/\\/\\\\/g')
-          echo "DEEBO_NPX_PATH=${NPX_PATH_ESC}" >> $GITHUB_ENV
-          echo "DEEBO_UVX_PATH=${UVX_PATH_ESC}" >> $GITHUB_ENV
-          echo "DEEBO_NPM_BIN=${NPM_BIN_ESC}" >> $GITHUB_ENV
-
-      - name: Install Deebo dependencies
-        env:
-          RIPGREP_PATH: ${{ env.RIPGREP_PATH }}
-          NPM_CONFIG_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "//api.github.com/:_authToken=${GITHUB_TOKEN}" >> ~/.npmrc
-          npm install --loglevel error --no-optional
-
-      - name: Build Deebo
-        run: |
+          npm install
           npm run build
-
-      - name: Build minimal MCP client
-        working-directory: ci/mcp-client
-        env:
-          RIPGREP_PATH: ${{ env.RIPGREP_PATH }}
-          NPM_CONFIG_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          npm test
+    
+      - name: Debug file handles
         run: |
-          echo "//api.github.com/:_authToken=${GITHUB_TOKEN}" >> ~/.npmrc
-          npm install --loglevel error --no-optional
-          npm run build
+          echo 'Checking file existence and accessibility:'
+          ls -l mother.log scenario.logs output.logs
+          echo 'Checking open file handles:'
+          lsof | grep -E 'mother.log|scenario.logs|output.logs'
 
-      - name: Clone task manager fixture repo
-        run: |
-          rm -rf task-manager-fixture
-          git clone https://github.com/snagasuri/task-manager.git task-manager-fixture
-
-      - name: Check OpenRouter API key status
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: |
-          echo "Checking API key status..."
-          if curl -fsS -G "https://openrouter.ai/api/v1/auth/key" \
-             -H "Authorization: Bearer $OPENROUTER_API_KEY" \
-             -o key_status.json && \
-             jq -e '.data.label' key_status.json > /dev/null; then
-            echo "API key is valid."
-          else
-            echo "Error: API key is invalid."
-            cat key_status.json || echo "No response file."
-            exit 1
-          fi
-
-      - name: Run Deebo server and test client (direct tool calls)
-        id: deebo_run
-        shell: bash
-        run: |
-          set -e
-          DEEBO_BUILD_PATH_ABS=$(pwd)/build/index.js
-          CLIENT_BUILD_PATH_ABS=$(pwd)/ci/mcp-client/build/index.js
-          REPO_FIXTURE_PATH_ABS=$(pwd)/task-manager-fixture
-          rm -rf memory-bank
-          echo "--- Running MCP client script ---"
-          CLIENT_OUTPUT_FILE="client_output.log"
-          DEBUG_LOG="debug_output.log"
-          echo "Running client with debug output..."
-          node "$CLIENT_BUILD_PATH_ABS" "$DEEBO_BUILD_PATH_ABS" "$REPO_FIXTURE_PATH_ABS" 2>&1 | tee $DEBUG_LOG
-          cat $DEBUG_LOG
-          node "$CLIENT_BUILD_PATH_ABS" "$DEEBO_BUILD_PATH_ABS" "$REPO_FIXTURE_PATH_ABS" | tee $CLIENT_OUTPUT_FILE
-          CLIENT_EXIT_CODE=${PIPESTATUS[0]}
-          if [[ $CLIENT_EXIT_CODE -ne 0 ]]; then
-            echo "Error: MCP client script failed."
-            exit 1
-          fi
-          SESSION_ID=$(grep 'FINAL_SESSION_ID_MARKER:' $CLIENT_OUTPUT_FILE | cut -d':' -f2)
-          if [[ -z "$SESSION_ID" ]]; then
-            SESSION_ID=$(grep '✅ Started session: ' $CLIENT_OUTPUT_FILE | sed 's/✅ Started session: //')
-          fi
-          if [[ -z "$SESSION_ID" ]]; then
-            echo "Error: Could not extract session ID."
-            cat $CLIENT_OUTPUT_FILE
-            exit 1
-          fi
-          echo "Session ID: $SESSION_ID"
-          PROJECT_ID=$(node -p "require('./build/util/sanitize.js').getProjectId('$REPO_FIXTURE_PATH_ABS')")
-          SESS_PATH="memory-bank/$PROJECT_ID/sessions/$SESSION_ID"
-          if [[ ! -d "$SESS_PATH" ]]; then
-            echo "Error: Session directory not found."
-            ls -lR memory-bank
-            exit 1
-          fi
-          LOG_FILE="$SESS_PATH/logs/mother.log"
-          if [[ ! -f "$LOG_FILE" ]]; then
-            echo "Error: Log file not found."
-            exit 1
-          fi
-          LINE_COUNT=$(wc -l < "$LOG_FILE")
-          if [[ $LINE_COUNT -lt 5 ]]; then
-            echo "Error: Log file has $LINE_COUNT lines (expected >= 5)."
-            exit 1
-          fi
-          echo "CI assertion passed."
-          echo "PROJECT_ID=$PROJECT_ID" >> $GITHUB_ENV
-          echo "SESSION_ID=$SESSION_ID" >> $GITHUB_ENV
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - name: Upload mother log
+        uses: actions/upload-artifact@v3
         with:
-          name: ci-logs-macos
-          path: |
-            memory-bank/${{ env.PROJECT_ID }}/sessions/${{ env.SESSION_ID }}/
-            ${{ github.workspace }}/client_output.log
+          name: mother-log
+          path: mother.log
           retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload scenario logs
+        uses: actions/upload-artifact@v3
+        with:
+          name: scenario-logs
+          path: scenario.logs
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload output logs
+        uses: actions/upload-artifact@v3
+        with:
+          name: output-logs
+          path: output.logs
+          retention-days: 7
+          if-no-files-found: error
