@@ -37,6 +37,12 @@
       signal: AbortSignal, // Added: Cancellation signal
       scenarioPids: Set<number> // Added: Set to track scenario PIDs
     ) {
+      // Add unhandled rejection handler to catch and log promise rejections
+      process.on('unhandledRejection', (reason, promise) => {
+        log(sessionId, 'mother', 'error', `UNHANDLED REJECTION: ${reason}`, { repoPath })
+          .catch(err => console.error('Failed to log unhandled rejection:', err));
+      });
+
       await log(sessionId, 'mother', 'info', 'Mother agent started', { repoPath });
       const projectId = getProjectId(repoPath);
       let scenarioCounter = 0; // Simple counter for unique scenario IDs within the session

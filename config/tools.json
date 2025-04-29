@@ -4,7 +4,10 @@
       "command": "{npxPath}",
       "args": [
         "@wonderwhy-er/desktop-commander"
-      ]
+      ],
+      "env": {
+        "RIPGREP_PATH": "{ripgrepPath}"
+      }
     },
     "git-mcp": {
       "command": "{uvxPath}",
