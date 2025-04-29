@@ -165,11 +165,9 @@ jobs:
           echo "PROJECT_ID=$PROJECT_ID" >> $GITHUB_ENV
           echo "SESSION_ID=$SESSION_ID" >> $GITHUB_ENV
 
-      - name: Upload artifacts
+      - name: Upload mother log
         uses: actions/upload-artifact@v4
         with:
-          name: ci-logs-macos
-          path: |
-            memory-bank/${{ env.PROJECT_ID }}/sessions/${{ env.SESSION_ID }}/
-            ${{ github.workspace }}/client_output.log
+          name: mother-log
+          path: memory-bank/${{ env.PROJECT_ID }}/sessions/${{ env.SESSION_ID }}/logs/mother.log
           retention-days: 7
