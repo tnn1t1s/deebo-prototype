@@ -165,9 +165,15 @@ jobs:
           echo "PROJECT_ID=$PROJECT_ID" >> $GITHUB_ENV
           echo "SESSION_ID=$SESSION_ID" >> $GITHUB_ENV
 
+      - name: Debug logs folder
+        run: |
+          echo "PROJECT_ID=$PROJECT_ID SESSION_ID=$SESSION_ID"
+          ls -R memory-bank/${PROJECT_ID}/sessions/${SESSION_ID}
+
       - name: Upload mother log
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: mother-log
           path: memory-bank/${{ env.PROJECT_ID }}/sessions/${{ env.SESSION_ID }}/logs/mother.log
+          if-no-files-found: error
           retention-days: 7
