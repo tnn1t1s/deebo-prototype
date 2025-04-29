@@ -6,7 +6,7 @@
 
 Deebo is an autonomous debugging system that AI coding agents (Claude, Cline, Cursor, etc.) can delegate tricky bugs to using the Model Context Protocol (MCP). It runs structured investigations in parallel Git branches to test hypotheses, validate fixes, and helps you move faster. If your main coding agent is like a single-threaded process, Deebo introduces multi-threadedness to your development workflow.
 
-**feedback, questions/support? dm me on x @sriramenn or open an issue here**
+**feedback, questions/support? CHECK OUT DEEBO GUIDE BELOW, or dm me on x @sriramenn or open an issue here**
 
 **If you think your team can benefit from Deebo, we’d love to hear from you.**
 We’re partnering with teams who use AI agents to write production code and want to maximize their productivity.
