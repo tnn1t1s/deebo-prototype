@@ -113,7 +113,7 @@ jobs:
             exit 1
           fi
 
-      - name: Run Deebo server and test client
+      - name: Run Deebo server and test client (direct tool calls)
         id: deebo_run
         shell: bash
         run: |
@@ -165,18 +165,11 @@ jobs:
           echo "PROJECT_ID=$PROJECT_ID" >> $GITHUB_ENV
           echo "SESSION_ID=$SESSION_ID" >> $GITHUB_ENV
 
-      - name: Upload mother log
-        uses: actions/upload-artifact@v3
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
         with:
-          name: mother-log
-          path: memory-bank/${{ env.PROJECT_ID }}/sessions/${{ env.SESSION_ID }}/logs/mother.log
+          name: ci-logs-macos
+          path: |
+            memory-bank/${{ env.PROJECT_ID }}/sessions/${{ env.SESSION_ID }}/
+            ${{ github.workspace }}/client_output.log
           retention-days: 7
-          if-no-files-found: error
-
-      - name: Upload scenario logs
-        uses: actions/upload-artifact@v3
-        with:
-          name: scenario-logs
-          path: memory-bank/${{ env.PROJECT_ID }}/sessions/${{ env.SESSION_ID }}/logs/scenario-*.log
-          retention-days: 7
-          if-no-files-found: error
