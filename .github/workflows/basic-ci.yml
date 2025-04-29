@@ -128,7 +128,7 @@ jobs:
 
           SESSION_ID=$(grep 'FINAL_SESSION_ID_MARKER:' client_output.log | cut -d':' -f2)
           SESSION_ID=${SESSION_ID:-$(grep '✅ Started session:' client_output.log | sed 's/✅ Started session: //')}
-          PROJECT_ID=$(node --input-type=module -p "(async () => { const { getProjectId } = await import('./build/util/sanitize.js'); return getProjectId('$FIXTURE'); })()")
+          PROJECT_ID=$(node --experimental-specifier-resolution=node ci/get-project-id.js "$FIXTURE")
 
           echo "PROJECT_ID=$PROJECT_ID" >> $GITHUB_ENV
           echo "SESSION_ID=$SESSION_ID" >> $GITHUB_ENV
