@@ -1,4 +1,4 @@
-name: Deebo Basic CI
+name: Deebo CI
 
 on:
   push:
