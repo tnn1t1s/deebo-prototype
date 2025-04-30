@@ -5,6 +5,8 @@
 
 Deebo is an agentic debugging copilot for your AI coding agent that speeds up time-to-resolution by 10x. If your main coding agent is like a single-threaded process, Deebo introduces multi-threadedness to your development workflow.
 
+**feedback, questions/support? dm me on x @sriramenn or open an issue here**
+
 **If you think your team can benefit from Deebo, we’d love to hear from you.** We’re partnering with teams who use AI agents to write production code and want to maximize their productivity. Reach out for a live walkthrough, custom setup support, or to explore early access to enterprise features.
 
 ## Quick Install
