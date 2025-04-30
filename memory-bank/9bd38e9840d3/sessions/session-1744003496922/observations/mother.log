@@ -1,2 +1,0 @@
-{"timestamp":"2025-04-07T05:25:02.476Z","observation":"Looking at linearize.py, we need to check if the shape property exists before accessing it. This could be happening in the merge_adds function where we process node shapes."}
-{"timestamp":"2025-04-07T05:25:08.140Z","observation":"The merge_adds function in linearize.py should validate node.shape exists before attempting to access it. We should add a guard clause: if not hasattr(node, 'shape'): return None"}

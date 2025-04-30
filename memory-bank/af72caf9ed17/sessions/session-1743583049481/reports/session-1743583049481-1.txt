@@ -1,1 +1,0 @@
-SCENARIO ERROR: Access denied: Scenario agents are not permitted to access memory bank files.

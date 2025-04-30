@@ -1,4 +1,0 @@
-{"timestamp":"2025-04-01T07:26:11.987Z","agent":"mother","level":"info","message":"Mother agent started","data":{"repoPath":"/Users/sriram/Documents/task-manager"}}
-{"timestamp":"2025-04-01T07:26:11.989Z","agent":"mother","level":"info","message":"OODA: observe","data":{"repoPath":"/Users/sriram/Documents/task-manager"}}
-{"timestamp":"2025-04-01T07:26:26.627Z","agent":"mother","level":"info","message":"OODA: orient","data":{"repoPath":"/Users/sriram/Documents/task-manager"}}
-{"timestamp":"2025-04-01T07:26:43.925Z","agent":"mother","level":"error","message":"Failed: Cannot use 'in' operator to search for 'text' in undefined","data":{"repoPath":"/Users/sriram/Documents/task-manager"}}

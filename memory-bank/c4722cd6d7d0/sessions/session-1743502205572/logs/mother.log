@@ -1,3 +1,0 @@
-{"timestamp":"2025-04-01T10:10:05.574Z","agent":"mother","level":"info","message":"Mother agent started","data":{"repoPath":"~/Documents/distributed-cache-test"}}
-{"timestamp":"2025-04-01T10:10:05.575Z","agent":"mother","level":"info","message":"OODA: observe","data":{"repoPath":"~/Documents/distributed-cache-test"}}
-{"timestamp":"2025-04-01T10:10:06.306Z","agent":"mother","level":"error","message":"Failed: MCP error -32000: Connection closed","data":{"repoPath":"~/Documents/distributed-cache-test"}}

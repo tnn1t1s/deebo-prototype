@@ -1,3 +1,0 @@
-{"timestamp":"2025-04-01T07:42:12.891Z","agent":"mother","level":"info","message":"Mother agent started","data":{"repoPath":"/Users/sriram/Documents/task-manager"}}
-{"timestamp":"2025-04-01T07:42:12.892Z","agent":"mother","level":"info","message":"OODA: observe","data":{"repoPath":"/Users/sriram/Documents/task-manager"}}
-{"timestamp":"2025-04-01T07:42:13.734Z","agent":"mother","level":"error","message":"Failed: The \"data\" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received undefined","data":{"repoPath":"/Users/sriram/Documents/task-manager"}}

@@ -1,1 +1,0 @@
-"SCENARIO ERROR: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"messages: final assistant content cannot end with trailing whitespace\"}}"
