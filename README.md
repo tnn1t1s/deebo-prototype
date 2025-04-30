@@ -20,9 +20,46 @@ Follow the prompts to configure your API key. Works with:
 - Claude Desktop
 - Cursor (https://cursor.directory/mcp/deebo)
 
-Manual setup instructions available for edge cases or alt environments.
+<details>
+<summary> Manual Configuration </summary>
 
-## Demo
+For manual setup, create a configuration file at `~/.deebo/config.json` with the following content:
+
+```json
+{
+  "servers": {
+    "deebo": {
+      "command": "node",
+      "args": [
+        "--experimental-specifier-resolution=node",
+        "--experimental-modules",
+        "--max-old-space-size=4096",
+        "/Users/sriram/.deebo/build/index.js"
+      ],
+      "env": {
+        "NODE_ENV": "development",
+        "USE_MEMORY_BANK": "true",
+        "MOTHER_HOST": "openrouter",
+        "MOTHER_MODEL": "anthropic/claude-3.5-sonnet",
+        "SCENARIO_HOST": "openrouter",
+        "SCENARIO_MODEL": "deepseek/deepseek-chat",
+        "OPENROUTER_API_KEY": "your-openrouter-api-key"
+      }
+    }
+  }
+}
+```
+
+This configuration sets up Deebo with:
+- Memory bank functionality enabled
+- OpenRouter as the API host
+- Claude 3.5 Sonnet as the mother agent model
+- DeepSeek Chat as the scenario agent model
+
+Deebo works with any OpenAI-compatible SDK, Anthropic, Gemini, and OpenRouter.
+</details>
+
+---
 
 <video src="https://github.com/user-attachments/assets/756d35b4-4f77-48de-bd1a-86f76360279e" controls width="100%"></video>
 
