@@ -10,20 +10,13 @@ Deebo is an agentic debugging system that AI coding agents (Claude, Cline, Curso
 ## Quick Install
 
 ```bash
-npx deebo-setup
+npx deebo-setup@latest
 ```
-
-Follow the prompts to configure your API key. Works with:
-
-- GitHub Copilot (VS Code Agent)
-- Cline
-- Claude Desktop
-- Cursor (https://cursor.directory/mcp/deebo)
 
 <details>
 <summary> Manual Configuration </summary>
 
-For manual setup, create a configuration file at `~/.deebo/config.json` with the following content:
+For manual setup, create a configuration file at your coding agent's specified location with the following content:
 
 ```json
 {
@@ -34,7 +27,7 @@ For manual setup, create a configuration file at `~/.deebo/config.json` with the
         "--experimental-specifier-resolution=node",
         "--experimental-modules",
         "--max-old-space-size=4096",
-        "/Users/sriram/.deebo/build/index.js"
+        "/Users/[your-name]/.deebo/build/index.js"
       ],
       "env": {
         "NODE_ENV": "development",
@@ -49,13 +42,6 @@ For manual setup, create a configuration file at `~/.deebo/config.json` with the
   }
 }
 ```
-
-This configuration sets up Deebo with:
-- Memory bank functionality enabled
-- OpenRouter as the API host
-- Claude 3.5 Sonnet as the mother agent model
-- DeepSeek Chat as the scenario agent model
-
 Deebo works with any OpenAI-compatible SDK, Anthropic, Gemini, and OpenRouter.
 </details>
 
@@ -66,4 +52,3 @@ Deebo works with any OpenAI-compatible SDK, Anthropic, Gemini, and OpenRouter.
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE) for details.  
-© 2025 Sriram Nagasuri
