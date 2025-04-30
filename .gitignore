@@ -40,3 +40,5 @@ TODO.md
 # Deebo runtime output
 memory-bank/
 reports/
+cicd-files.txt
+gen-cicd.sh
