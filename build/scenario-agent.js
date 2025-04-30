@@ -89,17 +89,39 @@ Hypothesis: ${args.hypothesis}`
             anthropicApiKey: anthropicApiKey
         };
         await log(args.session, `scenario-${args.id}`, 'debug', 'Sending to LLM', { model: llmConfig.model, provider: llmConfig.provider, messages, repoPath: args.repoPath });
-        let replyText = await callLlm(messages, llmConfig);
-        if (!replyText) {
-            await log(args.session, `scenario-${args.id}`, 'warn', 'Received empty/malformed response from LLM on initial call', { repoPath: args.repoPath });
-            // Exit if the first call fails, as there's no response to process
-            await writeReport(args.repoPath, args.session, args.id, 'Initial LLM call returned empty response.');
-            console.log('Initial LLM call returned empty response.');
-            process.exit(1);
-        }
-        else {
+        // Add retry logic with exponential backoff for initial call
+        let consecutiveFailures = 0;
+        const MAX_RETRIES = 3;
+        let replyText;
+        while (consecutiveFailures < MAX_RETRIES) {
+            replyText = await callLlm(messages, llmConfig);
+            if (!replyText) {
+                // Log the failure and increment counter
+                consecutiveFailures++;
+                await log(args.session, `scenario-${args.id}`, 'warn', `Received empty/malformed response from LLM on initial call (Failure ${consecutiveFailures}/${MAX_RETRIES})`, { provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
+                // Push a message indicating the failure to help LLM recover
+                messages.push({
+                    role: 'user',
+                    content: `INTERNAL_NOTE: Initial LLM call failed to return valid content (Attempt ${consecutiveFailures}/${MAX_RETRIES}). Please try again.`
+                });
+                // Add exponential backoff delay
+                const delay = 2000 * Math.pow(2, consecutiveFailures - 1);
+                await new Promise(resolve => setTimeout(resolve, delay));
+                // Try again if we haven't hit max retries
+                if (consecutiveFailures < MAX_RETRIES) {
+                    continue;
+                }
+                // Max retries hit - write report and exit
+                const errorMsg = `Initial LLM call failed to return valid response after ${MAX_RETRIES} attempts`;
+                await log(args.session, `scenario-${args.id}`, 'error', errorMsg, { provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
+                await writeReport(args.repoPath, args.session, args.id, errorMsg);
+                console.log(errorMsg);
+                process.exit(1);
+            }
+            // Valid response received
             messages.push({ role: 'assistant', content: replyText });
-            await log(args.session, `scenario-${args.id}`, 'debug', 'Received from LLM', { response: { content: replyText }, repoPath: args.repoPath });
+            await log(args.session, `scenario-${args.id}`, 'debug', 'Received response from LLM', { response: { content: replyText }, repoPath: args.repoPath });
+            break; // Exit retry loop on success
         }
         // --- Main Investigation Loop ---
         while (true) {
@@ -111,10 +133,16 @@ Hypothesis: ${args.hypothesis}`
                 process.exit(1);
             }
             // Get the latest assistant response
-            const responseText = replyText; // replyText holds the latest LLM response
+            if (!replyText) {
+                const errorMsg = 'Unexpected undefined response in main loop';
+                await log(args.session, `scenario-${args.id}`, 'error', errorMsg, { repoPath: args.repoPath });
+                await writeReport(args.repoPath, args.session, args.id, errorMsg);
+                console.log(errorMsg);
+                process.exit(1);
+            }
             // --- Check for Report and Tool Calls ---
-            const toolCalls = responseText.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
-            const reportMatch = responseText.match(/<report>\s*([\s\S]*?)<\/report>/i);
+            const toolCalls = replyText.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
+            const reportMatch = replyText.match(/<report>\s*([\s\S]*?)<\/report>/i);
             let executeToolsThisTurn = false;
             let exitThisTurn = false;
             if (reportMatch && toolCalls.length > 0) {
@@ -226,19 +254,38 @@ Hypothesis: ${args.hypothesis}`
             }
             // --- Make Next LLM Call ---
             await log(args.session, `scenario-${args.id}`, 'debug', `Sending message history (${messages.length} items) to LLM`, { model: llmConfig.model, provider: llmConfig.provider, repoPath: args.repoPath });
-            replyText = await callLlm(messages, llmConfig); // Update replyText for the next loop iteration
-            if (!replyText) {
-                // LLM failed mid-conversation
-                const errorMsg = 'LLM returned empty response mid-investigation.';
-                await log(args.session, `scenario-${args.id}`, 'error', errorMsg, { provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
-                await writeReport(args.repoPath, args.session, args.id, errorMsg);
-                console.log(errorMsg);
-                process.exit(1);
-            }
-            else {
-                // Add the valid response to messages history for the *next* turn
+            // Add retry logic with exponential backoff
+            let consecutiveFailures = 0;
+            const MAX_RETRIES = 3;
+            while (consecutiveFailures < MAX_RETRIES) {
+                replyText = await callLlm(messages, llmConfig);
+                if (!replyText) {
+                    // Log the failure and increment counter
+                    consecutiveFailures++;
+                    await log(args.session, `scenario-${args.id}`, 'warn', `Received empty/malformed response from LLM (Failure ${consecutiveFailures}/${MAX_RETRIES})`, { provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
+                    // Push a message indicating the failure to help LLM recover
+                    messages.push({
+                        role: 'user',
+                        content: `INTERNAL_NOTE: Previous LLM call failed to return valid content (Attempt ${consecutiveFailures}/${MAX_RETRIES}). Please try again.`
+                    });
+                    // Add exponential backoff delay
+                    const delay = 2000 * Math.pow(2, consecutiveFailures - 1);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    // Try again if we haven't hit max retries
+                    if (consecutiveFailures < MAX_RETRIES) {
+                        continue;
+                    }
+                    // Max retries hit - write report and exit
+                    const errorMsg = `LLM failed to return valid response after ${MAX_RETRIES} attempts`;
+                    await log(args.session, `scenario-${args.id}`, 'error', errorMsg, { provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
+                    await writeReport(args.repoPath, args.session, args.id, errorMsg);
+                    console.log(errorMsg);
+                    process.exit(1);
+                }
+                // Valid response received
                 messages.push({ role: 'assistant', content: replyText });
                 await log(args.session, `scenario-${args.id}`, 'debug', 'Received response from LLM', { responseLength: replyText.length, provider: llmConfig.provider, model: llmConfig.model, repoPath: args.repoPath });
+                break; // Exit retry loop on success
             }
             // Small delay before next iteration (optional)
             await new Promise(resolve => setTimeout(resolve, 1000));

@@ -103,7 +103,7 @@ scenarioPids // Added: Set to track scenario PIDs
         await log(sessionId, 'mother', 'info', 'OODA: orient', { repoPath });
         // Loop until we get a valid solution or cancellation is requested
         let consecutiveFailures = 0;
-        while (!(replyText?.includes('<solution>') && replyText?.match(/<solution>([\s\S]*?)<\/solution>/)?.[1]?.trim()) && !signal.aborted && consecutiveFailures < 3) {
+        while (!(replyText?.match(/<solution>([\s\S]*?)<\/solution>/)?.[1]?.trim()) && !signal.aborted && consecutiveFailures < 3) {
             if (Date.now() - startTime > MAX_RUNTIME) {
                 await log(sessionId, 'mother', 'warn', 'Investigation exceeded maximum runtime', { repoPath });
                 throw new Error('Investigation exceeded maximum runtime');
@@ -115,20 +115,21 @@ scenarioPids // Added: Set to track scenario PIDs
             }
             // Use the latest replyText from the end of the previous loop iteration (or the initial call)
             const responseText = replyText;
-            // --- Check for Tools and Hypotheses ---
+            // --- Check for Tools, Hypotheses, and Solution ---
             const toolCalls = responseText.match(/<use_mcp_tool>[\s\S]*?<\/use_mcp_tool>/g) || [];
             const containsHypothesis = responseText.includes('<hypothesis>'); // Check for hypothesis presence
+            const containsSolution = responseText.includes('<solution>'); // Check for solution presence
             let executeToolsThisTurn = false;
             let processHypothesesThisTurn = false;
-            if (toolCalls.length > 0 && containsHypothesis) {
-                // LLM included both - prioritize executing tools, ignore hypotheses this turn
+            if ((toolCalls.length > 0 || containsSolution) && containsHypothesis) {
+                // LLM included tools/solution with hypotheses - prioritize executing tools, ignore hypotheses this turn
                 messages.push({
                     role: 'user',
-                    content: `Instructions conflict: You provided tool calls and hypotheses in the same message. I will execute the tool calls now. Please provide hypotheses ONLY after analyzing the tool results in the next turn.`
+                    content: `Instructions conflict: You provided ${toolCalls.length > 0 ? 'tool calls' : 'a solution'} and hypotheses in the same message. I will execute the ${toolCalls.length > 0 ? 'tool calls' : 'ignore both'} now. Please provide hypotheses ONLY after analyzing the ${toolCalls.length > 0 ? 'tool results' : 'current findings'} in the next turn. When you are ready to conclude, provide ONLY a solution tag without hypotheses.`
                 });
-                executeToolsThisTurn = true; // Signal to execute tools below
+                executeToolsThisTurn = toolCalls.length > 0; // Only execute tools if present
                 // DO NOT set processHypothesesThisTurn = true
-                await log(sessionId, 'mother', 'warn', 'LLM provided tools and hypotheses simultaneously. Executing tools, ignoring hypotheses for this turn.', { repoPath });
+                await log(sessionId, 'mother', 'warn', `LLM provided ${toolCalls.length > 0 ? 'tools' : 'solution'} and hypotheses simultaneously. ${toolCalls.length > 0 ? 'Executing tools' : 'Ignoring both'}, hypotheses ignored for this turn.`, { repoPath });
             }
             else if (containsHypothesis) {
                 // Only hypotheses found - process them
@@ -140,7 +141,11 @@ scenarioPids // Added: Set to track scenario PIDs
                 executeToolsThisTurn = true; // Signal to execute tools below
                 processHypothesesThisTurn = false; // Ensure hypotheses aren't processed
             }
-            // If neither tools nor hypotheses found, the loop continues to the next LLM call
+            else if (containsSolution && !containsHypothesis) {
+                // Only solution found without hypotheses - this is valid for ending the loop
+                break; // Exit the loop to process the solution
+            }
+            // If neither tools, hypotheses, nor solution found, the loop continues to the next LLM call
             // --- Execute Tools if Flagged ---
             if (executeToolsThisTurn) {
                 await log(sessionId, 'mother', 'debug', `Executing ${toolCalls.length} tool calls.`, { repoPath });

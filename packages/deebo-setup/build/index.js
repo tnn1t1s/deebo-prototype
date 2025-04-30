@@ -77,11 +77,14 @@ async function main() {
                 message: `Enter model for Scenario agents (press Enter for ${scenarioDefaultModels[parsedScenarioHost]}):`,
                 default: scenarioDefaultModels[parsedScenarioHost]
             }]);
-        // Get Mother agent API key
+        // Get API key
+        const keyPrompt = parsedScenarioHost === parsedMotherHost
+            ? `Enter your ${motherHost.toUpperCase()}_API_KEY:`
+            : `Enter your ${motherHost.toUpperCase()}_API_KEY for Mother agent:`;
         const { motherApiKey } = await inquirer.prompt([{
                 type: 'password',
                 name: 'motherApiKey',
-                message: `Enter your ${motherHost.toUpperCase()}_API_KEY for Mother agent:`
+                message: keyPrompt
             }]);
         // Show mother API key preview
         console.log(chalk.dim(`Mother API key preview: ${motherApiKey.substring(0, 8)}...`));
@@ -145,9 +148,12 @@ async function main() {
         const { useCursorGlobal } = await inquirer.prompt([{
                 type: 'confirm',
                 name: 'useCursorGlobal',
-                message: 'global cursor install ok? (y/n)',
+                message: 'Configure Cursor globally (recommended for single-user systems)?',
                 default: true
             }]);
+        if (!useCursorGlobal) {
+            console.log(chalk.blue('\nNote: Project-specific configuration will only apply to the selected directory.'));
+        }
         if (useCursorGlobal) {
             // Use global Cursor config path
             const cursorPath = osPlatform() === 'win32'
@@ -165,15 +171,39 @@ async function main() {
                 }]);
             config.cursorConfigPath = join(projectPath, '.cursor', 'mcp.json');
         }
-        console.log(chalk.blue('\nDetected configurations:'));
+        console.log(chalk.blue('\nDetected installations:'));
         if (configPaths.cline)
             console.log('- Cline');
         if (configPaths.claude)
             console.log('- Claude Desktop');
-        if (configPaths.vscode)
-            console.log('- VS Code');
-        if (config.cursorConfigPath)
-            console.log('- Cursor');
+        // Check if VS Code is actually installed
+        try {
+            const { execSync } = await import('child_process');
+            try {
+                execSync('code --version', { stdio: 'ignore' });
+                console.log('- VS Code');
+            }
+            catch {
+                // VS Code not found
+            }
+        }
+        catch {
+            // Command execution failed
+        }
+        // Check if Cursor is actually installed
+        try {
+            const { execSync } = await import('child_process');
+            try {
+                execSync('cursor --version', { stdio: 'ignore' });
+                console.log('- Cursor');
+            }
+            catch {
+                // Cursor not found
+            }
+        }
+        catch {
+            // Command execution failed
+        }
         // Setup Deebo
         await setupDeeboDirectory(config);
         await writeEnvFile(config);

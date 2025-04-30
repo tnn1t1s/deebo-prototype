@@ -7,9 +7,8 @@ import inquirer from 'inquirer';
 export const DEEBO_REPO = 'https://github.com/snagasuri/deebo-prototype.git';
 export async function checkPrerequisites() {
     // Check Node version
-    // new (allow ANY major ≥18)
-    const nodeVersion = process.version; // e.g. "v23.11.0"
-    const major = Number(nodeVersion.slice(1).split('.')[0]); // 23
+    const nodeVersion = process.version;
+    const major = Number(nodeVersion.slice(1).split('.')[0]);
     if (major >= 18) {
         console.log(chalk.green('✔ Node version:', nodeVersion));
     }
@@ -25,6 +24,61 @@ export async function checkPrerequisites() {
     catch {
         throw new Error('git is required but not found');
     }
+    // Check ripgrep
+    const platform = process.platform;
+    try {
+        const { execSync } = await import('child_process');
+        try {
+            execSync('rg --version', { stdio: 'ignore' });
+            console.log(chalk.green('✔ ripgrep found'));
+        }
+        catch {
+            console.log(chalk.yellow('⚠ ripgrep not found. Installing...'));
+            switch (platform) {
+                case 'win32':
+                    try {
+                        // Use cmd.exe with /c flag to execute winget in proper Windows shell context
+                        execSync('cmd.exe /c winget install -e --id BurntSushi.ripgrep', {
+                            stdio: 'inherit',
+                            windowsHide: true
+                        });
+                    }
+                    catch {
+                        console.log(chalk.yellow('\nAutomatic ripgrep installation failed.'));
+                        console.log('Please install ripgrep manually using one of these methods:');
+                        console.log('1. Download from: https://github.com/BurntSushi/ripgrep/releases');
+                        console.log('2. Run in Command Prompt: winget install -e --id BurntSushi.ripgrep');
+                        console.log('3. Run in PowerShell: scoop install ripgrep');
+                        throw new Error('ripgrep installation required');
+                    }
+                    break;
+                case 'darwin':
+                    try {
+                        execSync('brew install ripgrep', { stdio: 'inherit' });
+                    }
+                    catch {
+                        console.log(chalk.yellow('\nAutomatic ripgrep installation failed.'));
+                        console.log('Please install ripgrep manually:');
+                        console.log('brew install ripgrep');
+                        throw new Error('ripgrep installation required');
+                    }
+                    break;
+                default:
+                    console.log('Please install ripgrep using your system package manager:');
+                    console.log('Ubuntu/Debian: sudo apt-get install ripgrep');
+                    console.log('Fedora: sudo dnf install ripgrep');
+                    console.log('Or visit: https://github.com/BurntSushi/ripgrep#installation');
+                    throw new Error('ripgrep installation required');
+            }
+        }
+    }
+    catch (error) {
+        if (error instanceof Error && error.message === 'ripgrep installation required') {
+            throw error;
+        }
+        console.log(chalk.yellow('⚠ Could not check for ripgrep'));
+        throw new Error('Failed to check for ripgrep installation');
+    }
 }
 export async function findConfigPaths() {
     const home = homedir();
@@ -32,7 +86,9 @@ export async function findConfigPaths() {
     // Get VS Code settings path based on platform
     let vscodePath;
     if (platform === 'win32') {
-        vscodePath = join(process.env.APPDATA || '', 'Code', 'User');
+        // Use proper Windows default paths
+        const appData = process.env.APPDATA || join(homedir(), 'AppData', 'Roaming');
+        vscodePath = join(appData, 'Code', 'User');
     }
     else if (platform === 'linux') {
         vscodePath = join(home, '.config', 'Code', 'User');
@@ -51,7 +107,9 @@ export async function findConfigPaths() {
     // Get Cursor path based on platform
     let cursorPath;
     if (platform === 'win32') {
-        cursorPath = join(process.env.APPDATA || '', '.cursor');
+        // Use proper Windows default paths
+        const appData = process.env.APPDATA || join(homedir(), 'AppData', 'Roaming');
+        cursorPath = join(appData, '.cursor');
     }
     else {
         cursorPath = join(home, '.cursor');

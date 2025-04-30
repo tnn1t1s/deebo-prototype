@@ -296,11 +296,11 @@ server.tool("check", "Retrieves the current status of a debugging session, provi
                 runningCount++;
             }
         }
-        // build clickable links
+        // build clickable links with absolute paths
         const projectId = sessionDir.split("/memory-bank/")[1].split("/")[0];
-        const progressMdPath = join(DEEBO_ROOT, "memory-bank", projectId, "progress.md");
+        const progressMdPath = path.resolve(join(DEEBO_ROOT, "memory-bank", projectId, "progress.md"));
         const progressLink = `file://${progressMdPath}`;
-        const motherLink = `file://${motherLogPath}`;
+        const motherLink = `file://${path.resolve(motherLogPath)}`;
         // Build the pulse
         let pulse = hintText;
         pulse += `=== Deebo Session Pulse: ${sessionId} ===\n`;
@@ -413,7 +413,7 @@ server.tool("check", "Retrieves the current status of a debugging session, provi
                     pulse += `  Error reading report: ${error.message}\n`;
                 }
             }
-            pulse += `  (Full report: file://${join(reportsDir, `${scenarioId}.json`)})\n\n`;
+            pulse += `  (Full report: file://${path.resolve(join(reportsDir, `${scenarioId}.json`))})\n\n`;
         }
         // Process unreported scenarios (either running or terminated without report)
         const unreportedScenarios = scenarioLogs
@@ -457,7 +457,7 @@ server.tool("check", "Retrieves the current status of a debugging session, provi
                 pulse += `  Hypothesis: "${hypothesis}"\n`;
                 pulse += `  Runtime: ${runtime}s\n`;
                 pulse += `  Latest Activity: ${lastEvent.message}\n`;
-                pulse += `  (Log: file://${join(logsDir, file)})\n\n`;
+                pulse += `  (Log: file://${path.resolve(join(logsDir, file))})\n\n`;
             }
             catch (e) {
                 // Skip scenarios with invalid JSON
