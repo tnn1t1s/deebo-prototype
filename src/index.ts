@@ -353,11 +353,11 @@ server.tool(
         }
       }
 
-      // build clickable links
+      // build clickable links with absolute paths
       const projectId = sessionDir.split("/memory-bank/")[1].split("/")[0];
-      const progressMdPath = join(DEEBO_ROOT, "memory-bank", projectId, "progress.md");
+      const progressMdPath = path.resolve(join(DEEBO_ROOT, "memory-bank", projectId, "progress.md"));
       const progressLink = `file://${progressMdPath}`;
-      const motherLink = `file://${motherLogPath}`;
+      const motherLink = `file://${path.resolve(motherLogPath)}`;
 
       // Build the pulse
       let pulse = hintText;
@@ -477,7 +477,7 @@ server.tool(
           }
         }
 
-        pulse += `  (Full report: file://${join(reportsDir, `${scenarioId}.json`)})\n\n`;
+        pulse += `  (Full report: file://${path.resolve(join(reportsDir, `${scenarioId}.json`))})\n\n`;
       }
 
       // Process unreported scenarios (either running or terminated without report)
@@ -524,7 +524,7 @@ server.tool(
           pulse += `  Hypothesis: "${hypothesis}"\n`;
           pulse += `  Runtime: ${runtime}s\n`;
           pulse += `  Latest Activity: ${lastEvent.message}\n`;
-          pulse += `  (Log: file://${join(logsDir, file)})\n\n`;
+          pulse += `  (Log: file://${path.resolve(join(logsDir, file))})\n\n`;
         } catch (e) {
           // Skip scenarios with invalid JSON
           continue;
