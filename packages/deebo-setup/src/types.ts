@@ -32,4 +32,5 @@ export interface SetupConfig {
   clineConfigPath?: string;
   claudeConfigPath?: string;
   vscodePath?: string;
+  cursorConfigPath?: string;
 }

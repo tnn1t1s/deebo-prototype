@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { homedir } from 'os';
+import { homedir, platform as osPlatform } from 'os';
 import { join } from 'path';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import { LlmHostSchema } from './types.js';
+import { LlmHostSchema, LlmHost } from './types.js';
 import {
   checkPrerequisites,
   findConfigPaths,
@@ -153,8 +153,21 @@ async function main() {
     const deeboPath = join(home, '.deebo');
     const envPath = join(deeboPath, '.env');
 
-    // Create config object
-    const config = {
+    // Create config object with cursorConfigPath
+    const config: {
+      deeboPath: string;
+      envPath: string;
+      motherHost: LlmHost;
+      motherModel: string;
+      scenarioHost: LlmHost;
+      scenarioModel: string;
+      motherApiKey: string;
+      scenarioApiKey?: string;
+      clineConfigPath?: string;
+      claudeConfigPath?: string;
+      vscodePath?: string;
+      cursorConfigPath?: string;
+    } = {
       deeboPath,
       envPath,
       motherHost: parsedMotherHost,
@@ -168,10 +181,36 @@ async function main() {
       vscodePath: configPaths.vscode
     };
 
+    // Ask about Cursor configuration
+    const { useCursorGlobal } = await inquirer.prompt([{
+      type: 'confirm',
+      name: 'useCursorGlobal',
+      message: 'global cursor install ok? (y/n)',
+      default: true
+    }]);
+
+    if (useCursorGlobal) {
+      // Use global Cursor config path
+      const cursorPath = osPlatform() === 'win32' 
+        ? join(process.env.APPDATA || '', '.cursor')
+        : join(home, '.cursor');
+      config.cursorConfigPath = join(cursorPath, 'mcp.json');
+    } else {
+      // Let user select a directory for project-specific config
+      const { projectPath } = await inquirer.prompt([{
+        type: 'input',
+        name: 'projectPath',
+        message: 'Enter path to project directory:',
+        default: process.cwd()
+      }]);
+      config.cursorConfigPath = join(projectPath, '.cursor', 'mcp.json');
+    }
+
     console.log(chalk.blue('\nDetected configurations:'));
     if (configPaths.cline) console.log('- Cline');
     if (configPaths.claude) console.log('- Claude Desktop');
     if (configPaths.vscode) console.log('- VS Code');
+    if (config.cursorConfigPath) console.log('- Cursor');
 
     // Setup Deebo
     await setupDeeboDirectory(config);
