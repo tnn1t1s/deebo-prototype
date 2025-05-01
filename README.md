@@ -110,9 +110,10 @@ We're piloting enterprise features that unlock unprecedented productivity gains 
 </details>
 
 ---
+[Watch the full work session with Cline + Deebo here (3 mins, sped up)](https://drive.google.com/file/d/141VdQ9DNOfnOpP_mmB0UPMr8cwAGrxKC/view)
 
 <video src="https://github.com/user-attachments/assets/756d35b4-4f77-48de-bd1a-86f76360279e" controls width="100%"></video>
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE) for details.  
+Apache License 2.0 — see [LICENSE](LICENSE) for details.
