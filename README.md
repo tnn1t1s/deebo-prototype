@@ -108,7 +108,7 @@ If you fixed the issue or no longer need the investigation, tell your agent to c
 We're piloting enterprise features that unlock unprecedented productivity gains for your team. Reach out if interested!
 
 </details>
-
+ 
 ---
 [Watch the full work session with Cline + Deebo here (3 mins, sped up)](https://drive.google.com/file/d/141VdQ9DNOfnOpP_mmB0UPMr8cwAGrxKC/view)
 
