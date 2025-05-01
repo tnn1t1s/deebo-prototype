@@ -5,7 +5,7 @@
 
 Deebo is an agentic debugging copilot for your AI coding agent that speeds up time-to-resolution by 10x. If your main coding agent is like a single-threaded process, Deebo introduces multi-threadedness to your development workflow.
 
-**Need the Deebo Guide, or have questions/support? dm me on x @sriramenn or open an issue here**
+**feedback, questions/support? check out Deebo Guide below, or dm me on x @sriramenn**
 
 **If you think your team can benefit from Deebo, we’d love to hear from you.** We’re partnering with teams who use AI agents to write production code and want to maximize their productivity. Reach out for a live walkthrough, custom setup support, or to explore early access to enterprise features.
 
@@ -45,6 +45,68 @@ For manual setup, create a configuration file at your coding agent's specified l
 }
 ```
 Deebo works with any OpenAI-compatible SDK, Anthropic, Gemini, and OpenRouter.
+</details>
+
+<details>
+
+<summary> Deebo Guide </summary>
+
+Deebo helps your AI agent debug real software errors by launching automated investigations. Here's how to use it effectively.
+
+---
+
+### 1. Start a Debugging Session
+
+When you hit a tough bug, ask your agent to delegate the task to Deebo.
+
+**What to include in your request:**
+- 🔧 The **error** (message, stack trace, or behavior)
+- 📁 The **absolute path** to your Git repository
+- 💡 Any helpful **context**, such as:
+  - What you’ve already tried
+  - Relevant files or code snippets
+  - How to reproduce the issue
+  - The language or environment
+
+**Example instruction to your agent:**
+
+> “This error is happening in `/path/to/repo`, possibly related to auth logic. I already checked the session token parser. Can you delegate this to Deebo?”
+
+Your agent will start a Deebo session and give you a **session ID** (e.g. `session-1745...`). Save it.
+
+---
+
+### 2. Check Investigation Progress
+
+After ~30 seconds, ask your agent to check the status of the Deebo session using that session ID.
+
+You’ll get a **session pulse**, which shows:
+- Whether the investigation is in progress or completed
+- What the system is currently exploring
+- Summaries of findings, if any
+
+---
+
+### 3. Add Observations (Optional)
+
+If you notice something important — or think Deebo is heading the wrong way — you can guide the investigation.
+
+Ask your agent to pass a short observation to Deebo.
+
+**Example:**
+
+> “Let Deebo know that the file size warnings might be a red herring — the issue is probably with the CI env vars.”
+
+This may shift the direction of the investigation.
+
+### 4. Cancel a Session (Optional)
+
+If you fixed the issue or no longer need the investigation, tell your agent to cancel the Deebo session.
+
+### Want More?
+
+We're piloting enterprise features that unlock unprecedented productivity gains for your team. Reach out if interested!
+
 </details>
 
 ---
