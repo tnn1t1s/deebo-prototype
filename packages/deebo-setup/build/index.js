@@ -209,14 +209,15 @@ async function main() {
         await writeEnvFile(config);
         const { fullConfig, displayConfig } = await updateMcpConfig(config);
         // Display the config with masked API keys
-        console.log(chalk.blue('\nDeebo MCP Configuration:'));
+        console.log(chalk.blue('\nMCP Configuration:'));
         console.log(chalk.dim('API keys are masked for security\n'));
+        console.log(chalk.dim('Add this to your MCP settings:\n'));
         console.log(JSON.stringify(displayConfig, null, 2));
         // Ask to copy full config
         const { copyConfig } = await inquirer.prompt([{
                 type: 'confirm',
                 name: 'copyConfig',
-                message: 'Copy full config to clipboard? (includes API keys)',
+                message: 'Copy full configuration to clipboard? (includes API keys)',
                 default: false
             }]);
         if (copyConfig) {
