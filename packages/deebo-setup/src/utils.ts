@@ -273,8 +273,34 @@ NODE_ENV=development`;
   console.log(chalk.green('✔ Created environment file'));
 }
 
-export async function updateMcpConfig(config: SetupConfig): Promise<void> {
-  const deeboConfig = {
+function maskApiKey(key: string): string {
+  if (!key) return '';
+  const start = key.substring(0, 8);
+  const end = key.substring(key.length - 4);
+  return `${start}...${end}`;
+}
+
+function getDisplayConfig(config: SetupConfig, deeboConfig: any): any {
+  const displayConfig = JSON.parse(JSON.stringify(deeboConfig));
+  
+  // Mask API keys in env
+  const motherKeyVar = getApiKeyEnvVar(config.motherHost);
+  if (displayConfig.env[motherKeyVar]) {
+    displayConfig.env[motherKeyVar] = maskApiKey(config.motherApiKey);
+  }
+  
+  if (config.scenarioHost !== config.motherHost && config.scenarioApiKey) {
+    const scenarioKeyVar = getApiKeyEnvVar(config.scenarioHost);
+    if (displayConfig.env[scenarioKeyVar]) {
+      displayConfig.env[scenarioKeyVar] = maskApiKey(config.scenarioApiKey);
+    }
+  }
+  
+  return displayConfig;
+}
+
+export async function updateMcpConfig(config: SetupConfig): Promise<{ fullConfig: any; displayConfig: any }> {
+  const fullConfig = {
     autoApprove: [],
     disabled: false,
     timeout: 30,
@@ -300,10 +326,13 @@ export async function updateMcpConfig(config: SetupConfig): Promise<void> {
     transportType: 'stdio'
   };
 
+  // Create display config with masked API keys
+  const displayConfig = getDisplayConfig(config, fullConfig);
+
   // Update Cline config if available
   if (config.clineConfigPath) {
     const clineConfig = JSON.parse(await readFile(config.clineConfigPath, 'utf8')) as McpConfig;
-    clineConfig.mcpServers.deebo = deeboConfig;
+    clineConfig.mcpServers.deebo = fullConfig;
     await writeFile(config.clineConfigPath, JSON.stringify(clineConfig, null, 2));
     console.log(chalk.green('✔ Updated Cline configuration'));
   }
@@ -311,7 +340,7 @@ export async function updateMcpConfig(config: SetupConfig): Promise<void> {
   // Update Claude config if available
   if (config.claudeConfigPath) {
     const claudeConfig = JSON.parse(await readFile(config.claudeConfigPath, 'utf8')) as McpConfig;
-    claudeConfig.mcpServers.deebo = deeboConfig;
+    claudeConfig.mcpServers.deebo = fullConfig;
     await writeFile(config.claudeConfigPath, JSON.stringify(claudeConfig, null, 2));
     console.log(chalk.green('✔ Updated Claude Desktop configuration'));
   }
@@ -330,7 +359,7 @@ export async function updateMcpConfig(config: SetupConfig): Promise<void> {
       // Add Deebo config without overwriting other servers
       cursorConfig.mcpServers = {
         ...cursorConfig.mcpServers,
-        deebo: deeboConfig
+        deebo: fullConfig
       };
 
       // Create parent directory if it doesn't exist
@@ -360,7 +389,7 @@ export async function updateMcpConfig(config: SetupConfig): Promise<void> {
       const mcpSettings = settings as Record<string, any>;
       mcpSettings.mcp = mcpSettings.mcp || {};
       mcpSettings.mcp.servers = mcpSettings.mcp.servers || {};
-      mcpSettings.mcp.servers.deebo = deeboConfig;
+      mcpSettings.mcp.servers.deebo = fullConfig;
       mcpSettings['chat.mcp.enabled'] = true;
 
       // Create parent directory if it doesn't exist
@@ -375,6 +404,8 @@ export async function updateMcpConfig(config: SetupConfig): Promise<void> {
       console.log(chalk.dim(err instanceof Error ? err.message : String(err)));
     }
   }
+
+  return { fullConfig, displayConfig };
 
 }
 

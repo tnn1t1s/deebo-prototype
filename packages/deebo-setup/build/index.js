@@ -207,7 +207,39 @@ async function main() {
         // Setup Deebo
         await setupDeeboDirectory(config);
         await writeEnvFile(config);
-        await updateMcpConfig(config);
+        const { fullConfig, displayConfig } = await updateMcpConfig(config);
+        // Display the config with masked API keys
+        console.log(chalk.blue('\nDeebo MCP Configuration:'));
+        console.log(chalk.dim('API keys are masked for security\n'));
+        console.log(JSON.stringify(displayConfig, null, 2));
+        // Ask to copy full config
+        const { copyConfig } = await inquirer.prompt([{
+                type: 'confirm',
+                name: 'copyConfig',
+                message: 'Copy full config to clipboard? (includes API keys)',
+                default: false
+            }]);
+        if (copyConfig) {
+            try {
+                const { execSync } = await import('child_process');
+                const platform = process.platform;
+                const configString = JSON.stringify(fullConfig, null, 2);
+                if (platform === 'darwin') {
+                    execSync('pbcopy', { input: configString });
+                }
+                else if (platform === 'win32') {
+                    execSync('clip', { input: configString });
+                }
+                else {
+                    execSync('xclip -selection clipboard', { input: configString });
+                }
+                console.log(chalk.green('✔ Configuration copied to clipboard'));
+            }
+            catch (err) {
+                console.log(chalk.yellow('⚠ Failed to copy to clipboard'));
+                console.log(chalk.dim(err instanceof Error ? err.message : String(err)));
+            }
+        }
         console.log(chalk.green('\n✔ Deebo installation complete!'));
         console.log(chalk.blue('\nNext steps:'));
         console.log('1. Restart your MCP client');
