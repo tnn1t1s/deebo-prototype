@@ -97,10 +97,11 @@ export const toolPathsCheck = {
     name: 'Tool Paths',
     async check() {
         const results = [];
+        const isWindows = process.platform === 'win32';
+        const { execSync } = await import('child_process');
         // Check npx
         try {
-            const { execSync } = await import('child_process');
-            const npxPath = execSync('which npx').toString().trim();
+            const npxPath = execSync(isWindows ? 'cmd.exe /c where npx.cmd' : 'which npx').toString().trim().split('\n')[0]; // Take first path if multiple returned
             results.push({
                 name: 'npx',
                 status: 'pass',
@@ -116,10 +117,9 @@ export const toolPathsCheck = {
                 details: 'Install Node.js to get npx'
             });
         }
-        // Check uvx
+        // Check uvx 
         try {
-            const { execSync } = await import('child_process');
-            const uvxPath = execSync('which uvx').toString().trim();
+            const uvxPath = execSync(isWindows ? 'cmd.exe /c where uvx.exe' : 'which uvx').toString().trim().split('\n')[0]; // Take first path if multiple returned
             results.push({
                 name: 'uvx',
                 status: 'pass',
@@ -132,7 +132,7 @@ export const toolPathsCheck = {
                 name: 'uvx',
                 status: 'fail',
                 message: 'uvx not found',
-                details: 'Install uv to get uvx: curl -LsSf https://astral.sh/uv/install.sh | sh'
+                details: isWindows ? 'Install uv using pip: pip install uv' : 'Install uv: curl -LsSf https://astral.sh/uv/install.sh | sh'
             });
         }
         // Aggregate results
@@ -150,14 +150,25 @@ export const configFilesCheck = {
     async check(config) {
         const home = homedir();
         const isWindows = process.platform === 'win32';
+        // Get VS Code and Cursor paths based on platform
+        const vscodePath = isWindows
+            ? join(process.env.APPDATA || '', 'Code', 'User', 'settings.json')
+            : join(home, isWindows ? '' : 'Library/Application Support/Code/User/settings.json');
+        const cursorPath = isWindows
+            ? join(process.env.APPDATA || '', '.cursor', 'mcp.json')
+            : join(home, '.cursor', 'mcp.json');
         const paths = isWindows ? {
             cline: join(process.env.APPDATA || '', 'Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
             claude: join(process.env.APPDATA || '', 'Claude/claude_desktop_config.json'),
+            vscode: vscodePath,
+            cursor: cursorPath,
             env: join(config.deeboPath, '.env'),
             tools: join(config.deeboPath, 'config/tools.json')
         } : {
             cline: join(home, 'Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
             claude: join(home, 'Library/Application Support/Claude/claude_desktop_config.json'),
+            vscode: vscodePath,
+            cursor: cursorPath,
             env: join(config.deeboPath, '.env'),
             tools: join(config.deeboPath, 'config/tools.json')
         };
@@ -207,12 +218,16 @@ export const configFilesCheck = {
                 });
             }
         }
-        // Aggregate results
-        const allPass = results.every(r => r.status === 'pass');
+        // Check if at least one MCP config is valid (cline, claude, vscode, or cursor)
+        const mcpResults = results.filter(r => ['cline', 'claude', 'vscode', 'cursor'].includes(r.name));
+        const hasMcpConfig = mcpResults.some(r => r.status === 'pass');
+        // Check if core configs (env, tools) are valid
+        const coreResults = results.filter(r => r.name === 'env' || r.name === 'tools');
+        const corePass = coreResults.every(r => r.status === 'pass');
         return {
             name: 'Configuration Files',
-            status: allPass ? 'pass' : 'fail',
-            message: allPass ? 'All configuration files valid' : 'Some configuration files missing or invalid',
+            status: (hasMcpConfig && corePass) ? 'pass' : 'fail',
+            message: hasMcpConfig ? 'All configuration files valid' : 'No valid MCP configuration found',
             details: results.map(r => `${r.name}: ${r.message}\n${r.details || ''}`).join('\n\n')
         };
     }
@@ -228,6 +243,7 @@ export const apiKeysCheck = {
             // Check each potential API key
             const keyChecks = {
                 OPENROUTER_API_KEY: 'sk-or-v1-',
+                OPENAI_API_KEY: 'sk-',
                 ANTHROPIC_API_KEY: 'sk-ant-',
                 GEMINI_API_KEY: 'AI'
             };

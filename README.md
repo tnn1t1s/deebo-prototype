@@ -18,7 +18,7 @@ npx deebo-setup@latest
 <details>
 <summary> Manual Configuration </summary>
 
-For manual setup, create a configuration file at your coding agent's specified location with the following content:
+After installing with deebo-setup, create a configuration file at your coding agent's specified location with the following content:
 
 ```json
 {
@@ -103,10 +103,16 @@ This may shift the direction of the investigation.
 
 If you fixed the issue or no longer need the investigation, tell your agent to cancel the Deebo session.
 
+### For AI Agents: Memory Bank Access
+
+When asked to check debug session progress, look in:
+`~/.deebo/memory-bank/[project-hash]/sessions/[session-id]/logs/mother.log`
+
+The project hash is a unique identifier for each repository, and session IDs are provided when starting a debug session.
+
 ### Want More?
 
 We're piloting enterprise features that unlock unprecedented productivity gains for your team. Reach out if interested!
-
 </details>
  
 ---

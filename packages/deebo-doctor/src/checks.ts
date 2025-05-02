@@ -162,14 +162,27 @@ export const configFilesCheck: SystemCheck = {
     const home = homedir();
     const isWindows = process.platform === 'win32';
     
+    // Get VS Code and Cursor paths based on platform
+    const vscodePath = isWindows 
+      ? join(process.env.APPDATA || '', 'Code', 'User', 'settings.json')
+      : join(home, isWindows ? '' : 'Library/Application Support/Code/User/settings.json');
+    
+    const cursorPath = isWindows
+      ? join(process.env.APPDATA || '', '.cursor', 'mcp.json')
+      : join(home, '.cursor', 'mcp.json');
+
     const paths = isWindows ? {
       cline: join(process.env.APPDATA || '', 'Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
       claude: join(process.env.APPDATA || '', 'Claude/claude_desktop_config.json'),
+      vscode: vscodePath,
+      cursor: cursorPath,
       env: join(config.deeboPath, '.env'),
       tools: join(config.deeboPath, 'config/tools.json')
     } : {
       cline: join(home, 'Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
       claude: join(home, 'Library/Application Support/Claude/claude_desktop_config.json'),
+      vscode: vscodePath,
+      cursor: cursorPath,
       env: join(config.deeboPath, '.env'),
       tools: join(config.deeboPath, 'config/tools.json')
     };
@@ -225,12 +238,18 @@ export const configFilesCheck: SystemCheck = {
       }
     }
 
-    // Aggregate results
-    const allPass = results.every(r => r.status === 'pass');
+    // Check if at least one MCP config is valid (cline, claude, vscode, or cursor)
+    const mcpResults = results.filter(r => ['cline', 'claude', 'vscode', 'cursor'].includes(r.name));
+    const hasMcpConfig = mcpResults.some(r => r.status === 'pass');
+    
+    // Check if core configs (env, tools) are valid
+    const coreResults = results.filter(r => r.name === 'env' || r.name === 'tools');
+    const corePass = coreResults.every(r => r.status === 'pass');
+
     return {
       name: 'Configuration Files',
-      status: allPass ? 'pass' : 'fail',
-      message: allPass ? 'All configuration files valid' : 'Some configuration files missing or invalid',
+      status: (hasMcpConfig && corePass) ? 'pass' : 'fail',
+      message: hasMcpConfig ? 'All configuration files valid' : 'No valid MCP configuration found',
       details: results.map(r => `${r.name}: ${r.message}\n${r.details || ''}`).join('\n\n')
     };
   }

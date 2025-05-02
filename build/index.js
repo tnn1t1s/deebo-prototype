@@ -297,7 +297,8 @@ server.tool("check", "Retrieves the current status of a debugging session, provi
             }
         }
         // build clickable links with absolute paths
-        const projectId = sessionDir.split("/memory-bank/")[1].split("/")[0];
+        const normalizedPath = sessionDir.split(path.sep).join('/'); // Normalize to forward slashes
+        const projectId = normalizedPath.split("/memory-bank/")[1].split("/")[0];
         const progressMdPath = path.resolve(join(DEEBO_ROOT, "memory-bank", projectId, "progress.md"));
         const progressLink = `file://${progressMdPath}`;
         const motherLink = `file://${path.resolve(motherLogPath)}`;

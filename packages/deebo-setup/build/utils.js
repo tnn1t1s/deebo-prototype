@@ -234,10 +234,33 @@ export async function setupDeeboDirectory(config) {
     console.log(chalk.green('✔ Cloned Deebo repository'));
     // Install dependencies
     const { execSync } = await import('child_process');
-    execSync('npm install', { cwd: config.deeboPath });
-    console.log(chalk.green('✔ Installed dependencies'));
+    // On Windows, temporarily remove the preinstall script before installing
+    if (process.platform === 'win32') {
+        const pkgPath = join(config.deeboPath, 'package.json');
+        const pkg = JSON.parse(await readFile(pkgPath, 'utf8'));
+        const originalPreinstall = pkg.scripts.preinstall;
+        delete pkg.scripts.preinstall;
+        await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
+        try {
+            execSync('npm install', { cwd: config.deeboPath, stdio: 'inherit' });
+            console.log(chalk.green('✔ Installed dependencies'));
+            // Restore the preinstall script
+            pkg.scripts.preinstall = originalPreinstall;
+            await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
+        }
+        catch (err) {
+            // Restore the preinstall script even if install fails
+            pkg.scripts.preinstall = originalPreinstall;
+            await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
+            throw err;
+        }
+    }
+    else {
+        execSync('npm install', { cwd: config.deeboPath, stdio: 'inherit' });
+        console.log(chalk.green('✔ Installed dependencies'));
+    }
     // Build project
-    execSync('npm run build', { cwd: config.deeboPath });
+    execSync('npm run build', { cwd: config.deeboPath, stdio: 'inherit' });
     console.log(chalk.green('✔ Built project'));
 }
 export async function writeEnvFile(config) {
