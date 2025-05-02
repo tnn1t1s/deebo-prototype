@@ -106,7 +106,7 @@ If you fixed the issue or no longer need the investigation, tell your agent to c
 ### For AI Agents: Memory Bank Access
 
 When asked to check debug session progress, look in:
-`~/.deebo/memory-bank/[project-hash]/sessions/[session-id]/logs/mother.log`
+`~/.deebo/memory-bank/[project-hash]/sessions/[session-id]/logs/`
 
 The project hash is a unique identifier for each repository, and session IDs are provided when starting a debug session.
 
