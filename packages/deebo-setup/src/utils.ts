@@ -80,6 +80,51 @@ export async function checkPrerequisites(): Promise<void> {
     console.log(chalk.yellow('⚠ Could not check for ripgrep'));
     throw new Error('Failed to check for ripgrep installation');
   }
+
+  // Check uvx
+  try {
+    const { execSync } = await import('child_process');
+    try {
+      execSync('uvx --version', { stdio: 'ignore' });
+      console.log(chalk.green('✔ uvx found'));
+    } catch {
+      console.log(chalk.yellow('⚠ uvx not found. Installing...'));
+      
+      switch(platform) {
+        case 'win32':
+          try {
+            execSync('powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"', { 
+              stdio: 'inherit',
+              windowsHide: true
+            });
+          } catch {
+            console.log(chalk.yellow('\nAutomatic uvx installation failed.'));
+            console.log('Please install uvx manually:');
+            console.log('1. Run in PowerShell: irm https://astral.sh/uv/install.ps1 | iex');
+            console.log('2. Or visit: https://github.com/astral/uv#installation');
+            throw new Error('uvx installation required');
+          }
+          break;
+        case 'darwin':
+        default:
+          try {
+            execSync('curl -LsSf https://astral.sh/uv/install.sh | sh', { stdio: 'inherit' });
+          } catch {
+            console.log(chalk.yellow('\nAutomatic uvx installation failed.'));
+            console.log('Please install uvx manually:');
+            console.log('curl -LsSf https://astral.sh/uv/install.sh | sh');
+            console.log('Or visit: https://github.com/astral/uv#installation');
+            throw new Error('uvx installation required');
+          }
+      }
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === 'uvx installation required') {
+      throw error;
+    }
+    console.log(chalk.yellow('⚠ Could not check for uvx'));
+    throw new Error('Failed to check for uvx installation');
+  }
 }
 
 export async function findConfigPaths(): Promise<{ cline?: string; claude?: string; vscode?: string; cursor?: string }> {

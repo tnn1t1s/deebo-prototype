@@ -244,6 +244,9 @@ async function main() {
       // Command execution failed
     }
 
+    console.log(chalk.blue('\nNote for Windows users:'));
+    console.log('You need to install DesktopCommander MCP globally by running: npm install -g @wonderwhy-er/desktop-commander');
+
     // Setup Deebo
     await setupDeeboDirectory(config);
     await writeEnvFile(config);

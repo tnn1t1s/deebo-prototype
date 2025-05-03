@@ -7,14 +7,9 @@
   },
   "type": "module",
   "scripts": {
-    "preinstall": "if ! command -v rg &> /dev/null; then echo 'Error: ripgrep is not installed via brew'; exit 1; fi",
     "build": "tsc",
     "start": "node --experimental-specifier-resolution=node --experimental-modules --max-old-space-size=4096 build/index.js",
-    "dev": "tsc --watch & node --experimental-specifier-resolution=node --experimental-modules --max-old-space-size=4096 --watch build/index.js",
-    "setup": "bash setup.sh",
-    "setup:win": "powershell -ExecutionPolicy Bypass -File .\\setup.ps1",
-    "check-env": "node check-env.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "tsc --watch & node --experimental-specifier-resolution=node --experimental-modules --max-old-space-size=4096 --watch build/index.js"
   },
   "keywords": [],
   "author": "",

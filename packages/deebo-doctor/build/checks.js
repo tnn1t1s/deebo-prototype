@@ -99,9 +99,45 @@ export const toolPathsCheck = {
         const results = [];
         const isWindows = process.platform === 'win32';
         const { execSync } = await import('child_process');
+        // Check node
+        try {
+            const nodePath = execSync(isWindows ? 'cmd.exe /c where node.exe' : 'which node').toString().trim().split('\n')[0];
+            results.push({
+                name: 'node',
+                status: 'pass',
+                message: 'node found',
+                details: `Path: ${nodePath}`
+            });
+        }
+        catch {
+            results.push({
+                name: 'node',
+                status: 'fail',
+                message: 'node not found',
+                details: 'Install Node.js from https://nodejs.org'
+            });
+        }
+        // Check npm
+        try {
+            const npmPath = execSync(isWindows ? 'cmd.exe /c where npm.cmd' : 'which npm').toString().trim().split('\n')[0];
+            results.push({
+                name: 'npm',
+                status: 'pass',
+                message: 'npm found',
+                details: `Path: ${npmPath}`
+            });
+        }
+        catch {
+            results.push({
+                name: 'npm',
+                status: 'fail',
+                message: 'npm not found',
+                details: 'Install Node.js to get npm'
+            });
+        }
         // Check npx
         try {
-            const npxPath = execSync(isWindows ? 'cmd.exe /c where npx.cmd' : 'which npx').toString().trim().split('\n')[0]; // Take first path if multiple returned
+            const npxPath = execSync(isWindows ? 'cmd.exe /c where npx.cmd' : 'which npx').toString().trim().split('\n')[0];
             results.push({
                 name: 'npx',
                 status: 'pass',
@@ -119,7 +155,7 @@ export const toolPathsCheck = {
         }
         // Check uvx 
         try {
-            const uvxPath = execSync(isWindows ? 'cmd.exe /c where uvx.exe' : 'which uvx').toString().trim().split('\n')[0]; // Take first path if multiple returned
+            const uvxPath = execSync(isWindows ? 'cmd.exe /c where uvx.exe' : 'which uvx').toString().trim().split('\n')[0];
             results.push({
                 name: 'uvx',
                 status: 'pass',
@@ -132,16 +168,86 @@ export const toolPathsCheck = {
                 name: 'uvx',
                 status: 'fail',
                 message: 'uvx not found',
-                details: isWindows ? 'Install uv using pip: pip install uv' : 'Install uv: curl -LsSf https://astral.sh/uv/install.sh | sh'
+                details: isWindows
+                    ? 'Run in PowerShell: irm https://astral.sh/uv/install.ps1 | iex'
+                    : 'Run: curl -LsSf https://astral.sh/uv/install.sh | sh'
+            });
+        }
+        // Check git
+        try {
+            const gitPath = execSync(isWindows ? 'cmd.exe /c where git.exe' : 'which git').toString().trim().split('\n')[0];
+            results.push({
+                name: 'git',
+                status: 'pass',
+                message: 'git found',
+                details: `Path: ${gitPath}`
+            });
+        }
+        catch {
+            results.push({
+                name: 'git',
+                status: 'fail',
+                message: 'git not found',
+                details: 'Install git from https://git-scm.com'
+            });
+        }
+        // Check ripgrep
+        try {
+            const rgPath = execSync(isWindows ? 'cmd.exe /c where rg.exe' : 'which rg').toString().trim().split('\n')[0];
+            results.push({
+                name: 'ripgrep',
+                status: 'pass',
+                message: 'ripgrep found',
+                details: `Path: ${rgPath}`
+            });
+        }
+        catch {
+            results.push({
+                name: 'ripgrep',
+                status: 'fail',
+                message: 'ripgrep not found',
+                details: isWindows
+                    ? 'Run in Command Prompt: winget install -e --id BurntSushi.ripgrep'
+                    : 'Run: brew install ripgrep'
+            });
+        }
+        // Check environment paths
+        const pathEnv = process.env.PATH || '';
+        const pathSeparator = isWindows ? ';' : ':';
+        const paths = pathEnv.split(pathSeparator);
+        // Common tool directories that should be in PATH
+        const expectedPaths = isWindows
+            ? ['\\npm', '\\git', '\\nodejs']
+            : ['/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin'];
+        const missingPaths = expectedPaths.filter(expected => !paths.some(p => p.toLowerCase().includes(expected.toLowerCase())));
+        if (missingPaths.length > 0) {
+            results.push({
+                name: 'PATH',
+                status: 'warn',
+                message: 'Some expected paths missing from PATH',
+                details: `Missing: ${missingPaths.join(', ')}\nCurrent PATH: ${pathEnv}`
+            });
+        }
+        else {
+            results.push({
+                name: 'PATH',
+                status: 'pass',
+                message: 'All expected paths found in PATH',
+                details: `PATH: ${pathEnv}`
             });
         }
         // Aggregate results
         const allPass = results.every(r => r.status === 'pass');
+        const hasFails = results.some(r => r.status === 'fail');
         return {
             name: 'Tool Paths',
-            status: allPass ? 'pass' : 'fail',
-            message: allPass ? 'All tool paths found' : 'Some tool paths missing',
-            details: results.map(r => `${r.name}: ${r.details || r.message}`).join('\n')
+            status: allPass ? 'pass' : hasFails ? 'fail' : 'warn',
+            message: allPass
+                ? 'All tool paths found'
+                : hasFails
+                    ? 'Some required tools missing'
+                    : 'Tools found but some paths may need attention',
+            details: results.map(r => `${r.name}: ${r.message}\n  ${r.details || ''}`).join('\n\n')
         };
     }
 };
