@@ -66,22 +66,47 @@ export const mcpToolsCheck = {
             });
         }
         // Check desktop-commander
-        try {
-            const { execSync } = await import('child_process');
-            execSync('npx @wonderwhy-er/desktop-commander --help 2>/dev/null');
-            results.push({
-                name: 'desktop-commander',
-                status: 'pass',
-                message: 'desktop-commander installed'
-            });
+        if (process.platform === 'win32') {
+            // On Windows, check for the .cmd shim which is required for proper stdin/stdout handling
+            const base = process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming');
+            const cmdPath = join(base, 'npm', 'desktop-commander.cmd');
+            try {
+                await access(cmdPath);
+                results.push({
+                    name: 'desktop-commander',
+                    status: 'pass',
+                    message: 'desktop-commander.cmd found',
+                    details: `Path: ${cmdPath}`
+                });
+            }
+            catch {
+                results.push({
+                    name: 'desktop-commander',
+                    status: 'fail',
+                    message: 'desktop-commander.cmd not found',
+                    details: 'Install globally with: npm install -g @wonderwhy-er/desktop-commander'
+                });
+            }
         }
-        catch {
-            results.push({
-                name: 'desktop-commander',
-                status: 'fail',
-                message: 'desktop-commander not found',
-                details: 'Install with: npx @wonderwhy-er/desktop-commander setup'
-            });
+        else {
+            // On non-Windows, just check if it's installed
+            try {
+                const { execSync } = await import('child_process');
+                execSync('npx @wonderwhy-er/desktop-commander --help 2>/dev/null');
+                results.push({
+                    name: 'desktop-commander',
+                    status: 'pass',
+                    message: 'desktop-commander installed'
+                });
+            }
+            catch {
+                results.push({
+                    name: 'desktop-commander',
+                    status: 'fail',
+                    message: 'desktop-commander not found',
+                    details: 'Install with: npx @wonderwhy-er/desktop-commander setup'
+                });
+            }
         }
         // Aggregate results
         const allPass = results.every(r => r.status === 'pass');
