@@ -272,7 +272,19 @@ export const toolPathsCheck = {
                 : hasFails
                     ? 'Some required tools missing'
                     : 'Tools found but some paths may need attention',
-            details: results.map(r => `${r.name}: ${r.message}\n  ${r.details || ''}`).join('\n\n')
+            details: results.map(r => `${r.name}: ${r.message}\n  ${r.details || ''}`).join('\n\n') + `\n\nTroubleshooting Tips:
+1. If deebo is failing at runtime (when starting a session), it's likely the system cannot find paths for MCP tools (git-mcp and desktopCommander). Run 'where uvx' to verify uvx is in your PATH.
+
+2. If this check says "unable to find tool paths" even after installation:
+   - Make sure to add the uvx/node paths to your environment
+   - On Windows, check if uvx.exe is in your PATH by running 'where uvx'
+   - Try closing and reopening your terminal to refresh environment variables
+
+3. If deebo fails in the middle of a run after spawning scenario agents:
+   - Don't worry! This is not a critical failure
+   - You can always start a new deebo session
+   - Tell it to look at its memory bank from the previous run
+   - The memory bank contains all the progress and findings so far`
         };
     }
 };

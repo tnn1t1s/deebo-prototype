@@ -28,7 +28,7 @@ export async function checkPrerequisites(): Promise<void> {
     throw new Error('git is required but not found');
   }
 
-  // Check ripgrep
+  // Check ripgrep and install desktopCommander
   const platform = process.platform;
   try {
     const { execSync } = await import('child_process');
@@ -124,6 +124,22 @@ export async function checkPrerequisites(): Promise<void> {
     }
     console.log(chalk.yellow('⚠ Could not check for uvx'));
     throw new Error('Failed to check for uvx installation');
+  }
+
+  // Install desktopCommander globally on Windows for proper .cmd shim
+  if (platform === 'win32') {
+    try {
+      const { execSync } = await import('child_process');
+      try {
+        execSync('npm install -g @wonderwhy-er/desktop-commander', { stdio: 'inherit' });
+        console.log(chalk.green('✔ Installed desktopCommander globally'));
+      } catch {
+        console.log(chalk.yellow('\nAutomatic desktopCommander installation failed.'));
+        console.log('Please install manually: npm install -g @wonderwhy-er/desktop-commander');
+      }
+    } catch (error) {
+      console.log(chalk.yellow('⚠ Could not install desktopCommander'));
+    }
   }
 }
 
