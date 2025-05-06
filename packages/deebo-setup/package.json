@@ -1,6 +1,6 @@
 {
   "name": "deebo-setup",
-  "version": "1.0.95",
+  "version": "1.0.96",
   "description": "System installer for Deebo debugging tool",
   "type": "module",
   "bin": {
@@ -16,6 +16,10 @@
     "simple-git": "^3.22.0",
     "zod": "^3.22.4"
   },
+  "files": [
+    "build/**/*",
+    "src/deebo_guide.md"
+  ],
   "devDependencies": {
     "@types/inquirer": "^9.0.7",
     "@types/node": "^20.11.28",
