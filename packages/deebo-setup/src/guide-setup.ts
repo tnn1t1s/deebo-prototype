@@ -61,13 +61,15 @@ export async function setupGuideServer(): Promise<void> {
     await mkdir(deeboPath, { recursive: true });
     console.log(chalk.green('✔ Created .deebo directory'));
 
-    // Copy guide file from npm package src directory
-    await copyFile(join(dirname(dirname(__dirname)), 'src', 'deebo_guide.md'), guidePath);
+    // Copy guide file using reliable package-relative path resolution
+    const guideSource = fileURLToPath(new URL('../src/deebo_guide.md', import.meta.url));
+    await copyFile(guideSource, guidePath);
     console.log(chalk.green('✔ Copied Deebo guide'));
 
-    // Copy guide server
+    // Copy guide server using reliable package-relative path resolution
     const serverPath = join(deeboPath, 'guide-server.js');
-    await copyFile(join(projectRoot, 'packages', 'deebo-setup', 'build', 'guide-server.js'), serverPath);
+    const serverSource = fileURLToPath(new URL('../build/guide-server.js', import.meta.url));
+    await copyFile(serverSource, serverPath);
     console.log(chalk.green('✔ Copied guide server'));
 
     // Configure in all supported MCP clients
