@@ -49,12 +49,13 @@ export async function setupGuideServer() {
         // Create .deebo directory
         await mkdir(deeboPath, { recursive: true });
         console.log(chalk.green('✔ Created .deebo directory'));
-        // Copy guide file from config directory
-        await copyFile(join(process.cwd(), 'config', 'deebo_guide.md'), guidePath);
+        // Copy guide file from project root's config directory
+        const projectRoot = join(__dirname, '..', '..', '..');
+        await copyFile(join(projectRoot, 'config', 'deebo_guide.md'), guidePath);
         console.log(chalk.green('✔ Copied Deebo guide'));
         // Copy guide server
         const serverPath = join(deeboPath, 'guide-server.js');
-        await copyFile('packages/deebo-setup/build/guide-server.js', serverPath);
+        await copyFile(join(projectRoot, 'packages', 'deebo-setup', 'build', 'guide-server.js'), serverPath);
         console.log(chalk.green('✔ Copied guide server'));
         // Configure in all supported MCP clients
         const platform = process.platform;
