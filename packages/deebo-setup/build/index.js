@@ -5,7 +5,19 @@ import inquirer from 'inquirer';
 import chalk from 'chalk';
 import { LlmHostSchema } from './types.js';
 import { checkPrerequisites, findConfigPaths, setupDeeboDirectory, writeEnvFile, updateMcpConfig } from './utils.js';
+import { setupGuideServer } from './guide-setup.js';
 async function main() {
+    try {
+        // First, set up the guide server independently
+        console.log(chalk.blue('\nSetting up Deebo Guide server...'));
+        await setupGuideServer();
+        console.log(chalk.blue('\nProceeding with main Deebo installation...\n'));
+    }
+    catch (error) {
+        console.error(chalk.yellow('\n⚠ Guide server setup encountered issues:'));
+        console.error(chalk.dim(error instanceof Error ? error.message : String(error)));
+        console.log(chalk.blue('Continuing with main installation...'));
+    }
     // Check if this is a ping command
     if (process.argv.length > 2 && process.argv[2] === 'ping') {
         try {
