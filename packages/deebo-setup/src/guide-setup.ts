@@ -61,8 +61,8 @@ export async function setupGuideServer(): Promise<void> {
     await mkdir(deeboPath, { recursive: true });
     console.log(chalk.green('✔ Created .deebo directory'));
 
-    // Copy guide file from src directory
-    await copyFile(join(__dirname, 'deebo_guide.md'), guidePath);
+    // Copy guide file from npm package src directory
+    await copyFile(join(dirname(dirname(__dirname)), 'src', 'deebo_guide.md'), guidePath);
     console.log(chalk.green('✔ Copied Deebo guide'));
 
     // Copy guide server
