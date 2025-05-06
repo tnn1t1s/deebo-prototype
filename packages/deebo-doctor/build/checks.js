@@ -435,11 +435,125 @@ export const apiKeysCheck = {
         }
     }
 };
+export const guideServerCheck = {
+    name: 'Guide Server',
+    async check(config) {
+        const home = homedir();
+        const deeboPath = join(home, '.deebo');
+        const results = [];
+        // Check guide server files
+        const guidePath = join(deeboPath, 'deebo_guide.md');
+        const serverPath = join(deeboPath, 'guide-server.js');
+        try {
+            await access(guidePath);
+            results.push({
+                name: 'guide_file',
+                status: 'pass',
+                message: 'Deebo guide file found',
+                details: `Path: ${guidePath}`
+            });
+        }
+        catch {
+            results.push({
+                name: 'guide_file',
+                status: 'fail',
+                message: 'Deebo guide file not found',
+                details: `Expected at: ${guidePath}`
+            });
+        }
+        try {
+            await access(serverPath);
+            results.push({
+                name: 'server_file',
+                status: 'pass',
+                message: 'Guide server file found',
+                details: `Path: ${serverPath}`
+            });
+        }
+        catch {
+            results.push({
+                name: 'server_file',
+                status: 'fail',
+                message: 'Guide server file not found',
+                details: `Expected at: ${serverPath}`
+            });
+        }
+        // Check MCP configurations
+        const isWindows = process.platform === 'win32';
+        const configPaths = isWindows ? {
+            cline: join(process.env.APPDATA || '', 'Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
+            claude: join(process.env.APPDATA || '', 'Claude/claude_desktop_config.json'),
+            cursor: join(process.env.APPDATA || '', '.cursor/mcp.json')
+        } : {
+            cline: join(home, 'Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json'),
+            claude: join(home, 'Library/Application Support/Claude/claude_desktop_config.json'),
+            cursor: join(home, '.cursor/mcp.json')
+        };
+        for (const [name, path] of Object.entries(configPaths)) {
+            try {
+                const content = await readFile(path, 'utf8');
+                const config = JSON.parse(content);
+                const guideServer = config.mcpServers?.['deebo-guide'];
+                if (!guideServer) {
+                    results.push({
+                        name: `${name}_config`,
+                        status: 'fail',
+                        message: `Guide server not configured in ${name}`,
+                        details: `Path: ${path}\nMissing 'deebo-guide' in mcpServers`
+                    });
+                    continue;
+                }
+                // Check for required ES module flags
+                const requiredFlags = [
+                    '--experimental-specifier-resolution=node',
+                    '--experimental-modules',
+                    '--es-module-specifier-resolution=node'
+                ];
+                const missingFlags = requiredFlags.filter(flag => !guideServer.args.includes(flag));
+                if (missingFlags.length > 0) {
+                    results.push({
+                        name: `${name}_config`,
+                        status: 'fail',
+                        message: `Guide server missing required ES module flags in ${name}`,
+                        details: `Path: ${path}\nMissing flags: ${missingFlags.join(', ')}`
+                    });
+                    continue;
+                }
+                results.push({
+                    name: `${name}_config`,
+                    status: 'pass',
+                    message: `Guide server properly configured in ${name}`,
+                    details: `Path: ${path}`
+                });
+            }
+            catch {
+                results.push({
+                    name: `${name}_config`,
+                    status: 'fail',
+                    message: `Could not read ${name} config`,
+                    details: `Expected at: ${path}`
+                });
+            }
+        }
+        // Aggregate results
+        const allPass = results.every(r => r.status === 'pass');
+        const hasFails = results.some(r => r.status === 'fail');
+        return {
+            name: 'Guide Server',
+            status: allPass ? 'pass' : hasFails ? 'fail' : 'warn',
+            message: allPass
+                ? 'Guide server files and configuration valid'
+                : 'Guide server setup incomplete',
+            details: results.map(r => `${r.name}: ${r.message}\n${r.details || ''}`).join('\n\n')
+        };
+    }
+};
 export const allChecks = [
     nodeVersionCheck,
     gitCheck,
     toolPathsCheck,
     mcpToolsCheck,
     configFilesCheck,
-    apiKeysCheck
+    apiKeysCheck,
+    guideServerCheck
 ];

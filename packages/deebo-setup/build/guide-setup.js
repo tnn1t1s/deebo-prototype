@@ -1,7 +1,12 @@
 import { homedir } from 'os';
 import { join, dirname } from 'path';
-import { mkdir, readFile, writeFile, copyFile } from 'fs/promises';
+import { mkdir, readFile, writeFile, copyFile, rm } from 'fs/promises';
+import { fileURLToPath } from 'url';
 import chalk from 'chalk';
+// Get project root path using import.meta.url
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const projectRoot = join(__dirname, '..', '..', '..');
 // Configure the guide server in an MCP client's config
 async function configureClientGuide(configPath, guidePath) {
     try {
@@ -23,6 +28,7 @@ async function configureClientGuide(configPath, guidePath) {
                 args: [
                     '--experimental-specifier-resolution=node',
                     '--experimental-modules',
+                    '--es-module-specifier-resolution=node',
                     join(dirname(guidePath), 'guide-server.js')
                 ],
                 env: {},
@@ -45,18 +51,29 @@ export async function setupGuideServer() {
     const home = homedir();
     const deeboPath = join(home, '.deebo');
     const guidePath = join(deeboPath, 'deebo_guide.md');
+    const serverPath = join(deeboPath, 'guide-server.js');
+    const tempDir = join(home, '.deebo-guide-temp');
     try {
-        // Create .deebo directory
+        // Create temp directory
+        await mkdir(tempDir, { recursive: true });
+        // Copy guide file using reliable package-relative path resolution
+        const guideSource = fileURLToPath(new URL('../src/deebo_guide.md', import.meta.url));
+        const tempGuidePath = join(tempDir, 'deebo_guide.md');
+        await copyFile(guideSource, tempGuidePath);
+        // Copy guide server using reliable package-relative path resolution
+        const serverSource = fileURLToPath(new URL('../build/guide-server.js', import.meta.url));
+        const tempServerPath = join(tempDir, 'guide-server.js');
+        await copyFile(serverSource, tempServerPath);
+        // Create .deebo directory if it doesn't exist
         await mkdir(deeboPath, { recursive: true });
         console.log(chalk.green('✔ Created .deebo directory'));
-        // Copy guide file from project root's config directory
-        const projectRoot = join(__dirname, '..', '..', '..');
-        await copyFile(join(projectRoot, 'config', 'deebo_guide.md'), guidePath);
+        // Copy files from temp to .deebo
+        await copyFile(tempGuidePath, guidePath);
         console.log(chalk.green('✔ Copied Deebo guide'));
-        // Copy guide server
-        const serverPath = join(deeboPath, 'guide-server.js');
-        await copyFile(join(projectRoot, 'packages', 'deebo-setup', 'build', 'guide-server.js'), serverPath);
+        await copyFile(tempServerPath, serverPath);
         console.log(chalk.green('✔ Copied guide server'));
+        // Clean up temp directory
+        await rm(tempDir, { recursive: true, force: true });
         // Configure in all supported MCP clients
         const platform = process.platform;
         const configPaths = {};
