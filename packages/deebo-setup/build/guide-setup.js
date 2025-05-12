@@ -50,10 +50,10 @@ async function configureClientGuide(configPath, guideServerScriptPath) {
 export async function setupGuideServer() {
     try {
         const home = homedir();
-        const deeboGuideUserDir = join(home, '.deebo-guide'); // Reverted to .deebo-guide
+        const deeboGuideUserDir = join(home, '.deebo-guide'); // Keep as .deebo-guide - this is intentional isolation
         await mkdir(deeboGuideUserDir, { recursive: true });
         // Source paths (from npx package's build directory)
-        const sourceGuideServerJsPath = join(__dirname, 'guide-server.js');
+        const sourceGuideServerJsPath = join(__dirname, '../build/guide-server.js');
         const sourceGuideMarkdownPath = join(__dirname, 'deebo_guide.md');
         // Destination paths (in user's persistent .deebo-guide directory)
         const destGuideServerJsPath = join(deeboGuideUserDir, 'guide-server.js');

@@ -4,6 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { homedir } from 'os';
 // Create server with explicit capabilities
 const server = new McpServer({
     name: "deebo-guide",
@@ -14,9 +15,21 @@ const server = new McpServer({
         prompts: {}
     }
 });
-// Get guide path relative to this file
+// Get guide path - first try relative to this file
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const guidePath = join(__dirname, 'deebo_guide.md');
+let guidePath = join(__dirname, 'deebo_guide.md');
+// If we're running the compiled version in the .deebo-guide directory,
+// the markdown file should be in the same directory
+if (__dirname.includes('.deebo-guide')) {
+    guidePath = join(__dirname, 'deebo_guide.md');
+}
+// Handle case when we're running from .deebo
+else if (__dirname.includes('.deebo')) {
+    const homeDir = homedir();
+    guidePath = join(homeDir, '.deebo-guide', 'deebo_guide.md');
+}
+// For debugging
+console.error(`Looking for guide at: ${guidePath}`);
 // Register the guide tool with proper schema
 server.tool("read_deebo_guide", 
 // Empty schema since this tool takes no parameters
