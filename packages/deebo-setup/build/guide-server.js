@@ -28,8 +28,6 @@ else if (__dirname.includes('.deebo')) {
     const homeDir = homedir();
     guidePath = join(homeDir, '.deebo-guide', 'deebo_guide.md');
 }
-// For debugging
-console.error(`Looking for guide at: ${guidePath}`);
 // Register the guide tool with proper schema
 server.tool("read_deebo_guide", 
 // Empty schema since this tool takes no parameters
