@@ -1,11 +1,12 @@
 import { homedir } from 'os';
 import { join, dirname } from 'path';
-import { mkdir, readFile, writeFile, copyFile } from 'fs/promises';
+import { copyFile, mkdir, readFile, writeFile } from 'fs/promises'; // Added copyFile
 import { fileURLToPath } from 'url';
 import chalk from 'chalk';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Configure the guide server in an MCP client's config
-async function configureClientGuide(configPath, guidePath) {
+// Modified to accept guideServerScriptPath
+async function configureClientGuide(configPath, guideServerScriptPath) {
     try {
         let config = { mcpServers: {} };
         try {
@@ -25,7 +26,7 @@ async function configureClientGuide(configPath, guidePath) {
                 args: [
                     '--experimental-specifier-resolution=node',
                     '--experimental-modules',
-                    join(guidePath, 'dist', 'index.js')
+                    guideServerScriptPath // Use the passed persistent path
                 ],
                 env: {},
                 transportType: 'stdio'
@@ -46,24 +47,20 @@ async function configureClientGuide(configPath, guidePath) {
 export async function setupGuideServer() {
     try {
         const home = homedir();
+        const deeboGuideUserDir = join(home, '.deebo-guide');
+        await mkdir(deeboGuideUserDir, { recursive: true });
+        // Source paths (from npx package's build directory)
+        const sourceGuideServerJsPath = join(__dirname, 'guide-server.js');
+        const sourceGuideMarkdownPath = join(__dirname, 'deebo_guide.md');
+        // Destination paths (in user's persistent .deebo-guide directory)
+        const destGuideServerJsPath = join(deeboGuideUserDir, 'guide-server.js');
+        const destGuideMarkdownPath = join(deeboGuideUserDir, 'deebo_guide.md');
+        // Copy files to persistent location
+        await copyFile(sourceGuideServerJsPath, destGuideServerJsPath);
+        await copyFile(sourceGuideMarkdownPath, destGuideMarkdownPath);
+        console.log(chalk.green('✔ Copied guide server files to persistent location.'));
         const platform = process.platform;
         const configPaths = {};
-        // Setup guide server directory
-        const guideServerPath = join(home, '.deebo-guide');
-        await mkdir(guideServerPath, { recursive: true });
-        // Copy and build guide server
-        const guideServerSrc = join(__dirname, 'guide-server');
-        const guideSource = join(__dirname, 'deebo_guide.md');
-        // Copy all guide server files
-        await copyFile(join(guideServerSrc, 'index.ts'), join(guideServerPath, 'index.ts'));
-        await copyFile(join(guideServerSrc, 'package.json'), join(guideServerPath, 'package.json'));
-        await copyFile(join(guideServerSrc, 'tsconfig.json'), join(guideServerPath, 'tsconfig.json'));
-        await copyFile(guideSource, join(guideServerPath, 'deebo_guide.md'));
-        // Install dependencies and build
-        const { execSync } = await import('child_process');
-        execSync('npm install', { cwd: guideServerPath });
-        execSync('npm run build', { cwd: guideServerPath });
-        console.log(chalk.green('✔ Built guide server'));
         // Get paths based on platform
         if (platform === 'win32') {
             const appData = process.env.APPDATA || join(home, 'AppData', 'Roaming');
@@ -85,9 +82,9 @@ export async function setupGuideServer() {
             configPaths.claude = join(home, 'Library/Application Support/Claude/claude_desktop_config.json');
             configPaths.cursor = join(home, '.cursor', 'mcp.json');
         }
-        // Configure in each client
-        for (const [client, path] of Object.entries(configPaths)) {
-            await configureClientGuide(path, guideServerPath);
+        // Configure in each client, passing the persistent path to the guide server script
+        for (const [_client, clientConfigPath] of Object.entries(configPaths)) {
+            await configureClientGuide(clientConfigPath, destGuideServerJsPath);
         }
         console.log(chalk.green('\n✔ Guide server setup complete!'));
         console.log(chalk.blue('AI assistants can now access Deebo guide even if main installation fails.'));

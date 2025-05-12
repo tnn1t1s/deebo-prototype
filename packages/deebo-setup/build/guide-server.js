@@ -1,53 +1,61 @@
+#!/usr/bin/env node
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-// Simple MCP server that provides access to the Deebo guide
-export class DeeboGuideServer {
-    guidePath;
-    constructor() {
-        // Resolve guide path relative to this file
-        const __dirname = dirname(fileURLToPath(import.meta.url));
-        this.guidePath = join(__dirname, '..', 'src', 'deebo_guide.md');
+// Create server with explicit capabilities
+const server = new McpServer({
+    name: "deebo-guide",
+    version: "1.0.0",
+    capabilities: {
+        tools: {},
+        resources: {},
+        prompts: {}
     }
-    // The only tool this server provides - reading the guide content
-    async readDeeboGuide() {
-        try {
-            return readFileSync(this.guidePath, 'utf8');
-        }
-        catch (error) {
-            throw new Error(`Failed to read Deebo guide: ${error instanceof Error ? error.message : String(error)}`);
-        }
-    }
-    // MCP server interface implementation
-    getToolDefinitions() {
+});
+// Get guide path relative to this file
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const guidePath = join(__dirname, 'deebo_guide.md');
+// Register the guide tool with proper schema
+server.tool("read_deebo_guide", 
+// Empty schema since this tool takes no parameters
+{}, async () => {
+    try {
+        const guide = readFileSync(guidePath, 'utf8');
         return {
-            read_deebo_guide: {
-                name: 'read_deebo_guide',
-                description: 'Returns the contents of the Deebo guide for AI assistants to help users with installation for Deebo the agentic debugging system and usage.',
-                input: {}, // No parameters needed
-                output: {
-                    type: 'object',
-                    properties: {
-                        guide: {
-                            type: 'string',
-                            description: 'The complete Deebo guide content'
-                        }
-                    },
-                    required: ['guide']
-                }
-            }
+            content: [{
+                    type: "text",
+                    text: guide
+                }]
         };
     }
-    // Handle tool execution
-    async executeTool(toolName) {
-        if (toolName !== 'read_deebo_guide') {
-            throw new Error(`Unknown tool: ${toolName}`);
-        }
-        const guide = await this.readDeeboGuide();
-        return { guide };
+    catch (error) {
+        return {
+            content: [{
+                    type: "text",
+                    text: `Failed to read guide: ${error instanceof Error ? error.message : String(error)}`
+                }],
+            isError: true // Properly indicate error state
+        };
     }
-}
-// Create and export the server factory function
-export function createGuideServer() {
-    return new DeeboGuideServer();
-}
+});
+// Also expose the guide as a static resource
+server.resource("guide", "guide://deebo", async (uri) => {
+    try {
+        const guide = readFileSync(guidePath, 'utf8');
+        return {
+            contents: [{
+                    uri: uri.href,
+                    text: guide
+                }]
+        };
+    }
+    catch (error) {
+        throw new Error(`Failed to read guide: ${error instanceof Error ? error.message : String(error)}`);
+    }
+});
+// Connect server
+const transport = new StdioServerTransport();
+await server.connect(transport);
+console.error("Deebo Guide MCP Server running");
