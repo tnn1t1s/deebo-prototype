@@ -1,6 +1,6 @@
 {
   "name": "deebo-setup",
-  "version": "1.0.103",
+  "version": "1.0.104",
   "description": "System installer for Deebo debugging tool",
   "type": "module",
   "bin": {
@@ -10,8 +10,8 @@
     "./guide-server": "./build/guide-server.js"
   },
   "scripts": {
-    "build": "tsc && npm run copy-guide-markdown",
-    "copy-guide-markdown": "copyfiles -u 1 src/deebo_guide.md build",
+    "build": "tsc && npm run copy-files",
+    "copy-files": "copyfiles -u 1 src/deebo_guide.md build/ && node -e \"const fs = require('fs'); const path = require('path'); const os = require('os'); const { execSync } = require('child_process'); const homeDir = os.homedir(); const deeboPath = path.join(homeDir, '.deebo'); const guidePath = path.join(homeDir, '.deebo-guide'); fs.mkdirSync(guidePath, { recursive: true }); const srcPath = path.join(process.cwd(), 'build/guide-server.js'); const destDeeboPath = path.join(deeboPath, 'guide-server.js'); const destGuidePath = path.join(guidePath, 'guide-server.js'); fs.copyFileSync(srcPath, destDeeboPath); fs.copyFileSync(srcPath, destGuidePath); const packageJson = { type: 'module', dependencies: { '@modelcontextprotocol/sdk': '^1.0.0', 'zod': '^3.22.4' } }; fs.writeFileSync(path.join(guidePath, 'package.json'), JSON.stringify(packageJson, null, 2)); try { execSync('npm install', { cwd: guidePath }); console.log('Dependencies installed in .deebo-guide directory'); } catch (err) { console.error('Failed to install dependencies:', err); }\"",
     "start": "node build/index.js"
   },
   "dependencies": {

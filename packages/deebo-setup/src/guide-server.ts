@@ -18,20 +18,14 @@ const server = new McpServer({
   }
 });
 
-// Get guide path - first try relative to this file
+// Get guide path with reliable resolution
 const __dirname = dirname(fileURLToPath(import.meta.url));
-let guidePath = join(__dirname, 'deebo_guide.md');
+const homeDir = homedir();
+const deeboGuidePath = join(homeDir, '.deebo-guide');
+const deeboPath = join(homeDir, '.deebo');
 
-// If we're running the compiled version in the .deebo-guide directory,
-// the markdown file should be in the same directory
-if (__dirname.includes('.deebo-guide')) {
-  guidePath = join(__dirname, 'deebo_guide.md');
-} 
-// Handle case when we're running from .deebo
-else if (__dirname.includes('.deebo')) {
-  const homeDir = homedir();
-  guidePath = join(homeDir, '.deebo-guide', 'deebo_guide.md');
-}
+// Always use .deebo-guide for the guide file
+let guidePath = join(deeboGuidePath, 'deebo_guide.md');
 
 // Register the guide tool with proper schema
 server.tool(
