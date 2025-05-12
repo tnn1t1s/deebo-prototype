@@ -27,10 +27,7 @@ async function configureClientGuide(configPath: string, guideServerScriptPath: s
         timeout: 30,
         command: 'node',
         args: [
-          '--experimental-specifier-resolution=node',
-          '--experimental-modules',
-          '--es-module-specifier-resolution=node',
-          guideServerScriptPath // Use the passed persistent path
+          guideServerScriptPath // Remove all experimental flags, they're not needed in Node.js v20+
         ],
         env: {
           "NODE_ENV": "development"
@@ -70,6 +67,30 @@ export async function setupGuideServer(): Promise<void> {
     await copyFile(sourceGuideServerJsPath, destGuideServerJsPath);
     await copyFile(sourceGuideMarkdownPath, destGuideMarkdownPath);
     console.log(chalk.green('✔ Copied guide server files to persistent location.'));
+    
+    // Create or update package.json in .deebo-guide with required dependencies
+    const packageJsonPath = join(deeboGuideUserDir, 'package.json');
+    const packageJson = {
+      "type": "module",
+      "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.0.0",
+        "zod": "^3.22.4"
+      }
+    };
+    
+    await writeFile(packageJsonPath, JSON.stringify(packageJson, null, 2));
+    console.log(chalk.green('✔ Created package.json with required dependencies.'));
+    
+    // Install dependencies in .deebo-guide directory
+    try {
+      const { execSync } = await import('child_process');
+      console.log(chalk.blue('Installing dependencies in .deebo-guide directory...'));
+      execSync('npm install', { cwd: deeboGuideUserDir });
+      console.log(chalk.green('✔ Installed dependencies in .deebo-guide directory.'));
+    } catch (err) {
+      console.log(chalk.yellow(`⚠ Could not install dependencies in .deebo-guide: ${err instanceof Error ? err.message : String(err)}`));
+      console.log(chalk.yellow('Guide server may not function correctly without dependencies.'));
+    }
 
     const platform = process.platform;
     const configPaths: { [key: string]: string } = {};
@@ -78,7 +99,7 @@ export async function setupGuideServer(): Promise<void> {
     if (platform === 'win32') {
       const appData = process.env.APPDATA || join(home, 'AppData', 'Roaming');
       configPaths.vscode = join(appData, 'Code', 'User', 'settings.json');
-      configPaths.cline = join(appData, 'Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json');
+      configPaths.cline = join(appData, 'Code', 'User', 'globalStorage', 'saoudrizwan.claude-dev', 'settings', 'cline_mcp_settings.json');
       configPaths.claude = join(appData, 'Claude/claude_desktop_config.json');
       configPaths.cursor = join(appData, '.cursor', 'mcp.json');
     } else if (platform === 'linux') {
