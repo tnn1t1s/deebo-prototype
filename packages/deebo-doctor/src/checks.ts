@@ -478,12 +478,12 @@ export const guideServerCheck: SystemCheck = {
   name: 'Guide Server',
   async check(config: DoctorConfig) {
     const home = homedir();
-    const deeboPath = join(home, '.deebo');
+    const deeboGuidePath = join(home, '.deebo-guide'); // Changed to .deebo-guide
     const results: CheckResult[] = [];
 
     // Check guide server files
-    const guidePath = join(deeboPath, 'deebo_guide.md');
-    const serverPath = join(deeboPath, 'guide-server.js');
+    const guidePath = join(deeboGuidePath, 'deebo_guide.md'); // Changed to deeboGuidePath
+    const serverPath = join(deeboGuidePath, 'guide-server.js'); // Changed to deeboGuidePath
 
     try {
       await access(guidePath);
