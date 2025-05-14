@@ -1,0 +1,32 @@
+{
+  "servers": {
+    "deebo-guide": {
+      "command": "node",
+      "args": [
+        "--experimental-specifier-resolution=node",
+        "--experimental-modules",
+        "/Users/davidpalaitis/.deebo/guide-server.js"
+      ],
+      "env": {},
+      "transportType": "stdio"
+    },
+    "deebo": {
+      "command": "node",
+      "args": [
+        "--experimental-specifier-resolution=node",
+        "--experimental-modules",
+        "--max-old-space-size=4096",
+        "/Users/davidpalaitis/.deebo/build/index.js"
+      ],
+      "env": {
+        "NODE_ENV": "development",
+        "USE_MEMORY_BANK": "true",
+        "MOTHER_HOST": "openrouter",
+        "MOTHER_MODEL": "anthropic/claude-3.5-sonnet",
+        "SCENARIO_HOST": "openrouter",
+        "SCENARIO_MODEL": "deepseek/deepseek-chat",
+        "OPENROUTER_API_KEY": "YOUR_OPENROUTER_API_KEY"
+      }
+    }
+  }
+}
